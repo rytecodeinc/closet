@@ -38,6 +38,7 @@ struct ItemDetailView: View {
     @State private var selectedImageType: ImageType = .front
     @State private var showThumbnailActionSheet: Bool = false
     @State private var thumbnailActionSheetType: ImageType?
+    @State private var showDeleteConfirmation = false
 
     enum ImageType {
         case front
@@ -160,7 +161,7 @@ struct ItemDetailView: View {
                         toggleFavorite()
                     } label: {
                         Label(
-                            item.isFavorite ? "Remove Favorite" : "Favorite",
+                            item.isFavorite ? "Remove Favorite" : "Favorite Item",
                             systemImage: item.isFavorite ? "heart.slash" : "heart"
                         )
                     }
@@ -179,7 +180,7 @@ struct ItemDetailView: View {
                     }
                     
                     Button(role: .destructive) {
-                        deleteItem()
+                        showDeleteConfirmation = true
                     } label: {
                         Label("Delete Item", systemImage: "trash")
                     }
@@ -277,6 +278,14 @@ struct ItemDetailView: View {
                 ActivityViewController(activityItems: shareItems, isPresented: $showShareSheet)
                     .frame(width: 0, height: 0)
             }
+        }
+        .alert("Delete Item", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                deleteItem()
+            }
+        } message: {
+            Text("Are you sure you want to delete this item? This action cannot be undone.")
         }
     }
     
