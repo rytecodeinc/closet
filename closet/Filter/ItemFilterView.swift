@@ -142,6 +142,33 @@ struct ItemFilterView: View {
                         }
                     }
                     
+                    // Weight filter
+                    HStack {
+                        Text("Weight")
+                            .foregroundColor(.primary)
+                        Spacer()
+                        
+                        // Show user weight if available and filter is enabled
+                        if filterModel.filterByWeight {
+                            let userWeightKg = UserDefaults.standard.double(forKey: "userWeightKg")
+                            let userWeightUnit = UserDefaults.standard.string(forKey: "userWeightUnit") ?? (Locale.current.measurementSystem == .metric ? "kg" : "lbs")
+                            
+                            if userWeightKg > 0 {
+                                let displayWeight = userWeightUnit == "kg" ? userWeightKg : userWeightKg * 2.20462
+                                Text("\(String(format: "%.1f", displayWeight)) \(userWeightUnit)")
+                                    .foregroundColor(.gray)
+                                    .font(.subheadline)
+                            } else {
+                                Text("Set in Profile")
+                                    .foregroundColor(.orange)
+                                    .font(.subheadline)
+                            }
+                        }
+                        
+                        Toggle("", isOn: $filterModel.filterByWeight)
+                            .labelsHidden()
+                    }
+                    
                     // Tag filter
                     NavigationLink(destination: TagListView(selectedTags: $filterModel.selectedTags)) {
                         HStack {

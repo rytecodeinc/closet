@@ -42,6 +42,15 @@ struct ItemGridView: View {
         key += filterModel.selectedTags.map { $0.objectID.uriRepresentation().absoluteString }.sorted().joined(separator: ",")
         key += filterModel.minPrice?.description ?? ""
         key += filterModel.maxPrice?.description ?? ""
+        key += filterModel.selectedCategoryName ?? ""
+        key += filterModel.selectedSubcategoryName ?? ""
+        key += filterModel.selectedSizeValue ?? ""
+        key += filterModel.selectedLocation?.objectID.uriRepresentation().absoluteString ?? ""
+        if filterModel.filterByWeight {
+            // Include user weight in key so it refreshes when user updates their weight
+            let userWeightKg = UserDefaults.standard.double(forKey: "userWeightKg")
+            key += "weight:\(userWeightKg)"
+        }
         return key
     }
 
@@ -76,6 +85,9 @@ struct ItemGridView: View {
             fetchOutfits()
         }
         .onChange(of: filterKey) {
+            fetchItems()
+        }
+        .onChange(of: filterModel.filterByWeight) {
             fetchItems()
         }
         .onChange(of: selectedWardrobe.objectID) {
@@ -227,6 +239,33 @@ struct ItemGridView: View {
             subpredicates.append(locationPredicate)
         }
         
+        // Weight filter - only show items that can support user's weight
+        if filterModel.filterByWeight {
+            let userWeightKg = UserDefaults.standard.double(forKey: "userWeightKg")
+            if userWeightKg > 0 {
+                // Show ONLY items where:
+                // - Item has weight set (weight != nil) AND
+                // - Item's max wearable weight <= user's weight
+                // Logic: Item weight = max wearable weight the item can support
+                // If item.weight > userWeight, the item CANNOT support the user (user is too heavy)
+                // If item.weight <= userWeight, the item CAN support the user
+                // Items without weight are EXCLUDED when filter is active
+                // Note: weight is stored in kg in Core Data
+                let weightExistsPredicate = NSPredicate(format: "weight != nil")
+                let weightSupportedPredicate = NSPredicate(format: "weight <= %@", userWeightKg as NSNumber)
+                
+                // weight != nil AND weight <= userWeight
+                let weightPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [weightExistsPredicate, weightSupportedPredicate])
+                
+                subpredicates.append(weightPredicate)
+                print("🔍 Weight filter active: showing ONLY items with max wearable weight <= \(String(format: "%.2f", userWeightKg)) kg (excluding items without weight)")
+                print("🔍 Weight predicate: \(weightPredicate)")
+            } else {
+                print("⚠️ Weight filter enabled but user weight not set in Profile")
+            }
+            // If user hasn't set their weight, don't filter (show all items)
+        }
+        
         // Handle wardrobe filtering: use filterModel.selectedWardrobes if set, otherwise use selectedWardrobe
         let wardrobePredicate: NSPredicate
         if !filterModel.selectedWardrobes.isEmpty {
@@ -251,13 +290,36 @@ struct ItemGridView: View {
         }
         request.predicate = finalPredicate
         
+        // Debug: Log predicate if weight filter is active
+        if filterModel.filterByWeight {
+            print("🔍 Final predicate: \(finalPredicate)")
+        }
+        
         do {
             let results = try viewContext.fetch(request)
+            
+            // Debug: Log results if weight filter is active
+            if filterModel.filterByWeight {
+                let userWeightKg = UserDefaults.standard.double(forKey: "userWeightKg")
+                print("🔍 Fetched \(results.count) items with weight filter")
+                // Sample a few items to check their weights
+                for (index, item) in results.prefix(5).enumerated() {
+                    if let weight = item.primitiveValue(forKey: "weight") as? Double {
+                        print("🔍 Item \(index + 1): weight = \(String(format: "%.2f", weight)) kg (>= \(String(format: "%.2f", userWeightKg))? \(weight >= userWeightKg))")
+                    } else {
+                        print("🔍 Item \(index + 1): weight = nil (no limit)")
+                    }
+                }
+            }
+            
             DispatchQueue.main.async {
                 self.closetItems = results
             }
         } catch {
-            print("Failed to fetch items: \(error)")
+            print("❌ Failed to fetch items: \(error)")
+            if let nsError = error as NSError? {
+                print("❌ Error details: \(nsError.userInfo)")
+            }
             DispatchQueue.main.async {
                 self.closetItems = []
             }
@@ -393,11 +455,3 @@ struct ScrollOffsetPreferenceKey: PreferenceKey {
         value = value ?? nextValue()
     }
 }*/
-
-
-
-
-
-
-
-
