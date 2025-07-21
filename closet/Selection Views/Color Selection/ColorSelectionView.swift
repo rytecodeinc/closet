@@ -16,7 +16,7 @@ struct ColorSelectionView: View {
     @State private var selectedColorNames: Set<String> = []
 
     var body: some View {
-        VStack {
+        Section(header: SelectionHeader(title: "Select a Color")) {
             ColorListView(selectedColorNames: $selectedColorNames)
         }
         .onAppear {

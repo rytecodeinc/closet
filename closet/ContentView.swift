@@ -47,8 +47,8 @@ struct ContentView: View {
             }
             .onAppear {
                         print("-- ContentView appeared")
-                print("App appeared")
-                DataSeeder.preloadDefaultColors(context: viewContext)
+                print("Content View Data seeding")
+                DataSeeder(context: viewContext)
                     }
         }
     }

@@ -30,7 +30,7 @@ struct closetApp: App {
                 .environment(\.managedObjectContext, persistenceController.container.viewContext)
                 .onAppear() {
                     print("App appeared")
-                    DataSeeder.preloadDefaultColors(context: persistenceController.container.viewContext)
+                    DataSeeder(context: persistenceController.container.viewContext)
                 }
         }
     }

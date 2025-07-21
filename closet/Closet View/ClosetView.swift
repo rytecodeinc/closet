@@ -17,7 +17,7 @@ struct ClosetView: View {
     
     var body: some View {
         NavigationView {
-            let predicate = makePredicate(for: filterModel.selectedColors)
+            let predicate = makePredicate(for: filterModel)
 
                 ItemGridView(predicate: predicate, filterModel: filterModel)
         }

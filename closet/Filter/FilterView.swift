@@ -14,12 +14,26 @@ struct FilterView: View {
     var body: some View {
         NavigationStack {
             List {
+                // Color filter
                 NavigationLink(destination: ColorListView(selectedColorNames: $filterModel.selectedColors)) {
                     HStack {
                         Text("Colors")
                         Spacer()
                         if !filterModel.selectedColors.isEmpty {
                             Text(filterModel.selectedColors.sorted().joined(separator: ", "))
+                                .foregroundColor(.gray)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+
+                // Season filter
+                NavigationLink(destination: SeasonListView(selectedSeasonNames: $filterModel.selectedSeasons)) {
+                    HStack {
+                        Text("Seasons")
+                        Spacer()
+                        if !filterModel.selectedSeasons.isEmpty {
+                            Text(filterModel.selectedSeasons.sorted().joined(separator: ", "))
                                 .foregroundColor(.gray)
                                 .lineLimit(1)
                         }
@@ -38,5 +52,6 @@ struct FilterView: View {
         }
     }
 }
+
 
 

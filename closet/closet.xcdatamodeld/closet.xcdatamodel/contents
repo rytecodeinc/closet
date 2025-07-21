@@ -12,5 +12,11 @@
         <attribute name="image" optional="YES" attributeType="Binary"/>
         <attribute name="timestamp" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <relationship name="colors" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Color" inverseName="items" inverseEntity="Color"/>
+        <relationship name="seasons" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Season" inverseName="item" inverseEntity="Season"/>
+    </entity>
+    <entity name="Season" representedClassName="Season" syncable="YES" codeGenerationType="class">
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="name" optional="YES" attributeType="String"/>
+        <relationship name="item" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Item" inverseName="seasons" inverseEntity="Item"/>
     </entity>
 </model>
