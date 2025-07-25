@@ -1,3 +1,14 @@
+//
+//  SeasonVisibilityView.swift
+//  closet
+//
+//  Created by Dan Warner on 7/20/25.
+//
+
+import SwiftUI
+import CoreData
+import Foundation
+
 struct SeasonVisibilityView: View {
     @Environment(\.managedObjectContext) private var viewContext
 

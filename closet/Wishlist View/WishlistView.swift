@@ -1,3 +1,11 @@
+//
+//  WishlistView.swift
+//  closet
+//
+//  Created by Dan Warner on 7/24/25.
+//
+
+
 import SwiftUI
 import CoreData
 

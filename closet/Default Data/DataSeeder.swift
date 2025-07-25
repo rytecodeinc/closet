@@ -86,6 +86,7 @@ struct DataSeeder {
             let season = Season(context: context)
             season.name = name
             season.id   = UUID()
+            season.isVisible = true
         }
         try context.save()
     }

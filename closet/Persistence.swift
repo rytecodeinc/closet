@@ -14,9 +14,10 @@ struct PersistenceController {
     static let preview: PersistenceController = {
         let result = PersistenceController(inMemory: true)
         let viewContext = result.container.viewContext
-        for _ in 0..<10 {
+        for i in 0..<11 {
             let newItem = Item(context: viewContext)
             newItem.timestamp = Date()
+            newItem.isWishlist = i < 5
         }
         do {
             try viewContext.save()

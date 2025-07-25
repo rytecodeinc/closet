@@ -29,7 +29,7 @@ struct ContentView: View {
                         Image(systemName: "book")
                         Text("Looks")
                     }
-                ClosetView()
+                WishlistView()
                     .tabItem {
                         Image(systemName: "heart")
                         Text("Wishlist")
@@ -46,10 +46,10 @@ struct ContentView: View {
                     }
             }
             .onAppear {
-                        print("-- ContentView appeared")
+                print("-- ContentView appeared")
                 print("Content View Data seeding")
                 DataSeeder(context: viewContext)
-                    }
+            }
         }
     }
 }
