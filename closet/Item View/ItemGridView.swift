@@ -46,7 +46,6 @@ struct ItemGridView: View {
                 }
             }
         }
-        .navigationTitle("Closet")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {

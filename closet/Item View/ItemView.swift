@@ -35,6 +35,13 @@ struct ItemView: View {
                     .clipped()
                     .foregroundColor(.gray)
             }
+            
+            if item.isWishlist {
+                Image(systemName: "heart.fill")
+                    .foregroundColor(.red)
+                    .padding(10)
+                    .offset(x: 45, y: -45)
+            }
         }
         .onTapGesture {
             isActive = true
