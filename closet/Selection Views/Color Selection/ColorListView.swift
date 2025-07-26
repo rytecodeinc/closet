@@ -19,7 +19,7 @@ struct ColorListView: View {
     ) private var visibleColors: FetchedResults<AppColor>
 
     var body: some View {
-       // Section(header: SelectionHeader(title: "Select a Color")) {
+       
             List {
                 ForEach(visibleColors, id: \.self) { color in
                     let name = color.name ?? ""
@@ -54,6 +54,5 @@ struct ColorListView: View {
             .navigationTitle("Select Colors")
             .navigationBarTitleDisplayMode(.inline)
         
-      //  }
     }
 }

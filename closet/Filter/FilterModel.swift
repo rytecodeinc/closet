@@ -12,6 +12,7 @@ import Foundation
 class FilterModel: ObservableObject {
     @Published var selectedColors: Set<String> = []
     @Published var selectedSeasons: Set<String> = []
+    @Published var selectedBrand: Brand? = nil
 }
 
 
@@ -28,6 +29,11 @@ func makePredicate(for filterModel: FilterModel) -> NSPredicate? {
         subpredicates.append(seasonPredicate)
     }
 
+    if let brand = filterModel.selectedBrand, let brandName = brand.name, !brandName.isEmpty {
+        let brandPredicate = NSPredicate(format: "brand.name ==[c] %@", brandName)
+        subpredicates.append(brandPredicate)
+    }
+
     if subpredicates.isEmpty {
         return nil
     } else if subpredicates.count == 1 {
@@ -36,3 +42,4 @@ func makePredicate(for filterModel: FilterModel) -> NSPredicate? {
         return NSCompoundPredicate(andPredicateWithSubpredicates: subpredicates)
     }
 }
+

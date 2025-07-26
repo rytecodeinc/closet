@@ -44,6 +44,8 @@ struct BrandSelectionView: View {
                     .padding()
                 Spacer()
             } else {
+                // Use the reusable BrandListView with filtered brands here:
+                // We can't pass filteredBrands directly (array), so let's filter brands inside this view:
                 List {
                     ForEach(filteredBrands, id: \.self) { brand in
                         Button(action: {
@@ -142,6 +144,7 @@ struct BrandSelectionView: View {
         fetchBrands()
     }
 }
+
 
 
 

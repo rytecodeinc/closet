@@ -39,6 +39,19 @@ struct FilterView: View {
                         }
                     }
                 }
+
+                // Brand filter
+                NavigationLink(destination: BrandListView(selectedBrand: $filterModel.selectedBrand)) {
+                    HStack {
+                        Text("Brand")
+                        Spacer()
+                        if let brand = filterModel.selectedBrand {
+                            Text(brand.name ?? "None")
+                                .foregroundColor(.gray)
+                                .lineLimit(1)
+                        }
+                    }
+                }
             }
             .navigationTitle("Filter")
             .navigationBarTitleDisplayMode(.inline)
@@ -52,6 +65,7 @@ struct FilterView: View {
         }
     }
 }
+
 
 
 
