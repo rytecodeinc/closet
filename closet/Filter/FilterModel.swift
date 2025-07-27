@@ -13,6 +13,9 @@ class FilterModel: ObservableObject {
     @Published var selectedColors: Set<String> = []
     @Published var selectedSeasons: Set<String> = []
     @Published var selectedBrand: Brand? = nil
+    
+    @Published var minPrice: Decimal?
+    @Published var maxPrice: Decimal?
 }
 
 
@@ -33,6 +36,17 @@ func makePredicate(for filterModel: FilterModel) -> NSPredicate? {
         let brandPredicate = NSPredicate(format: "brand.name ==[c] %@", brandName)
         subpredicates.append(brandPredicate)
     }
+    
+    if let minPrice = filterModel.minPrice {
+        let minPricePredicate = NSPredicate(format: "price.amount >= %@", minPrice as NSDecimalNumber)
+        subpredicates.append(minPricePredicate)
+    }
+
+    if let maxPrice = filterModel.maxPrice {
+        let maxPricePredicate = NSPredicate(format: "price.amount <= %@", maxPrice as NSDecimalNumber)
+        subpredicates.append(maxPricePredicate)
+    }
+
 
     if subpredicates.isEmpty {
         return nil

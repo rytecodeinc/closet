@@ -39,9 +39,10 @@ struct BrandSelectionView: View {
             .padding(.horizontal)
             
             if brands.isEmpty {
-                Text("No brands available.")
+                Text("No brands have been added.")
                     .foregroundColor(.gray)
                     .padding()
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer()
             } else {
                 // Use the reusable BrandListView with filtered brands here:

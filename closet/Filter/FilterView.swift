@@ -52,6 +52,36 @@ struct FilterView: View {
                         }
                     }
                 }
+                
+                HStack {
+                    Text("Price")
+                    Spacer()
+                    HStack {
+                        TextField("Min Price", value: $filterModel.minPrice, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.center)
+                            .padding(5)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color.gray.opacity(0.5), lineWidth: 1)
+                            )
+                            .frame(width: 100)
+                        Text("—")
+                            .foregroundColor(.black)
+                            .frame(minWidth: 10)
+                        TextField("Max Price", value: $filterModel.maxPrice, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.center)
+                            .padding(5)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color.gray.opacity(0.5), lineWidth: 1)
+                            )
+                            .frame(width: 100)
+                        
+                    }
+                }
+
             }
             .navigationTitle("Filter")
             .navigationBarTitleDisplayMode(.inline)
