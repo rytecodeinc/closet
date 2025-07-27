@@ -52,14 +52,14 @@ struct ItemDetailView: View {
             colorRow()
             seasonRow()
             brandRow()
-            priceSection()
+            priceRow()
         } header: {
             Text("ATTRIBUTES")
                 .fontWeight(.semibold)
         }
     }
 
-    private func priceSection() -> some View {
+    private func priceRow() -> some View {
             HStack {
                 Text("Price")
                     .foregroundColor(.black)
@@ -70,7 +70,7 @@ struct ItemDetailView: View {
                     Text(currencySymbol)
                         .foregroundColor(.gray)
 
-                    TextField("000.00", text: $priceString)
+                    TextField("0.00", text: $priceString)
                         .keyboardType(.decimalPad)
                         .foregroundColor(.gray)
                         .multilineTextAlignment(.trailing)
