@@ -16,10 +16,11 @@ struct ItemDetailView: View {
 
     @State private var isColorDrawerPresented: Bool = false
     @State private var isSeasonDrawerPresented: Bool = false
-    @State private var isBrandDrawerPresented = false
-    @State private var isImageFullScreen = false
+    @State private var isBrandDrawerPresented: Bool = false
     @State private var priceString: String = ""
-
+    @State private var isLinkDrawerPresented: Bool = false
+    @State private var isImageFullScreen = false
+    
     private let currencySymbol = Locale.current.currencySymbol ?? "$"
 
     var body: some View {
@@ -53,6 +54,7 @@ struct ItemDetailView: View {
             seasonRow()
             brandRow()
             priceRow()
+            linkRow()
         } header: {
             Text("ATTRIBUTES")
                 .fontWeight(.semibold)
@@ -148,6 +150,45 @@ struct ItemDetailView: View {
             BrandSelectionView(item: item)
         }
     }
+    
+    private func linkRow() -> some View {
+        let linkNamesArray = (item.links as? Set<Link>)?
+            .compactMap { $0.name }
+            .sorted() ?? []
+
+        let prefixNames = linkNamesArray.prefix(2)
+        let displayString = prefixNames.joined(separator: ", ")
+        let hasMore = linkNamesArray.count > 2
+
+        return Button(action: {
+            isLinkDrawerPresented = true
+        }) {
+            HStack {
+                Text(linkNamesArray.count <= 1 ? "Link" : "Links")
+                    .foregroundColor(.black)
+                Spacer()
+                if !displayString.isEmpty {
+                    HStack(spacing: 2) {
+                        Text(displayString)
+                            .foregroundColor(.gray)
+                            .lineLimit(1)
+                        if hasMore {
+                            Text("…")
+                                .foregroundColor(.gray)
+                                .font(.headline)
+                        }
+                    }
+                }
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.gray)
+            }
+        }
+        .sheet(isPresented: $isLinkDrawerPresented) {
+            LinkSelectionView(item: item)
+        }
+    }
+
+
 
     // MARK: - Header Image
 
