@@ -9,14 +9,13 @@
 import SwiftUI
 import UIKit
 
-import SwiftUI
-
 struct ItemDetailView: View {
     @ObservedObject var item: Item
 
     @State private var isColorDrawerPresented: Bool = false
     @State private var isSeasonDrawerPresented: Bool = false
     @State private var isBrandDrawerPresented: Bool = false
+    @State private var isLocationDrawerPresented: Bool = false
     @State private var priceString: String = ""
     @State private var isLinkDrawerPresented: Bool = false
     @State private var isImageFullScreen = false
@@ -37,13 +36,18 @@ struct ItemDetailView: View {
                     loadInitialPrice()
                 }
             }
-
+        }
+        .safeAreaInset(edge: .bottom) {
             if item.isWishlist {
                 moveToClosetButton()
+                    .background(Color(UIColor.systemBackground))
+                // .shadow(radius: 5)
             }
+                
         }
         .navigationTitle("Item Details")
         .navigationBarTitleDisplayMode(.inline)
+        
     }
 
     // MARK: - Sections
@@ -55,6 +59,7 @@ struct ItemDetailView: View {
             brandRow()
             priceRow()
             linkRow()
+            locationRow()
         } header: {
             Text("ATTRIBUTES")
                 .fontWeight(.semibold)
@@ -188,6 +193,22 @@ struct ItemDetailView: View {
         }
     }
 
+    // MARK: - Location Row
+    private func locationRow() -> some View {
+        Button(action: { isLocationDrawerPresented = true }) {
+            HStack {
+                Text("Location").foregroundColor(.black)
+                Spacer()
+                if let location = item.location?.name, !location.isEmpty {
+                    Text(location).foregroundColor(.gray)
+                }
+                Image(systemName: "chevron.right").foregroundColor(.gray)
+            }
+        }
+        .sheet(isPresented: $isLocationDrawerPresented) {
+            LocationSelectionView(item: item)
+        }
+    }
 
 
     // MARK: - Header Image
@@ -224,19 +245,84 @@ struct ItemDetailView: View {
     // MARK: - Action Button
 
     private func moveToClosetButton() -> some View {
-        Button(action: {
-            item.isWishlist = false
-        }) {
-            Label("Move to Closet", systemImage: "hanger")
-                .fontWeight(.semibold)
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(Color.blue)
-                .foregroundColor(.white)
-                .cornerRadius(12)
-                .padding([.horizontal, .bottom])
+        SlideToConfirmButton {
+                item.isWishlist = false
+                item.timestamp = Date()
+                // Optional: Add haptic feedback or animation here
+            }
+            .transition(.move(edge: .bottom))
+            .padding(.horizontal)
+    }
+
+    
+    struct SlideToConfirmButton: View {
+        var action: () -> Void
+        var labelText: String = "Swipe to Move to Closet"
+        
+        @State private var dragOffset: CGFloat = 0
+        @State private var completed: Bool = false
+        
+        let thumbSize = CGSize(width: 60, height: 40)
+        let trackHeight: CGFloat = 50
+        
+        var body: some View {
+            GeometryReader { geometry in
+                let trackWidth = geometry.size.width
+                
+                ZStack {
+                    // Background track
+                    Capsule()
+                        .fill(Color.gray.opacity(0.2))
+                        .frame(height: trackHeight)
+                    
+                    // Instruction Text
+                    Text(completed ? "Moved!" : labelText)
+                        .foregroundColor(.blue)
+                        .font(.footnote)
+                        .opacity(Double(1.0 - (dragOffset / (trackWidth - thumbSize.width))))
+                        .animation(.easeInOut, value: dragOffset)
+                    
+                    // Draggable Thumb
+                    HStack {
+                        ZStack {
+                            Capsule()
+                                .fill(Color.white)
+                                .frame(width: thumbSize.width, height: thumbSize.height)
+                                .shadow(radius: 2)
+                            
+                            Image(systemName: completed ? "checkmark" : "arrow.right")
+                                .foregroundColor(.blue)
+                        }
+                        .offset(x: dragOffset)
+                        .gesture(
+                            DragGesture()
+                                .onChanged { gesture in
+                                    if !completed {
+                                        let maxOffset = trackWidth - thumbSize.width
+                                        dragOffset = min(max(0, gesture.translation.width), maxOffset)
+                                    }
+                                }
+                                .onEnded { _ in
+                                    let maxOffset = trackWidth - thumbSize.width
+                                    if dragOffset > maxOffset * 0.85 {
+                                        // Confirmed
+                                        dragOffset = maxOffset
+                                        completed = true
+                                        action()
+                                    } else {
+                                        // Reset
+                                        dragOffset = 0
+                                    }
+                                }
+                        )
+                        
+                        Spacer()
+                    }
+                }
+            }
+            .frame(height: trackHeight)
+            .padding(.horizontal)
         }
-        .transition(.move(edge: .bottom))
     }
 
     // MARK: - Price Helpers

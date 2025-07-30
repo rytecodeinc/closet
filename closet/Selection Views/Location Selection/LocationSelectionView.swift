@@ -1,5 +1,5 @@
 //
-//  BrandSelectionView.swift
+//  LocationSelectionView.swift
 //  closet
 //
 //  Created by Dan Warner on 7/29/25.
@@ -8,7 +8,7 @@
 
 import SwiftUI
 import CoreData
-/*
+
 struct LocationSelectionView: View {
     @ObservedObject var item: Item
     @Environment(\.managedObjectContext) private var viewContext
@@ -16,16 +16,16 @@ struct LocationSelectionView: View {
 
     @State private var locations: [Location] = []
     @State private var newLocationName: String = ""
-    
-    var filteredBrands: [Location] {
-        guard !newLocationName.isEmpty else { return brands }
+
+    var filteredLocations: [Location] {
+        guard !newLocationName.isEmpty else { return locations }
         let lowercaseInput = newLocationName.lowercased()
-        return brands.filter { ($0.name ?? "").lowercased().contains(lowercaseInput) }
+        return locations.filter { ($0.name ?? "").lowercased().contains(lowercaseInput) }
     }
-    
+
     var body: some View {
         SelectionHeader(title: "Select a Location")
-        
+
         VStack(spacing: 12) {
             HStack {
                 TextField("Add or select a location", text: $newLocationName)
@@ -37,8 +37,8 @@ struct LocationSelectionView: View {
                 .disabled(newLocationName.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             .padding(.horizontal)
-            
-            if brands.isEmpty {
+
+            if locations.isEmpty {
                 Text("No locations have been added.")
                     .foregroundColor(.gray)
                     .padding()
@@ -48,7 +48,7 @@ struct LocationSelectionView: View {
                 List {
                     ForEach(filteredLocations, id: \.self) { location in
                         Button(action: {
-                            item.location = brand
+                            item.location = location
                             saveContext()
                             dismiss()
                         }) {
@@ -74,11 +74,11 @@ struct LocationSelectionView: View {
     }
 
     // MARK: - Highlight Matching Text
-    private func highlightedText(for brandName: String, matching input: String) -> Text {
-        let lowerLocation = locationName.lowercased()
+    private func highlightedText(for locationName: String, matching input: String) -> Text {
+        let lowerName = locationName.lowercased()
         let lowerInput = input.lowercased()
-        
-        guard let range = lowerLocation.range(of: lowerInput) else {
+
+        guard let range = lowerName.range(of: lowerInput) else {
             return Text(locationName)
         }
 
@@ -94,10 +94,10 @@ struct LocationSelectionView: View {
         return Text(before) + Text(match).bold() + Text(after)
     }
 
-    // MARK: - Fetch Brands
+    // MARK: - Fetch Locations
     private func fetchLocations() {
         let request: NSFetchRequest<Location> = Location.fetchRequest()
-        request.predicate = NSPredicate(format: "isVisible == YES")
+     //   request.predicate = NSPredicate(format: "isVisible == YES")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Location.name, ascending: true)]
         do {
             locations = try viewContext.fetch(request)
@@ -116,31 +116,36 @@ struct LocationSelectionView: View {
         }
     }
 
-    // MARK: - Add Brand if New
+    // MARK: - Add Location if New
     private func addLocation() {
         let trimmed = newLocationName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        let locationExists = locations.contains { ($0.name ?? "").localizedCaseInsensitiveCompare(trimmed) == .orderedSame }
-        guard !locationExists else {
-            print("✅ Location already exists — assigning it without duplication.")
-            if let existing = locations.first(where: { ($0.name ?? "").localizedCaseInsensitiveCompare(trimmed) == .orderedSame }) {
-                item.brand = existing
+        let locationExists = locations.contains {
+            ($0.name ?? "").localizedCaseInsensitiveCompare(trimmed) == .orderedSame
+        }
+
+        if locationExists {
+            if let existing = locations.first(where: {
+                ($0.name ?? "").localizedCaseInsensitiveCompare(trimmed) == .orderedSame
+            }) {
+                item.location = existing
                 saveContext()
                 dismiss()
             }
             return
         }
 
-        let newBrand = Brand(context: viewContext)
-        newBrand.name = trimmed
-        newBrand.isVisible = true
+        let newLocation = Location(context: viewContext)
+        newLocation.id = UUID()
+        newLocation.name = trimmed
+     //   newLocation.isVisible = true
 
-        item.brand = newBrand
+        item.location = newLocation
         saveContext()
 
-        newBrandName = ""
-        fetchBrands()
+        newLocationName = ""
+        fetchLocations()
     }
 }
-*/
+

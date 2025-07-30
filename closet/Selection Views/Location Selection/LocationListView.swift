@@ -9,10 +9,10 @@
 import SwiftUI
 import CoreData
 import Foundation
-/*
+
 struct LocationListView: View {
     @Environment(\.managedObjectContext) private var viewContext
-    @Binding var selectedBrand: Brand?
+    @Binding var selectedLocation: Location?
     
     @State private var locations: [Location] = []
 
@@ -23,7 +23,7 @@ struct LocationListView: View {
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                ForEach(locations, id: \.self) { brand in
+                ForEach(locations, id: \.self) { location in
                     let name = location.name ?? ""
                     Button {
                         selectedLocation = location
@@ -51,15 +51,15 @@ struct LocationListView: View {
     }
 
     private func fetchLocations() {
-        let request: NSFetchRequest<Brand> = Brand.fetchRequest()
+        let request: NSFetchRequest<Location> = Location.fetchRequest()
         request.predicate = NSPredicate(format: "isVisible == YES")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Brand.name, ascending: true)]
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Location.name, ascending: true)]
         do {
-            brands = try viewContext.fetch(request)
+            locations = try viewContext.fetch(request)
         } catch {
             print("❌ Failed to fetch brands: \(error.localizedDescription)")
-            brands = []
+            locations = []
         }
     }
 }
-*/
+
