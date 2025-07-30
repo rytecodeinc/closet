@@ -60,6 +60,7 @@ struct ColorSelectionView: View {
         }
 
         let newColor = AppColor(context: viewContext)
+        newColor.id = UUID()
         newColor.name = name
         newColor.isVisible = true
         return newColor

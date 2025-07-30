@@ -115,6 +115,7 @@ struct AddLinkFormView: View {
 
             // Create new Link
             let newLink = Link(context: viewContext)
+            newLink.id = UUID()
             newLink.name = trimmedName
             newLink.url = finalURL
             onLinkAdded(newLink)
