@@ -14,7 +14,7 @@ struct ItemGridView: View {
     @FetchRequest var closetItems: FetchedResults<Item>
     @ObservedObject var filterModel: FilterModel
     
-    @State private var isSettingsPresented = false
+  //  @State private var isSettingsPresented = false
 
 
     let gridItems = [
@@ -48,22 +48,22 @@ struct ItemGridView: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
+          /*  ToolbarItem(placement: .navigationBarLeading) {
                 Button(action: {
                     isSettingsPresented = true
                 }) {
                     Image(systemName: "gear")
                 }
-            }
+            }*/
             ToolbarItem(placement: .navigationBarTrailing) {
                     NavigationLink(destination: FilterView(filterModel: filterModel)) {
                         Image(systemName: "line.3.horizontal.decrease.circle")
                     }
                 }
         }
-        .sheet(isPresented: $isSettingsPresented) {
+    /*    .sheet(isPresented: $isSettingsPresented) {
             SettingsView()
-        }
+        }*/
        /* .onAppear {
                     print("✅ hehe ItemGridView appeared")
                 }*/
