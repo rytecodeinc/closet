@@ -55,7 +55,7 @@ struct TagSelectionView: View {
             fetchTags()
         }
         .sheet(isPresented: $showAddTagView) {
-            TagListView(item: item)
+            TagDisplayView(item: item)
                 
         }
         .presentationDetents([.medium, .large])

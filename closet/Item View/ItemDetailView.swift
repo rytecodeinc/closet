@@ -18,6 +18,8 @@ struct ItemDetailView: View {
     @State private var isLocationDrawerPresented: Bool = false
     @State private var priceString: String = ""
     @State private var isLinkDrawerPresented: Bool = false
+    @State private var isTagDrawerPresented: Bool = false
+  
     @State private var isImageFullScreen = false
     
     private let currencySymbol = Locale.current.currencySymbol ?? "$"
@@ -60,6 +62,7 @@ struct ItemDetailView: View {
             priceRow()
             linkRow()
             locationRow()
+            tagRow()
         } header: {
             Text("ATTRIBUTES")
                 .fontWeight(.semibold)
@@ -209,6 +212,36 @@ struct ItemDetailView: View {
             LocationSelectionView(item: item)
         }
     }
+    
+    // MARK: - Tag Row
+    // MARK: - Tag Row
+    private func tagRow() -> some View {
+        Button(action: {
+            isTagDrawerPresented = true
+        }) {
+            HStack {
+                Text("Tags")
+                    .foregroundColor(.black)
+
+                Spacer()
+
+                if let tagSet = item.tags as? Set<Tag>, !tagSet.isEmpty {
+                    let tagNames = tagSet.compactMap { $0.name }.sorted().joined(separator: ", ")
+                    Text(tagNames.prefix(20))
+                        .foregroundColor(.gray)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.gray)
+            }
+        }
+        .sheet(isPresented: $isTagDrawerPresented) {
+            TagSelectionView(item: item)
+        }
+    }
+
 
 
     // MARK: - Header Image

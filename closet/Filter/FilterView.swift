@@ -53,6 +53,7 @@ struct FilterView: View {
                     }
                 }
                 
+                // Price Filter
                 HStack {
                     Text("Price")
                     Spacer()
@@ -81,6 +82,20 @@ struct FilterView: View {
                         
                     }
                 }
+                
+                // Tag filter
+                NavigationLink(destination: TagListView(selectedTags: $filterModel.selectedTags)) {
+                    HStack {
+                        Text("Tags")
+                        Spacer()
+                        if !filterModel.selectedTags.isEmpty {
+                            Text(filterModel.selectedTags.compactMap { $0.name }.sorted().joined(separator: ", "))
+                                .foregroundColor(.gray)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+
 
             }
             .navigationTitle("Filter")
