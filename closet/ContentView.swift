@@ -39,7 +39,7 @@ struct ContentView: View {
                         Image(systemName: "calendar")
                         Text("Calendar")
                     }
-                ClosetView()
+                ProfileView()
                     .tabItem {
                         Image(systemName: "person")
                         Text("Profile")
