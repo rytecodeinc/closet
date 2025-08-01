@@ -12,7 +12,7 @@ import CoreData
 struct ClosetView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @StateObject var filterModel = FilterModel()
-
+    
     var body: some View {
         NavigationView {
             let basePredicate = makePredicate(for: filterModel)
@@ -20,7 +20,7 @@ struct ClosetView: View {
             let finalPredicate = basePredicate.map {
                 NSCompoundPredicate(andPredicateWithSubpredicates: [$0, wishlistPredicate])
             } ?? wishlistPredicate
-
+            
             ItemGridView(predicate: finalPredicate, filterModel: filterModel)
                 .navigationTitle("Closet")
         }
