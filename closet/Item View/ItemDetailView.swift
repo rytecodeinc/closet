@@ -270,8 +270,15 @@ struct ItemDetailView: View {
 
     private func itemImageHeader() -> some View {
         ZStack {
-            if let imageData = item.image,
-               let uiImage = UIImage(data: imageData) {
+            // Get primary photo data if available
+            let displayImage: UIImage? = {
+                if let primaryPhoto = item.photos?.compactMap({ $0 as? Photo }).first(where: { $0.isPrimary }) {
+                    return UIImage(data: primaryPhoto.data ?? Data())
+                }
+                return nil
+            }()
+            
+            if let uiImage = displayImage {
                 Image(uiImage: uiImage)
                     .resizable()
                     .aspectRatio(1, contentMode: .fill)
@@ -296,6 +303,7 @@ struct ItemDetailView: View {
             }
         }
     }
+
 
     // MARK: - Action Button
 

@@ -107,9 +107,13 @@ struct ItemGridView: View {
         item.id = UUID()
         item.timestamp = Date()
         item.isWishlist = isWishlist
-
+        
         if let imageData = image.jpegData(compressionQuality: 0.8) {
-            item.image = imageData
+            let photo = Photo(context: viewContext)
+            photo.data = imageData
+            photo.isPrimary = true
+            photo.id = UUID()
+            photo.item = item // link photo to item
         }
 
         do {

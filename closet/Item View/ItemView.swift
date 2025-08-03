@@ -13,6 +13,16 @@ struct ItemView: View {
     @State private var isActive: Bool = false
     @Environment(\.managedObjectContext) private var viewContext
 
+    var displayImage: UIImage? {
+        if let primaryImageData = item.photos?.first(where: { ($0 as? Photo)?.isPrimary == true }) as? Photo {
+            return UIImage(data: primaryImageData.data ?? Data())
+        } else if let fallbackImage = item.image {
+            return UIImage(data: fallbackImage)
+        } else {
+            return nil
+        }
+    }
+
     var body: some View {
         ZStack {
             NavigationLink(destination: ItemDetailView(item: item), isActive: $isActive) {
@@ -20,8 +30,7 @@ struct ItemView: View {
             }
             .hidden()
 
-            if let itemImageData = item.image,
-               let itemImage = UIImage(data: itemImageData) {
+            if let itemImage = displayImage {
                 Image(uiImage: itemImage)
                     .resizable()
                     .aspectRatio(1, contentMode: .fill)
@@ -35,6 +44,7 @@ struct ItemView: View {
                     .clipped()
                     .foregroundColor(.gray)
             }
+
             
             if item.isWishlist {
                 Image(systemName: "heart.fill")
@@ -55,5 +65,30 @@ struct ItemView: View {
         } catch {
             print("Failed to delete item: \(error.localizedDescription)")
         }
+    }
+}
+
+func migrateItemImages(context: NSManagedObjectContext) {
+    let fetchRequest: NSFetchRequest<Item> = Item.fetchRequest()
+
+    do {
+        let items = try context.fetch(fetchRequest)
+        for item in items {
+            if let existingImageData = item.image {
+                let newImage = Photo(context: context)
+                newImage.data = existingImageData
+                newImage.type = "default"
+                newImage.isPrimary = true
+                newImage.item = item
+
+                // Remove the old attribute's value
+                 item.image = nil
+            }
+        }
+        print("Migration successful!!!")
+        try context.save()
+        
+    } catch {
+        print("Migration failed: \(error)")
     }
 }

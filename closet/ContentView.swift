@@ -49,6 +49,7 @@ struct ContentView: View {
                 print("-- ContentView appeared")
                 print("Content View Data seeding")
                 DataSeeder(context: viewContext)
+                migrateItemImages(context: viewContext)
             }
         }
     }
