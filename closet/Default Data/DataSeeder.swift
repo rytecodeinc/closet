@@ -21,13 +21,18 @@ struct DataSeeder {
     private static let defaultSeasonNames: [String] = [
         "Spring", "Summer", "Fall", "Winter"
     ]
+
+    private static let defaultCategoryNames: [String] = [
+        "Tops", "Bottoms", "Outerwear", "Shoes", "Accessories",
+        "Dresses", "Suits", "Swimwear", "Activewear"
+    ]//sets, intimates, loungewear
     
     // MARK: - Init
     
     init(context: NSManagedObjectContext) {
         preloadDefaultColors(context: context)
         preloadDefaultSeasons(context: context)
-        // Add additional preloaders here (e.g., Tags, Sizes, Categories)
+        preloadDefaultCategories(context: context)
     }
 
     // MARK: - Public Preloaders
@@ -53,6 +58,18 @@ struct DataSeeder {
             print("✅ Seasons seeded or already present → \(names)")
         } catch {
             print("❌ Season seeding error:", error)
+        }
+    }
+
+    private func preloadDefaultCategories(context: NSManagedObjectContext) {
+        do {
+            if try countCategories(in: context) == 0 {
+                try insertDefaultCategories(in: context)
+            }
+            let names = try fetchAllCategories(in: context).compactMap { $0.name }
+            print("✅ Categories seeded or already present → \(names)")
+        } catch {
+            print("❌ Category seeding error:", error)
         }
     }
 
@@ -94,5 +111,26 @@ struct DataSeeder {
     private func fetchAllSeasons(in context: NSManagedObjectContext) throws -> [Season] {
         try context.fetch(NSFetchRequest<Season>(entityName: "Season"))
     }
+
+    // MARK: - Category Helpers
+
+    private func countCategories(in context: NSManagedObjectContext) throws -> Int {
+        try context.count(for: NSFetchRequest<NSFetchRequestResult>(entityName: "Category"))
+    }
+
+    private func insertDefaultCategories(in context: NSManagedObjectContext) throws {
+        for name in Self.defaultCategoryNames {
+            let category = Category(context: context)
+            category.name = name
+            category.id = UUID()
+          //  category.isVisible = true
+        }
+        try context.save()
+    }
+
+    private func fetchAllCategories(in context: NSManagedObjectContext) throws -> [Category] {
+        try context.fetch(NSFetchRequest<Category>(entityName: "Category"))
+    }
 }
+
 

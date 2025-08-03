@@ -12,6 +12,8 @@ import UIKit
 struct ItemDetailView: View {
     @ObservedObject var item: Item
 
+    @State private var isCategoryDrawerPresented = false
+
     @State private var isColorDrawerPresented: Bool = false
     @State private var isSeasonDrawerPresented: Bool = false
     @State private var isBrandDrawerPresented: Bool = false
@@ -56,6 +58,7 @@ struct ItemDetailView: View {
 
     private func attributesSection() -> some View {
         Section {
+            categoryRow()
             colorRow()
             seasonRow()
             brandRow()
@@ -68,7 +71,26 @@ struct ItemDetailView: View {
                 .fontWeight(.semibold)
         }
     }
+    
+    // MARK: - Category Row
+    private func categoryRow() -> some View {
+        Button(action: { isCategoryDrawerPresented = true }) {
+            HStack {
+                Text("Category").foregroundColor(.black)
+                Spacer()
+                if let category = item.category?.name, !category.isEmpty {
+                    Text(category).foregroundColor(.gray)
+                }
+                Image(systemName: "chevron.right").foregroundColor(.gray)
+            }
+        }
+        .sheet(isPresented: $isCategoryDrawerPresented) {
+            CategorySelectionView(item: item)
+        }
+    }
 
+    
+    // MARK: - Price Row
     private func priceRow() -> some View {
             HStack {
                 Text("Price")
