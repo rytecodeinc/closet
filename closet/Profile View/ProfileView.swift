@@ -13,7 +13,7 @@ import CoreData
 struct ProfileView: View {
 
     var body: some View {
-        NavigationStack {
+        NavigationView {
             List {
                 NavigationLink("Settings") {
                     SettingsView()
@@ -21,8 +21,9 @@ struct ProfileView: View {
                 
             }
             .listStyle(.plain)
+            .navigationTitle("Profile")
+            .navigationBarTitleDisplayMode(.inline)
         }
-        .navigationTitle("Profile")
-        .navigationBarTitleDisplayMode(.inline)
+        
     }
 }
