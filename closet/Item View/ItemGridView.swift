@@ -13,27 +13,39 @@ import CoreData
 struct ItemGridView: View {
     @FetchRequest var closetItems: FetchedResults<Item>
     @ObservedObject var filterModel: FilterModel
-
+    var isWishlist: Bool
+    
     @Environment(\.managedObjectContext) private var viewContext
 
     @State private var isImagePickerPresented = false
     @State private var pickedImage: UIImage? = nil
+    @State private var imagePickerSource: UIImagePickerController.SourceType = .photoLibrary
     @State private var path = NavigationPath()
+    
+    init(predicate: NSPredicate? = nil, filterModel: FilterModel, isWishlist: Bool) {
+        self.filterModel = filterModel
+        self.isWishlist = isWishlist
+
+        let basePredicate = makePredicate(for: filterModel)
+
+        let wishlistPredicate = NSPredicate(format: "isWishlist == %@", NSNumber(value: isWishlist))
+        
+        let finalPredicate = basePredicate.map {
+            NSCompoundPredicate(andPredicateWithSubpredicates: [$0, wishlistPredicate])
+        } ?? wishlistPredicate
+
+        _closetItems = FetchRequest(
+            entity: Item.entity(),
+            sortDescriptors: [NSSortDescriptor(keyPath: \Item.timestamp, ascending: false)],
+            predicate: finalPredicate
+        )
+    }
 
     let gridItems = [
         GridItem(.flexible(), spacing: 1),
         GridItem(.flexible(), spacing: 1),
         GridItem(.flexible(), spacing: 1)
     ]
-
-    init(predicate: NSPredicate? = nil, filterModel: FilterModel) {
-        self.filterModel = filterModel
-        _closetItems = FetchRequest(
-            entity: Item.entity(),
-            sortDescriptors: [NSSortDescriptor(keyPath: \Item.timestamp, ascending: false)],
-            predicate: predicate ?? NSPredicate(value: true)
-        )
-    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -43,8 +55,8 @@ struct ItemGridView: View {
                 } else {
                     ScrollView {
                         LazyVGrid(columns: gridItems, spacing: 1) {
-                            ForEach(closetItems, id: \.self) { item in
-                                ItemView(item: item)
+                        ForEach(closetItems, id: \.self) { item in
+                            ItemView(item: item)
                             }
                         }
                     }
@@ -52,21 +64,32 @@ struct ItemGridView: View {
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .navigationBarLeading) {
                     NavigationLink(destination: FilterView(filterModel: filterModel)) {
                         Image(systemName: "line.3.horizontal.decrease.circle")
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: {
-                        isImagePickerPresented = true
-                    }) {
+                    Menu {
+                        Button("Take Photo") {
+                            imagePickerSource = .camera
+                            isImagePickerPresented = true
+                        }
+                        Button("Choose from Library") {
+                            imagePickerSource = .photoLibrary
+                            isImagePickerPresented = true
+                        }
+                    } label: {
                         Image(systemName: "plus")
                     }
                 }
             }
             .sheet(isPresented: $isImagePickerPresented) {
-                ImagePicker(image: $pickedImage, allowsEditing: true) { image in
+                ImagePicker(
+                    image: $pickedImage,
+                    sourceType: imagePickerSource,
+                    allowsEditing: true
+                ) { image in
                     if let image = image {
                         createNewItem(with: image)
                     }
@@ -83,7 +106,7 @@ struct ItemGridView: View {
         let item = Item(context: viewContext)
         item.id = UUID()
         item.timestamp = Date()
-        item.isWishlist = false
+        item.isWishlist = isWishlist
 
         if let imageData = image.jpegData(compressionQuality: 0.8) {
             item.image = imageData
@@ -92,12 +115,13 @@ struct ItemGridView: View {
         do {
             try viewContext.save()
             print("✅ New item saved with photo")
-            path.append(item) // Trigger the navigation
+            path.append(item)
         } catch {
             print("❌ Failed to save new item: \(error.localizedDescription)")
         }
     }
 }
+
 
 
 

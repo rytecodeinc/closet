@@ -11,7 +11,9 @@ import PhotosUI
 
 struct ImagePicker: UIViewControllerRepresentable {
     @Binding var image: UIImage?
+    var sourceType: UIImagePickerController.SourceType
     var allowsEditing: Bool
+    
     var completionHandler: ((UIImage?) -> Void)?
 
     func makeCoordinator() -> Coordinator {
@@ -20,9 +22,11 @@ struct ImagePicker: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let picker = UIImagePickerController()
+
+        picker.sourceType = sourceType // camera or library
+        picker.allowsEditing = allowsEditing // scaling and cropping
         picker.delegate = context.coordinator
-        picker.sourceType = .photoLibrary
-        picker.allowsEditing = allowsEditing
+
         return picker
     }
 
