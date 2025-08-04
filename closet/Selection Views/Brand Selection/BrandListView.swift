@@ -25,7 +25,11 @@ struct BrandListView: View {
                 ForEach(brands, id: \.self) { brand in
                     let name = brand.name ?? ""
                     Button {
-                        selectedBrand = brand
+                        if selectedBrand == brand {
+                            selectedBrand = nil // deselect
+                        } else {
+                            selectedBrand = brand // select
+                        }
                     } label: {
                         HStack {
                             Text(name)

@@ -54,7 +54,7 @@ struct ItemDetailView: View {
                     Button {
                         isShowingPhotoPicker = true
                     } label: {
-                        Label("Replace Image", systemImage: "pencil")
+                        Label("Replace Image", systemImage: "photo.on.rectangle.angled")
                     }
                     
                     Button(role: .destructive) {

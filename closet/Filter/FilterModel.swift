@@ -14,10 +14,17 @@ class FilterModel: ObservableObject {
     @Published var selectedSeasons: Set<String> = []
     @Published var selectedBrand: Brand? = nil
     @Published var selectedTags: Set<Tag> = []
-
-
     @Published var minPrice: Decimal?
     @Published var maxPrice: Decimal?
+    
+    func clearAll() {
+        selectedColors.removeAll()
+        selectedSeasons.removeAll()
+        selectedBrand = nil
+        selectedTags.removeAll()
+        minPrice = nil
+        maxPrice = nil
+    }
 }
 
 
@@ -63,6 +70,7 @@ func makePredicate(for filterModel: FilterModel) -> NSPredicate? {
     } else {
         return NSCompoundPredicate(andPredicateWithSubpredicates: subpredicates)
     }
+    
 }
 
 
