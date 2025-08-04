@@ -26,6 +26,13 @@ struct ItemDetailView: View {
     
     private let currencySymbol = Locale.current.currencySymbol ?? "$"
 
+    @State private var isShowingPhotoPicker = false
+    @State private var selectedUIImage: UIImage?
+   
+    @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.dismiss) private var dismiss
+
+    
     var body: some View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
@@ -41,6 +48,38 @@ struct ItemDetailView: View {
                 }
             }
         }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Menu {
+                    Button {
+                        isShowingPhotoPicker = true
+                    } label: {
+                        Label("Replace Image", systemImage: "pencil")
+                    }
+                    
+                    Button(role: .destructive) {
+                        deleteItem()
+                    } label: {
+                        Label("Delete Item", systemImage: "trash")
+                    }
+                } label: {
+                    Label("Options", systemImage: "ellipsis")
+                }
+            }
+        }
+        .sheet(isPresented: $isShowingPhotoPicker) {
+            ImagePicker(
+                image: $selectedUIImage,
+                sourceType: .photoLibrary,
+                allowsEditing: true
+            ) { image in
+                if let newImage = image {
+                    replacePrimaryImage(with: newImage)
+                }
+                isShowingPhotoPicker = false
+            }
+        }
+
         .safeAreaInset(edge: .bottom) {
             if item.isWishlist {
                 moveToClosetButton()
@@ -53,9 +92,29 @@ struct ItemDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         
     }
+    // MARK: - Edit Button
+    private func replacePrimaryImage(with image: UIImage) {
+        // Remove existing primary photo
+        if let existingPrimary = (item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }) {
+            viewContext.delete(existingPrimary)
+        }
+
+        // Create and assign new photo
+        let newPhoto = Photo(context: viewContext)
+        newPhoto.id = UUID()
+        newPhoto.data = image.jpegData(compressionQuality: 0.8)
+        newPhoto.isPrimary = true
+        newPhoto.item = item
+
+        do {
+            try viewContext.save()
+            print("✅ Replaced primary photo.")
+        } catch {
+            print("❌ Failed to save new photo: \(error.localizedDescription)")
+        }
+    }
 
     // MARK: - Sections
-
     private func attributesSection() -> some View {
         Section {
             categoryRow()
@@ -405,6 +464,18 @@ struct ItemDetailView: View {
                 item.price = price
             }
             item.price?.amount = ((value) as NSDecimalNumber)
+        }
+    }
+    
+    func deleteItem() {
+        viewContext.delete(item)
+
+        do {
+            try viewContext.save()
+            dismiss() // Go back after deletion
+        } catch {
+            // Handle the error (e.g., log it or show alert)
+            print("Failed to delete item: \(error.localizedDescription)")
         }
     }
 }

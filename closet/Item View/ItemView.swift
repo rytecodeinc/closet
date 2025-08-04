@@ -9,7 +9,7 @@ import SwiftUI
 import CoreData
 
 struct ItemView: View {
-    var item: Item
+    @ObservedObject var item: Item
     @State private var isActive: Bool = false
     @Environment(\.managedObjectContext) private var viewContext
 
