@@ -18,6 +18,7 @@ struct ItemDetailView: View {
     @State private var isSeasonDrawerPresented: Bool = false
     @State private var isBrandDrawerPresented: Bool = false
     @State private var isLocationDrawerPresented: Bool = false
+    @State private var isPriceDrawerPresented = false
     @State private var priceString: String = ""
     @State private var isLinkDrawerPresented: Bool = false
     @State private var isTagDrawerPresented: Bool = false
@@ -151,28 +152,48 @@ struct ItemDetailView: View {
     
     // MARK: - Price Row
     private func priceRow() -> some View {
+        Button(action: {
+            isPriceDrawerPresented = true
+        }) {
             HStack {
                 Text("Price")
                     .foregroundColor(.black)
 
                 Spacer()
-
-                HStack(spacing: 0) {
-                    Text(currencySymbol)
-                        .foregroundColor(.gray)
-
-                    TextField("0.00", text: $priceString)
-                        .keyboardType(.decimalPad)
-                        .foregroundColor(.gray)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 60)
-                        .onChange(of: priceString) { newValue in
-                            updatePriceAmount(from: newValue)
-                        }
+                
+                if let amount = item.price?.amount {
+                    HStack(spacing: 0) {
+                        Text(currencySymbol)
+                            .foregroundColor(.gray)
+                        
+                        Text(formattedPrice)
+                            .foregroundColor(.gray)
+                            .multilineTextAlignment(.trailing)
+                    }
                 }
+                
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.gray)
+                    .padding(.leading, 4)
             }
-        
+        }
+        .sheet(isPresented: $isPriceDrawerPresented) {
+            PriceSelectionView(item: item)
+        }
     }
+    private var formattedPrice: String {
+        if let amount = item.price?.amount {
+            let formatter = NumberFormatter()
+            formatter.numberStyle = .decimal
+            formatter.minimumFractionDigits = 2
+            formatter.maximumFractionDigits = 2
+            return formatter.string(from: NSDecimalNumber(decimal: amount as Decimal)) ?? "0.00"
+        }
+        return "0.00"
+    }
+
+
+
 
     // MARK: - Row Helpers
 
