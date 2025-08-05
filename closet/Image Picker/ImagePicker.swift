@@ -46,15 +46,17 @@ struct ImagePicker: UIViewControllerRepresentable {
                 picker.dismiss(animated: true)
                 return
             }
-
+            
             picker.dismiss(animated: true) {
-                let cropper = ImageCropperView(
-                    originalImage: originalImage,
-                    onCrop: { croppedImage in
-                        self.parent.image = croppedImage
-                        self.parent.completionHandler?(croppedImage)
-                    }
-                )
+                let cropper = NavigationStack {
+                    ImageCropperView(
+                        originalImage: originalImage,
+                        onCrop: { croppedImage in
+                            self.parent.image = croppedImage
+                            self.parent.completionHandler?(croppedImage)
+                        }
+                    )
+                }
 
                 if let rootVC = UIApplication.shared.windows.first?.rootViewController {
                     let hosting = UIHostingController(rootView: cropper)
@@ -70,18 +72,20 @@ struct ImagePicker: UIViewControllerRepresentable {
     }
 }
 
+import SwiftUI
+
 struct ImageCropperView: View {
     let originalImage: UIImage
     let onCrop: (UIImage) -> Void
 
     @State private var scale: CGFloat = 1.0
     @State private var offset: CGSize = .zero
-    @Environment(\.presentationMode) var presentationMode
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack {
             ZStack {
-                Color.black.opacity(0.2)
+                Color.white
 
                 GeometryReader { geo in
                     Image(uiImage: originalImage)
@@ -107,20 +111,22 @@ struct ImageCropperView: View {
                 .aspectRatio(1, contentMode: .fit)
                 .frame(maxWidth: .infinity)
                 .background(Color.white)
+                .border(Color.black.opacity(0.2))
+            }
+        }
+        .navigationTitle("Crop")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel", role: .cancel) {
+                    dismiss()
+                }
             }
 
-            HStack {
-                Button("Cancel") {
-                    presentationMode.wrappedValue.dismiss()
-                }
-                .padding()
-
-                Spacer()
-
-                Button("Crop & Save") {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Save") {
                     cropAndSaveImage()
                 }
-                .padding()
             }
         }
     }
@@ -145,6 +151,6 @@ struct ImageCropperView: View {
         }
 
         onCrop(newImage)
-        presentationMode.wrappedValue.dismiss()
+        dismiss()
     }
 }
