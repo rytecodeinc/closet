@@ -76,6 +76,7 @@ struct LinkSelectionView: View {
         }
         .sheet(isPresented: $showAddForm) {
             AddLinkFormView(
+                item: item,
                 viewContext: viewContext,
                 existingLinks: links,
                 linkToEdit: linkToEdit,
@@ -89,6 +90,7 @@ struct LinkSelectionView: View {
             )
             .presentationDetents([.medium])
         }
+
         .onAppear(perform: fetchLinks)
         .presentationDetents([.medium, .large])
     }
@@ -107,6 +109,7 @@ struct LinkSelectionView: View {
     // MARK: - Fetch Links
     private func fetchLinks() {
         let request: NSFetchRequest<Link> = Link.fetchRequest()
+        request.predicate = NSPredicate(format: "item == %@", item)
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Link.name, ascending: true)]
         do {
             links = try viewContext.fetch(request)

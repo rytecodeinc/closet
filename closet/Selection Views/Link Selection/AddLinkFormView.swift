@@ -12,6 +12,7 @@ import Foundation
 struct AddLinkFormView: View {
     @Environment(\.dismiss) private var dismiss
 
+    let item: Item
     let viewContext: NSManagedObjectContext
     let existingLinks: [Link]
     let linkToEdit: Link? // ✅ renamed from editingLink
@@ -118,6 +119,7 @@ struct AddLinkFormView: View {
             newLink.id = UUID()
             newLink.name = trimmedName
             newLink.url = finalURL
+            newLink.item = item
             onLinkAdded(newLink)
         }
 
