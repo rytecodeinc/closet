@@ -1,3 +1,18 @@
+//
+//  ImageCropperView.swift
+//  closet
+//
+//  Created by Dan Warner on 8/13/25.
+//
+
+import SwiftUI
+import PhotosUI
+import UIKit
+
+import Vision
+import CoreImage
+import CoreImage.CIFilterBuiltins
+
 struct ImageCropperView: View {
     let originalImage: UIImage
     let onCrop: (UIImage) -> Void
@@ -60,10 +75,10 @@ struct ImageCropperView: View {
 
             }
 
-            if isProcessingBackgroundRemoval {
+           /* if isProcessingBackgroundRemoval {
                 ProgressView("Removing Background...")
                     .padding()
-            }
+            }*/
 
             
         }

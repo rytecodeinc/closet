@@ -27,8 +27,12 @@ struct ItemDetailView: View {
     
     private let currencySymbol = Locale.current.currencySymbol ?? "$"
 
-    @State private var isShowingPhotoPicker = false
+    @State private var isImagePickerPresented = false
+    @State private var imagePickerSource: UIImagePickerController.SourceType = .photoLibrary
     @State private var selectedUIImage: UIImage?
+    
+    @State private var isCropperPresented = false
+   
    
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
@@ -53,11 +57,25 @@ struct ItemDetailView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
                     Button {
-                        isShowingPhotoPicker = true
+                        imagePickerSource = .camera
+                        isImagePickerPresented = true
+                    } label: {
+                        Label("Take New Photo", systemImage: "camera")
+                    }
+
+                    Button {
+                        imagePickerSource = .photoLibrary
+                        isImagePickerPresented = true
                     } label: {
                         Label("Replace Image", systemImage: "photo.on.rectangle.angled")
                     }
-                    
+
+                    Button {
+                        presentCropperForExistingImage()
+                    } label: {
+                        Label("Edit Image", systemImage: "pencil")
+                    }
+
                     Button(role: .destructive) {
                         deleteItem()
                     } label: {
@@ -66,20 +84,38 @@ struct ItemDetailView: View {
                 } label: {
                     Label("Options", systemImage: "ellipsis")
                 }
+
             }
         }
-        .sheet(isPresented: $isShowingPhotoPicker) {
+        .sheet(isPresented: $isImagePickerPresented) {
             ImagePicker(
                 image: $selectedUIImage,
-                sourceType: .photoLibrary,
+                sourceType: $imagePickerSource,
                 allowsEditing: true
             ) { image in
                 if let newImage = image {
                     replacePrimaryImage(with: newImage)
                 }
-                isShowingPhotoPicker = false
+                isImagePickerPresented = false
             }
         }
+        .sheet(isPresented: $isCropperPresented) {
+            if let image = getCurrentPrimaryUIImage() {
+                NavigationView {
+                    ImageCropperView(
+                        originalImage: image,
+                        onCrop: { croppedImage in
+                            replacePrimaryImage(with: croppedImage)
+                        }
+                    )
+                }
+            } else {
+                Text("No image found to edit.")
+                    .padding()
+            }
+        }
+
+
 
         .safeAreaInset(edge: .bottom) {
             if item.isWishlist {
@@ -93,7 +129,22 @@ struct ItemDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         
     }
+    
     // MARK: - Edit Button
+    private func presentCropperForExistingImage() {
+        isCropperPresented = true
+    }
+    private func getCurrentPrimaryUIImage() -> UIImage? {
+        if let primary = (item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }),
+           let data = primary.data,
+           let image = UIImage(data: data) {
+            return image
+        }
+        return nil
+    }
+
+
+    // MARK: - Replace Button
     private func replacePrimaryImage(with image: UIImage) {
         // Remove existing primary photo
         if let existingPrimary = (item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }) {
@@ -103,7 +154,7 @@ struct ItemDetailView: View {
         // Create and assign new photo
         let newPhoto = Photo(context: viewContext)
         newPhoto.id = UUID()
-        newPhoto.data = image.jpegData(compressionQuality: 0.8)
+        newPhoto.data = image.pngData()
         newPhoto.isPrimary = true
         newPhoto.item = item
 
