@@ -19,7 +19,7 @@ struct ItemGridView: View {
 
     @State private var isImagePickerPresented = false
     @State private var pickedImage: UIImage? = nil
-    @State private var imagePickerSource: UIImagePickerController.SourceType = .photoLibrary
+    @State private var imagePickerSource:  UIImagePickerController.SourceType = .photoLibrary
     @State private var path = NavigationPath()
     
     init(predicate: NSPredicate? = nil, filterModel: FilterModel, isWishlist: Bool) {
@@ -71,14 +71,20 @@ struct ItemGridView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
-                        Button("Take Photo") {
+                        Button() {
                             imagePickerSource = .camera
                             isImagePickerPresented = true
+                        } label: {
+                            Label("Take New Photo", systemImage: "camera")
                         }
-                        Button("Choose from Library") {
+                        
+                        Button() {
                             imagePickerSource = .photoLibrary
                             isImagePickerPresented = true
+                        } label: {
+                            Label("Choose from Library", systemImage: "photo.on.rectangle.angled")
                         }
+                        
                     } label: {
                         Image(systemName: "plus")
                     }
@@ -87,7 +93,7 @@ struct ItemGridView: View {
             .sheet(isPresented: $isImagePickerPresented) {
                 ImagePicker(
                     image: $pickedImage,
-                    sourceType: imagePickerSource,
+                    sourceType: $imagePickerSource,
                     allowsEditing: true
                 ) { image in
                     if let image = image {
@@ -108,7 +114,7 @@ struct ItemGridView: View {
         item.timestamp = Date()
         item.isWishlist = isWishlist
         
-        if let imageData = image.jpegData(compressionQuality: 0.8) {
+        if let imageData = image.pngData() {
             let photo = Photo(context: viewContext)
             photo.data = imageData
             photo.isPrimary = true
