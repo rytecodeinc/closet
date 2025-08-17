@@ -68,8 +68,13 @@ struct ItemGridView: View {
                     NavigationLink(destination: FilterView(filterModel: filterModel)) {
                         Image(systemName: "line.3.horizontal.decrease.circle")
                     }
+                    
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
+                    NavigationLink(destination: ItemAddView(parentContext: viewContext)) {
+                        Image(systemName: "plus")
+                    }
+                    /*
                     Menu {
                         Button() {
                             imagePickerSource = .camera
@@ -87,7 +92,7 @@ struct ItemGridView: View {
                         
                     } label: {
                         Image(systemName: "plus")
-                    }
+                    }*/
                 }
             }
             .sheet(isPresented: $isImagePickerPresented) {

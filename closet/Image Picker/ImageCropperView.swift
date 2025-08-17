@@ -113,7 +113,7 @@ struct ImageCropperView: View {
             }
 
             ToolbarItem(placement: .confirmationAction) {
-                Button("Save") {
+                Button("Add") {
                     cropAndSaveImage()
                 }
             }
