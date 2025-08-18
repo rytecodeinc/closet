@@ -11,9 +11,9 @@ import UIKit
 
 struct ItemDetailView: View {
     @ObservedObject var item: Item
-
+/*
     @State private var isCategoryDrawerPresented = false
-
+    @State private var isSizeDrawerPresented = false
     @State private var isColorDrawerPresented: Bool = false
     @State private var isSeasonDrawerPresented: Bool = false
     @State private var isBrandDrawerPresented: Bool = false
@@ -22,7 +22,8 @@ struct ItemDetailView: View {
     @State private var priceString: String = ""
     @State private var isLinkDrawerPresented: Bool = false
     @State private var isTagDrawerPresented: Bool = false
-  
+  */
+    @State private var attributesSheet: AttributesSectionView.Sheet?
     @State private var isImageFullScreen = false
     
     private let currencySymbol = Locale.current.currencySymbol ?? "$"
@@ -41,18 +42,17 @@ struct ItemDetailView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
-                itemImageHeader()
-
                 List {
-                    attributesSection()
+                    itemImageHeader()
+                        .listRowInsets(EdgeInsets(.zero))
+                    AttributesSectionView(item: item, activeSheet: $attributesSheet)
                     
                 }
                 .listStyle(.plain)
-                .onAppear {
-                    loadInitialPrice()
-                }
             }
         }
+        .sheet(item: $attributesSheet) { $0.destination(for: item) }
+
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
@@ -114,9 +114,6 @@ struct ItemDetailView: View {
                     .padding()
             }
         }
-
-
-
         .safeAreaInset(edge: .bottom) {
             if item.isWishlist {
                 moveToClosetButton()
@@ -165,11 +162,12 @@ struct ItemDetailView: View {
             print("❌ Failed to save new photo: \(error.localizedDescription)")
         }
     }
-
+/*
     // MARK: - Sections
     private func attributesSection() -> some View {
         Section {
             categoryRow()
+            sizeRow()
             colorRow()
             seasonRow()
             brandRow()
@@ -199,6 +197,39 @@ struct ItemDetailView: View {
             CategorySelectionView(item: item)
         }
     }
+    
+    // MARK: - Size Row
+    private var selectedSizeText: String? {
+        guard let size = item.size,
+              let value = size.value, !value.isEmpty else { return nil }
+        // Only show if the size belongs to the currently selected category
+        if let cat = item.category, size.category == cat {
+            return value
+        }
+        return nil
+    }
+
+    private func sizeRow() -> some View {
+        Button(action: { isSizeDrawerPresented = true }) {
+            HStack {
+                Text("Size").foregroundColor(.black)
+                Spacer()
+                if let label = selectedSizeText {
+                    Text(label).foregroundColor(.gray)
+                } /*else if item.category == nil {
+                    Text("Select category first").foregroundColor(.gray)
+                }*/
+                Image(systemName: "chevron.right").foregroundColor(.gray)
+            }
+        }
+        .sheet(isPresented: $isSizeDrawerPresented) {
+            SizeSelectionView(item: item)
+        }
+        // Optional: disable until a category is chosen
+        //.disabled(item.category == nil)
+        //.opacity(item.category == nil ? 0.5 : 1)
+    }
+
 
     
     // MARK: - Price Row
@@ -394,7 +425,7 @@ struct ItemDetailView: View {
             TagSelectionView(item: item)
         }
     }
-
+*/
 
 
     // MARK: - Header Image
@@ -518,7 +549,7 @@ struct ItemDetailView: View {
             .padding(.horizontal)
         }
     }
-
+/*
     // MARK: - Price Helpers
 
     private func loadInitialPrice() {
@@ -538,7 +569,7 @@ struct ItemDetailView: View {
             item.price?.amount = ((value) as NSDecimalNumber)
         }
     }
-    
+    */
     func deleteItem() {
         viewContext.delete(item)
 

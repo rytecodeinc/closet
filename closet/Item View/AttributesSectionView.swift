@@ -1,3 +1,11 @@
+//
+//  AttributesSectionView.swift
+//  closet
+//
+//  Created by Dan Warner on 8/16/25.
+//
+
+
 // MARK: - AttributesSectionView
 // Single source of truth for Category, Size, Colors, Seasons, Brand, Price, Links, Location, Tags
 // Works in both ItemDetailView (parent MOC) and ItemAddView (child MOC) by inheriting the ambient managedObjectContext.
@@ -9,7 +17,7 @@ struct AttributesSectionView: View {
     @ObservedObject var item: Item
 
     // One enum instead of many booleans
-    @State private var activeSheet: Sheet?
+    @Binding var activeSheet: Sheet?
 
     // Currency symbol (display only)
     private let currencySymbol = Locale.current.currencySymbol ?? "$"
@@ -28,7 +36,7 @@ struct AttributesSectionView: View {
         } header: {
             Text("ATTRIBUTES").fontWeight(.semibold)
         }
-        // Present the appropriate drawer; inherits environment(\.managedObjectContext)
+        /* Present the appropriate drawer; inherits environment(\.managedObjectContext)
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .category:
@@ -50,20 +58,20 @@ struct AttributesSectionView: View {
             case .tag:
                 TagSelectionView(item: item)
             }
-        }
+        }*/
     }
 }
 
 // MARK: - Sheet enum
-private extension AttributesSectionView {
-    enum Sheet: Identifiable {
+extension AttributesSectionView {
+    enum Sheet: String, Identifiable {
         case category, size, color, season, brand, price, link, location, tag
-        var id: Int { hashValue }
+        var id: String { rawValue }
     }
 }
 
 // MARK: - Rows
-private extension AttributesSectionView {
+extension AttributesSectionView {
     // Category
     func categoryRow() -> some View {
         Button { activeSheet = .category } label: {
@@ -225,7 +233,6 @@ private extension AttributesSectionView {
 }
 
 // MARK: - Optional local formatter if you do not already have one elsewhere
-// If you already have NumberFormatter.currency2 defined globally, remove this block.
 extension NumberFormatter {
     static let currency2: NumberFormatter = {
         let f = NumberFormatter()
@@ -259,3 +266,20 @@ extension NumberFormatter {
 // In ItemAddView: replace ItemAttributesSection(item: vm.draftItem) with:
 //     AttributesSectionView(item: vm.draftItem)
 // Keep your existing `.environment(\.managedObjectContext, vm.childContext)` higher up, so the section + drawers inherit the child context.
+
+extension AttributesSectionView.Sheet {
+    @ViewBuilder
+    func destination(for item: Item) -> some View {
+        switch self {
+        case .category:  CategorySelectionView(item: item)
+        case .size:      SizeSelectionView(item: item)
+        case .color:     ColorSelectionView(item: item)
+        case .season:    SeasonSelectionView(item: item)
+        case .brand:     BrandSelectionView(item: item)
+        case .price:     PriceSelectionView(item: item)
+        case .link:      LinkSelectionView(item: item)
+        case .location:  LocationSelectionView(item: item)
+        case .tag:       TagSelectionView(item: item)
+        }
+    }
+}

@@ -225,7 +225,7 @@ private struct ItemAttributesSection: View {
         }
     }
 }
-
+/*
 private extension NumberFormatter {
     static let currency2: NumberFormatter = {
         let f = NumberFormatter()
@@ -235,14 +235,15 @@ private extension NumberFormatter {
         return f
     }()
 }
-
+*/
 // MARK: - ItemAddView (init with parentContext; child ctx ready before body)
 struct ItemAddView: View {
     @Environment(\.dismiss) private var dismiss
 
     @StateObject private var vm: ItemAddViewModel
     
-
+    @State private var attributesSheet: AttributesSectionView.Sheet?
+    
     // Image handling
     @State private var isImagePickerPresented = false
     @State private var imagePickerSource: UIImagePickerController.SourceType = .photoLibrary
@@ -262,8 +263,9 @@ struct ItemAddView: View {
         List {
             photoPlaceholderHeader()
                 .listRowInsets(EdgeInsets(.zero))
-            ItemAttributesSection(item: vm.draftItem)
+            AttributesSectionView(item: vm.draftItem, activeSheet: $attributesSheet)
         }
+        .sheet(item: $attributesSheet) { $0.destination(for: vm.draftItem) }
         .listStyle(.plain)
         .listRowInsets(EdgeInsets())
         .navigationTitle("Add Item")
