@@ -41,7 +41,11 @@ struct CategorySelectionView: View {
                         }
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            selectedCategoryName = name
+                            if selectedCategoryName == name {
+                                selectedCategoryName = nil
+                            } else {
+                                selectedCategoryName = name
+                            }
                         }
                     }
                 }
