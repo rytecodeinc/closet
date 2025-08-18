@@ -73,18 +73,41 @@ extension AttributesSectionView {
 // MARK: - Rows
 extension AttributesSectionView {
     // Category
+    // Helper: what to show on the right side of the row
+    private var categoryDisplayText: String? {
+        guard let catName = item.category?.name, !catName.isEmpty else { return nil }
+        if let sub = item.subcategory,
+           sub.category == item.category,                  // ensure it matches the current category
+           let subName = sub.name, !subName.isEmpty {
+            return "\(catName) • \(subName)"
+        }
+        return catName
+    }
+
+    // MARK: - Category Row
     func categoryRow() -> some View {
         Button { activeSheet = .category } label: {
             HStack {
-                Text("Category").foregroundColor(.primary)
+                Text("Category")
+                    .foregroundColor(.primary)
                 Spacer()
-                if let name = item.category?.name, !name.isEmpty {
-                    Text(name).foregroundColor(.gray)
+                if let label = categoryDisplayText {
+                    Text(label)
+                        .foregroundColor(.gray)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .minimumScaleFactor(0.85)
                 }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.gray)
             }
+            // Optional accessibility hint
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Category")
+            .accessibilityValue(categoryDisplayText ?? "None selected")
         }
     }
+
 
     // Size (NEW unified row)
     var selectedSizeText: String? {

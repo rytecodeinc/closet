@@ -63,6 +63,7 @@ struct DataSeeder {
         preloadDefaultColors(context: context)
         preloadDefaultSeasons(context: context)
         preloadDefaultCategories(context: context)
+        preloadDefaultSubcategories(context: context)
         preloadDefaultSizes(context: context)
     }
 
@@ -162,6 +163,105 @@ struct DataSeeder {
     private func fetchAllCategories(in context: NSManagedObjectContext) throws -> [Category] {
         try context.fetch(NSFetchRequest<Category>(entityName: "Category"))
     }
+    
+    // MARK: SUBCATEGORIES
+    // MARK: - Subcategories
+
+    private static let defaultSubcategoriesByCategory: [String: [String]] = [
+        "Tops":        ["T-Shirts", "Blouses", "Sweaters", "Tanks"],
+        "Bottoms":     ["Jeans", "Trousers", "Skirts", "Shorts"],
+        "Outerwear":   ["Jackets", "Coats", "Blazers"],
+        "Dresses":     ["Day Dresses", "Evening Dresses", "Cocktail"],
+        "Suits":       ["Skirt Suits", "Pant Suits"],
+        "Swimwear":    ["One-Piece", "Bikini", "Cover-ups"],
+        "Activewear":  ["Leggings", "Sports Bras", "Tops"],
+        "Shoes":       ["Heels", "Flats", "Sneakers", "Boots", "Sandals"],
+        "Accessories": ["Bags", "Belts", "Hats", "Scarves", "Jewelry"]
+    ]
+
+    // Call this from init AFTER categories preloaded:
+    func preloadDefaultSubcategories(context: NSManagedObjectContext, forceReseed: Bool = false) {
+        do {
+            if forceReseed {
+                try deleteAllSubcategories(in: context)
+            }
+            if try countSubcategories(in: context) == 0 {
+                try insertDefaultSubcategories(in: context)
+            }
+
+            let total = try countSubcategories(in: context)
+            print("✅ Subcategories seeded or already present → total rows: \(total)")
+            #if DEBUG
+            // Debug: print counts by category
+            let cats = try fetchAllCategories(in: context)
+            for c in cats {
+                let count = (c.subcategories as? Set<Subcategory>)?.count ?? 0
+                print("   • \(c.name ?? "<unnamed>"): \(count) subcategories")
+            }
+            #endif
+        } catch {
+            print("❌ Subcategory seeding error:", error)
+        }
+    }
+
+    private func countSubcategories(in context: NSManagedObjectContext) throws -> Int {
+        try context.count(for: NSFetchRequest<NSFetchRequestResult>(entityName: "Subcategory"))
+    }
+
+    private func deleteAllSubcategories(in context: NSManagedObjectContext) throws {
+        let fetch = NSFetchRequest<NSFetchRequestResult>(entityName: "Subcategory")
+        let delete = NSBatchDeleteRequest(fetchRequest: fetch)
+        try context.execute(delete)
+        try context.save()
+    }
+
+    private func insertDefaultSubcategories(in context: NSManagedObjectContext) throws {
+        let categories = try fetchAllCategories(in: context)
+
+        // 👇 Build [lowercasedName: Category] without tuple inference
+        let byName: [String: Category] = categories.reduce(into: [:]) { dict, cat in
+            if let raw = cat.name?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !raw.isEmpty {
+                dict[raw.lowercased()] = cat
+            }
+        }
+
+        var missing: [String] = []
+
+        for (rawCatName, names) in Self.defaultSubcategoriesByCategory {
+            let key = rawCatName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard let category = byName[key] else {
+                missing.append(rawCatName)
+                continue
+            }
+
+            for (idx, rawName) in names.enumerated() {
+                let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+                if existingSubcategory(named: name, in: category, context: context) != nil { continue }
+
+                let sub = Subcategory(context: context)
+                sub.id = UUID()
+                sub.name = name
+                sub.sortOrder = Int16(idx)
+                sub.category = category
+            }
+        }
+
+        if !missing.isEmpty {
+            print("⚠️ Missing categories for subcategory seeding (name mismatch?): \(missing)")
+        }
+
+        try context.save()
+    }
+
+
+    private func existingSubcategory(named name: String, in category: Category, context: NSManagedObjectContext) -> Subcategory? {
+        let req: NSFetchRequest<Subcategory> = Subcategory.fetchRequest()
+        req.fetchLimit = 1
+        req.predicate = NSPredicate(format: "name ==[c] %@ AND category == %@", name, category)
+        return try? context.fetch(req).first
+    }
+
     
     // Public entry point (match your other preloaders)
     func preloadDefaultSizes(context: NSManagedObjectContext, forceReseed: Bool = false) {
