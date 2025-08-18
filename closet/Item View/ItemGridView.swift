@@ -48,16 +48,19 @@ struct ItemGridView: View {
     ]
 
     var body: some View {
-        NavigationStack(path: $path) {
+       // NavigationStack(path: $path) {
             VStack {
                 if closetItems.isEmpty {
                     EmptyStateView()
                 } else {
                     ScrollView {
                         LazyVGrid(columns: gridItems, spacing: 1) {
-                        ForEach(closetItems, id: \.self) { item in
-                            ItemView(item: item)
+                            ForEach(closetItems, id: \.objectID) { item in
+                                NavigationLink(destination: ItemDetailView(item: item)) {
+                                    ItemView(item: item)
+                                }
                             }
+
                         }
                     }
                 }
@@ -107,10 +110,10 @@ struct ItemGridView: View {
                     isImagePickerPresented = false
                 }
             }
-            .navigationDestination(for: Item.self) { item in
+          /*  .navigationDestination(for: Item.self) { item in
                 ItemDetailView(item: item)
-            }
-        }
+            }*/
+       // }
     }
 
     private func createNewItem(with image: UIImage) {
