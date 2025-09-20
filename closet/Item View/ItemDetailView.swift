@@ -43,8 +43,9 @@ struct ItemDetailView: View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
                 List {
-                    itemImageHeader()
+                    ItemView(item: item)
                         .listRowInsets(EdgeInsets(.zero))
+                    // change from itemImageHeader()
                     AttributesSectionView(item: item, activeSheet: $attributesSheet)
                     
                 }
@@ -447,6 +448,7 @@ struct ItemDetailView: View {
                     .frame(maxWidth: .infinity)
                     .clipped()
                     .onTapGesture { isImageFullScreen = true }
+                   /* .background(LinearGradient(colors: [.white, .gray.opacity(0.5)], startPoint: .topLeading, endPoint: .bottomLeading))*/
             } else {
                 Image(systemName: "photo")
                     .resizable()
@@ -454,6 +456,7 @@ struct ItemDetailView: View {
                     .frame(maxWidth: .infinity)
                     .foregroundColor(.gray)
                     .clipped()
+                   /* .background(LinearGradient(colors: [.white, .gray.opacity(0.5)], startPoint: .topLeading, endPoint: .bottomLeading))*/
             }
 
             if item.isWishlist {

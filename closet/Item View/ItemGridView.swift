@@ -42,9 +42,9 @@ struct ItemGridView: View {
     }
 
     let gridItems = [
-        GridItem(.flexible(), spacing: 1),
-        GridItem(.flexible(), spacing: 1),
-        GridItem(.flexible(), spacing: 1)
+        GridItem(.flexible(), spacing: 0),
+        GridItem(.flexible(), spacing: 0),
+        GridItem(.flexible(), spacing: 0)
     ]
 
     var body: some View {
@@ -54,13 +54,13 @@ struct ItemGridView: View {
                     EmptyStateView()
                 } else {
                     ScrollView {
-                        LazyVGrid(columns: gridItems, spacing: 1) {
+                        LazyVGrid(columns: gridItems, spacing: 0) {
                             ForEach(closetItems, id: \.objectID) { item in
                                 NavigationLink(destination: ItemDetailView(item: item)) {
                                     ItemView(item: item)
                                 }
                             }
-
+                           //background is set in ItemView
                         }
                     }
                 }
@@ -74,7 +74,7 @@ struct ItemGridView: View {
                     
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    NavigationLink(destination: ItemAddView(parentContext: viewContext)) {
+                    NavigationLink(destination: ItemAddView(parentContext: viewContext, isWishlist: isWishlist)) {
                         Image(systemName: "plus")
                     }
                     /*

@@ -25,17 +25,14 @@ struct ItemView: View {
 
     var body: some View {
         ZStack {
-            NavigationLink(destination: ItemDetailView(item: item), isActive: $isActive) {
-                EmptyView()
-            }
-            .hidden()
-
             if let itemImage = displayImage {
                 Image(uiImage: itemImage)
                     .resizable()
                     .aspectRatio(1, contentMode: .fill)
                     .frame(minWidth: 120, minHeight: 120)
                     .clipped()
+                    .border(.gray.opacity(0.3), width: 0.5)
+                   /* .background(LinearGradient(colors: [.white, .gray.opacity(0.5)], startPoint: .topLeading, endPoint: .bottomLeading))*/
             } else {
                 Image(systemName: "photo")
                     .resizable()
@@ -43,6 +40,7 @@ struct ItemView: View {
                     .frame(minWidth: 120, minHeight: 120)
                     .clipped()
                     .foregroundColor(.gray)
+                   /* .background(LinearGradient(colors: [.white, .gray.opacity(0.5)], startPoint: .topLeading, endPoint: .bottomLeading))*/
             }
 
             
@@ -52,9 +50,6 @@ struct ItemView: View {
                     .padding(10)
                     .offset(x: 45, y: -45)
             }
-        }
-        .onTapGesture {
-            isActive = true
         }
     }
 
