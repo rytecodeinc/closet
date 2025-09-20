@@ -13,6 +13,10 @@ import SwiftUI
 import CoreData
 import Foundation
 
+import SwiftUI
+import CoreData
+import Foundation
+
 struct CategorySelectionView: View {
     @ObservedObject var item: Item
     @Environment(\.managedObjectContext) private var viewContext
@@ -57,16 +61,31 @@ struct CategorySelectionView: View {
                         .contentShape(Rectangle())
                         .onTapGesture {
                             if hasSubs {
-                                // If already open, a tap selects the parent category (no subcategory)
-                                if isOpen {
+                                if !isOpen {
+                                    // First tap: expand only
+                                    toggle(category)
+                                } else {
+                                    // Expanded: toggle parent category selection
+                                    let parentSelected = (selectedCategoryName == name && selectedSubcategoryName == nil)
+                                    if parentSelected {
+                                        // Deselect all
+                                        selectedCategoryName = nil
+                                        selectedSubcategoryName = nil
+                                    } else {
+                                        // Select parent (clear any sub)
+                                        selectedCategoryName = name
+                                        selectedSubcategoryName = nil
+                                    }
+                                }
+                            } else {
+                                // No subcategories: toggle this category
+                                if selectedCategoryName == name {
+                                    selectedCategoryName = nil
+                                    selectedSubcategoryName = nil
+                                } else {
                                     selectedCategoryName = name
                                     selectedSubcategoryName = nil
                                 }
-                                toggle(category)
-                            } else {
-                                // No subcategories: select the category outright
-                                selectedCategoryName = name
-                                selectedSubcategoryName = nil
                             }
                         }
 
@@ -86,8 +105,17 @@ struct CategorySelectionView: View {
                                 }
                                 .contentShape(Rectangle())
                                 .onTapGesture {
-                                    selectedCategoryName = name
-                                    selectedSubcategoryName = subName
+                                    // Toggle this subcategory selection
+                                    let isThisSelected = (selectedCategoryName == name && selectedSubcategoryName == subName)
+                                    if isThisSelected {
+                                        // Deselect completely
+                                        selectedCategoryName = nil
+                                        selectedSubcategoryName = nil
+                                    } else {
+                                        // Select this subcategory (and its parent)
+                                        selectedCategoryName = name
+                                        selectedSubcategoryName = subName
+                                    }
                                 }
                             }
                         }
@@ -104,7 +132,6 @@ struct CategorySelectionView: View {
                let currentSub = item.subcategory,
                currentSub.category == currentCat {
                 selectedSubcategoryName = currentSub.name
-                // Auto-expand the selected category so the chosen sub shows
                 if let match = categories.first(where: { $0.objectID == currentCat.objectID }) {
                     expanded.insert(match.objectID)
                 }
@@ -168,7 +195,6 @@ struct CategorySelectionView: View {
             print("❌ Fetch category error: \(error)")
         }
 
-        // Create on demand if not found
         let newCategory = Category(context: viewContext)
         newCategory.name = name
         newCategory.id = UUID()
@@ -179,12 +205,7 @@ struct CategorySelectionView: View {
         let req: NSFetchRequest<Subcategory> = Subcategory.fetchRequest()
         req.fetchLimit = 1
         req.predicate = NSPredicate(format: "name ==[c] %@ AND category == %@", name, category)
-        do {
-            return try viewContext.fetch(req).first
-        } catch {
-            print("❌ Fetch subcategory error: \(error)")
-            return nil
-        }
+        return try? viewContext.fetch(req).first
     }
 
     // MARK: - UI State
@@ -201,11 +222,8 @@ struct CategorySelectionView: View {
     // MARK: - Save
 
     private func saveContext() {
-        do {
-            try viewContext.save()
-        } catch {
-            print("❌ Failed to save selected category/subcategory: \(error)")
-        }
+        do { try viewContext.save() }
+        catch { print("❌ Failed to save selected category/subcategory: \(error)") }
     }
 }
 
