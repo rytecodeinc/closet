@@ -15,7 +15,7 @@ final class ItemAddViewModel: ObservableObject {
     @Published var draftItem: Item
     @Published var photoRefreshToken = UUID()
 
-    init(parentContext: NSManagedObjectContext) {
+    init(parentContext: NSManagedObjectContext, isWishlist: Bool) {
         let ctx = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
         ctx.parent = parentContext
         ctx.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
@@ -24,7 +24,7 @@ final class ItemAddViewModel: ObservableObject {
         let item = Item(context: ctx)
         item.id = UUID()
         item.timestamp = Date()
-        item.isWishlist = false
+        item.isWishlist = isWishlist
         self.draftItem = item
     }
 
@@ -254,8 +254,8 @@ struct ItemAddView: View {
     @State private var showMissingWarning = false
     @State private var missingFieldsDescription = ""
 
-    init(parentContext: NSManagedObjectContext) {
-        _vm = StateObject(wrappedValue: ItemAddViewModel(parentContext: parentContext))
+    init(parentContext: NSManagedObjectContext, isWishlist: Bool) {
+        _vm = StateObject(wrappedValue: ItemAddViewModel(parentContext: parentContext, isWishlist: isWishlist))
     }
 
     var body: some View {
@@ -270,15 +270,15 @@ struct ItemAddView: View {
         .listRowInsets(EdgeInsets())
         .navigationTitle("Add Item")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(true)
+       // .navigationBarBackButtonHidden(true)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
+          /*  ToolbarItem(placement: .navigationBarLeading) {
                 Button("Cancel") {
                     vm.discard()
                     dismiss()
                 }
-            }
+            }*/
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button("Save") {
                     handleSaveTapped()
