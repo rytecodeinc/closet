@@ -8,6 +8,7 @@
 
 import SwiftUI
 import UIKit
+import CoreData
 
 struct ItemDetailView: View {
     @ObservedObject var item: Item
@@ -48,6 +49,17 @@ struct ItemDetailView: View {
                     // change from itemImageHeader()
                     AttributesSectionView(item: item, activeSheet: $attributesSheet)
                     
+                    // Outfits this item is Featured In
+                    if let outfitsSet = item.outfits as? Set<Outfit>, !outfitsSet.isEmpty {
+                        let outfits = outfitsSet.sorted {
+                            ($0.timestamp ?? .distantPast) > ($1.timestamp ?? .distantPast)
+                        }
+                        FeaturedOutfitsSection(outfits: outfits)
+                    }
+
+
+
+                    
                 }
                 .listStyle(.plain)
             }
@@ -76,7 +88,7 @@ struct ItemDetailView: View {
                     } label: {
                         Label("Edit Image", systemImage: "pencil")
                     }
-
+                    
                     Button(role: .destructive) {
                         deleteItem()
                     } label: {
@@ -116,7 +128,8 @@ struct ItemDetailView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            if item.isWishlist {
+            let isWishlist = (item.collections as? Set<Collection>)?.contains { $0.type?.lowercased() == "wishlist" } ?? false
+            if isWishlist {
                 moveToClosetButton()
                     .background(Color(UIColor.systemBackground))
                 // .shadow(radius: 5)
@@ -459,29 +472,39 @@ struct ItemDetailView: View {
                    /* .background(LinearGradient(colors: [.white, .gray.opacity(0.5)], startPoint: .topLeading, endPoint: .bottomLeading))*/
             }
 
-            if item.isWishlist {
-                Image(systemName: "heart.fill")
-                    .foregroundColor(.red)
-                    .font(.system(size: 30))
-                    .padding(10)
-                    .offset(x: 160, y: -160)
-            }
         }
     }
 
-
-    // MARK: - Action Button
-
+    
+    // MARK: - Move to Closet Button
     private func moveToClosetButton() -> some View {
         SlideToConfirmButton {
-                item.isWishlist = false
+            if let closetCollection = fetchCollection(type: "closet") {
+                // Safely cast collections to a mutable set
+                var currentCollections = item.collections as? Set<Collection> ?? []
+                currentCollections.insert(closetCollection)
+                item.collections = currentCollections as NSSet
+                
                 item.timestamp = Date()
-                // Optional: Add haptic feedback or animation here
+                
+                do {
+                    try viewContext.save()
+                } catch {
+                    print("Failed to save item: \(error)")
+                }
             }
-            .transition(.move(edge: .bottom))
-            .padding(.horizontal)
+        }
+        .transition(.move(edge: .bottom))
+        .padding(.horizontal)
     }
 
+    
+    private func fetchCollection(type: String) -> Collection? {
+        let request: NSFetchRequest<Collection> = Collection.fetchRequest()
+        request.predicate = NSPredicate(format: "type == %@", type)
+        return try? viewContext.fetch(request).first
+    }
+    
     
     struct SlideToConfirmButton: View {
         var action: () -> Void

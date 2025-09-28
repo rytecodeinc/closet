@@ -14,11 +14,29 @@ struct PersistenceController {
     static let preview: PersistenceController = {
         let result = PersistenceController(inMemory: true)
         let viewContext = result.container.viewContext
+        // Seed two collections
+        let closet = Collection(context: viewContext)
+        closet.id = UUID()
+        closet.name = "Closet"
+        closet.type = "closet"
+        
+        let wishlist = Collection(context: viewContext)
+        wishlist.id = UUID()
+        wishlist.name = "Wishlist"
+        wishlist.type = "wishlist"
+        
+        // Seed items and attach them to one of the collections
         for i in 0..<11 {
             let newItem = Item(context: viewContext)
             newItem.timestamp = Date()
-            newItem.isWishlist = i < 5
+            
+            if i < 5 {
+                newItem.isWishlist = true
+            } else {
+                newItem.isWishlist = false
+            }
         }
+
         do {
             try viewContext.save()
         } catch {

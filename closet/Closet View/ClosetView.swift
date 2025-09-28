@@ -17,10 +17,10 @@ struct ClosetView: View {
     
     init() {
         let basePredicate = makePredicate(for: FilterModel())
-        let wishlistPredicate = NSPredicate(format: "isWishlist == false")
+        let closetPredicate = NSPredicate(format: "ANY collections.type == %@", "closet")
         let finalPredicate = basePredicate.map {
-            NSCompoundPredicate(andPredicateWithSubpredicates: [$0, wishlistPredicate])
-        } ?? wishlistPredicate
+            NSCompoundPredicate(andPredicateWithSubpredicates: [$0, closetPredicate])
+        } ?? closetPredicate
         
         _closetItems = FetchRequest(
             entity: Item.entity(),
@@ -31,10 +31,11 @@ struct ClosetView: View {
 
     var body: some View {
         NavigationView {
-            ItemGridView(filterModel: filterModel, isWishlist: false)
+            ItemGridView(filterModel: filterModel, collectionType: "closet")
                 .navigationTitle("Closet")
         }
     }
 }
+
 
 

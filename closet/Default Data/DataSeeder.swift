@@ -65,6 +65,7 @@ struct DataSeeder {
         preloadDefaultCategories(context: context)
         preloadDefaultSubcategories(context: context)
         preloadDefaultSizes(context: context)
+        preloadDefaultCollections(context: context)
     }
 
     // MARK: - Public Preloaders
@@ -319,4 +320,39 @@ struct DataSeeder {
         try context.save()
     }
     
+    // MARK: Collections
+    func preloadDefaultCollections(context: NSManagedObjectContext) {
+        do {
+            if try countCollections(in: context) == 0 {
+                try insertDefaultCollections(in: context)
+            }
+            let names = try fetchAllCollections(in: context).compactMap { $0.name }
+            print("✅ Collections seeded or already present → \(names)")
+        } catch {
+            print("❌ Collection seeding error:", error)
+        }
+    }
+    
+    private func countCollections(in context: NSManagedObjectContext) throws -> Int {
+        try context.count(for: NSFetchRequest<NSFetchRequestResult>(entityName: "Collection"))
+    }
+    
+    private func insertDefaultCollections(in context: NSManagedObjectContext) throws {
+        let defaults: [(String, String)] = [
+            ("Closet", "closet"),
+            ("Wishlist", "wishlist")
+        ]
+        
+        for (name, type) in defaults {
+            let collection = Collection(context: context)
+            collection.id = UUID()
+            collection.name = name
+            collection.type = type
+        }
+        try context.save()
+    }
+    
+    private func fetchAllCollections(in context: NSManagedObjectContext) throws -> [Collection] {
+        try context.fetch(NSFetchRequest<Collection>(entityName: "Collection"))
+    }
 }

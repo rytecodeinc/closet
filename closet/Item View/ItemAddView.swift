@@ -9,13 +9,13 @@
 import SwiftUI
 import CoreData
 
-// MARK: - ViewModel (no IUOs, constructed with a parent context)
+// MARK: - ViewModel
 final class ItemAddViewModel: ObservableObject {
     let childContext: NSManagedObjectContext
     @Published var draftItem: Item
     @Published var photoRefreshToken = UUID()
 
-    init(parentContext: NSManagedObjectContext, isWishlist: Bool) {
+    init(parentContext: NSManagedObjectContext, collectionType: String) {
         let ctx = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
         ctx.parent = parentContext
         ctx.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
@@ -24,7 +24,18 @@ final class ItemAddViewModel: ObservableObject {
         let item = Item(context: ctx)
         item.id = UUID()
         item.timestamp = Date()
-        item.isWishlist = isWishlist
+
+        // ✅ Attach item to the correct Collection
+        let request: NSFetchRequest<Collection> = Collection.fetchRequest()
+        request.predicate = NSPredicate(format: "type == %@", collectionType)
+
+        if let collection = try? parentContext.fetch(request).first {
+            // attach inside child context, re-fault collection
+            if let childCollection = ctx.object(with: collection.objectID) as? Collection {
+                childCollection.addToItems(item)
+            }
+        }
+
         self.draftItem = item
     }
 
@@ -37,6 +48,7 @@ final class ItemAddViewModel: ObservableObject {
         childContext.rollback()
     }
 }
+
 
 // MARK: - Reusable attributes section (unchanged rows, but sheets inherit child ctx)
 private struct ItemAttributesSection: View {
@@ -254,8 +266,8 @@ struct ItemAddView: View {
     @State private var showMissingWarning = false
     @State private var missingFieldsDescription = ""
 
-    init(parentContext: NSManagedObjectContext, isWishlist: Bool) {
-        _vm = StateObject(wrappedValue: ItemAddViewModel(parentContext: parentContext, isWishlist: isWishlist))
+    init(parentContext: NSManagedObjectContext, collectionType: String) {
+        _vm = StateObject(wrappedValue: ItemAddViewModel(parentContext: parentContext, collectionType: collectionType))
     }
 
     var body: some View {

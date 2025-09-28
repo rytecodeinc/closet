@@ -13,16 +13,16 @@ struct WishlistView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @StateObject var filterModel = FilterModel()
     
-    @FetchRequest private var wishlistItems: FetchedResults<Item>
+    @FetchRequest private var closetItems: FetchedResults<Item>
     
     init() {
         let basePredicate = makePredicate(for: FilterModel())
-        let wishlistPredicate = NSPredicate(format: "isWishlist == true")
+        let closetPredicate = NSPredicate(format: "ANY collections.type == %@", "wishlist")
         let finalPredicate = basePredicate.map {
-            NSCompoundPredicate(andPredicateWithSubpredicates: [$0, wishlistPredicate])
-        } ?? wishlistPredicate
+            NSCompoundPredicate(andPredicateWithSubpredicates: [$0, closetPredicate])
+        } ?? closetPredicate
         
-        _wishlistItems = FetchRequest(
+        _closetItems = FetchRequest(
             entity: Item.entity(),
             sortDescriptors: [NSSortDescriptor(keyPath: \Item.timestamp, ascending: false)],
             predicate: finalPredicate
@@ -31,7 +31,7 @@ struct WishlistView: View {
 
     var body: some View {
         NavigationView {
-            ItemGridView(filterModel: filterModel, isWishlist: true)
+            ItemGridView(filterModel: filterModel, collectionType: "wishlist")
                 .navigationTitle("Wishlist")
         }
     }
