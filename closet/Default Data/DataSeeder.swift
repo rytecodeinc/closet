@@ -65,7 +65,7 @@ struct DataSeeder {
         preloadDefaultCategories(context: context)
         preloadDefaultSubcategories(context: context)
         preloadDefaultSizes(context: context)
-        preloadDefaultCollections(context: context)
+        preloadDefaultWardrobes(context: context)
     }
 
     // MARK: - Public Preloaders
@@ -172,7 +172,7 @@ struct DataSeeder {
         "Tops":        ["T-Shirts", "Blouses", "Sweaters", "Tanks"],
         "Bottoms":     ["Jeans", "Trousers", "Skirts", "Shorts"],
         "Outerwear":   ["Jackets", "Coats", "Blazers"],
-        "Dresses":     ["Day Dresses", "Evening Dresses", "Cocktail"],
+        "Dresses":     ["Mini", "Midi", "Maxi"],
         "Suits":       ["Skirt Suits", "Pant Suits"],
         "Swimwear":    ["One-Piece", "Bikini", "Cover-ups"],
         "Activewear":  ["Leggings", "Sports Bras", "Tops"],
@@ -320,39 +320,40 @@ struct DataSeeder {
         try context.save()
     }
     
-    // MARK: Collections
-    func preloadDefaultCollections(context: NSManagedObjectContext) {
+    // MARK: Wardrobes
+    func preloadDefaultWardrobes(context: NSManagedObjectContext) {
         do {
-            if try countCollections(in: context) == 0 {
-                try insertDefaultCollections(in: context)
+            if try countWardrobes(in: context) == 0 {
+                try insertDefaultWardrobes(in: context)
             }
-            let names = try fetchAllCollections(in: context).compactMap { $0.name }
-            print("✅ Collections seeded or already present → \(names)")
+            let names = try fetchAllWardrobes(in: context).compactMap { $0.name }
+            print("✅ Wardrobes seeded or already present → \(names)")
         } catch {
-            print("❌ Collection seeding error:", error)
+            print("❌ Wardrobe seeding error:", error)
         }
     }
     
-    private func countCollections(in context: NSManagedObjectContext) throws -> Int {
-        try context.count(for: NSFetchRequest<NSFetchRequestResult>(entityName: "Collection"))
+    private func countWardrobes(in context: NSManagedObjectContext) throws -> Int {
+        try context.count(for: NSFetchRequest<NSFetchRequestResult>(entityName: "Wardrobe"))
     }
     
-    private func insertDefaultCollections(in context: NSManagedObjectContext) throws {
+    private func insertDefaultWardrobes(in context: NSManagedObjectContext) throws {
         let defaults: [(String, String)] = [
-            ("Closet", "closet"),
+            //("Closet", "closet"),
             ("Wishlist", "wishlist")
         ]
         
         for (name, type) in defaults {
-            let collection = Collection(context: context)
-            collection.id = UUID()
-            collection.name = name
-            collection.type = type
+            let wardrobe = Wardrobe(context: context)
+            wardrobe.id = UUID()
+            wardrobe.name = name
+            wardrobe.type = type
+            wardrobe.timestamp = Date()
         }
         try context.save()
     }
     
-    private func fetchAllCollections(in context: NSManagedObjectContext) throws -> [Collection] {
-        try context.fetch(NSFetchRequest<Collection>(entityName: "Collection"))
+    private func fetchAllWardrobes(in context: NSManagedObjectContext) throws -> [Wardrobe] {
+        try context.fetch(NSFetchRequest<Wardrobe>(entityName: "Wardrobe"))
     }
 }
