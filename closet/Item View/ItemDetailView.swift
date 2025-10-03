@@ -12,18 +12,7 @@ import CoreData
 
 struct ItemDetailView: View {
     @ObservedObject var item: Item
-/*
-    @State private var isCategoryDrawerPresented = false
-    @State private var isSizeDrawerPresented = false
-    @State private var isColorDrawerPresented: Bool = false
-    @State private var isSeasonDrawerPresented: Bool = false
-    @State private var isBrandDrawerPresented: Bool = false
-    @State private var isLocationDrawerPresented: Bool = false
-    @State private var isPriceDrawerPresented = false
-    @State private var priceString: String = ""
-    @State private var isLinkDrawerPresented: Bool = false
-    @State private var isTagDrawerPresented: Bool = false
-  */
+    @State private var isEditingAttributes = false
     @State private var attributesSheet: AttributesSectionView.Sheet?
     @State private var isImageFullScreen = false
     
@@ -46,20 +35,61 @@ struct ItemDetailView: View {
                 List {
                     ItemView(item: item)
                         .listRowInsets(EdgeInsets(.zero))
-                    // change from itemImageHeader()
-                    AttributesSectionView(item: item, activeSheet: $attributesSheet)
+                        .listRowSeparator(.hidden)
+                        .listSectionSpacing(.compact)
+                    
+                    // ATTRIBUTES Section
+                    if isEditingAttributes {
+                        Section{
+                            AttributesSectionView(item: item, activeSheet: $attributesSheet)
+                                .transition(.opacity.combined(with: .slide))
+                              //  .listRowInsets(EdgeInsets(top: 05, leading: 20, bottom: 05, trailing: 20))
+                        } header: {
+                            HStack {
+                                Text("ATTRIBUTES")
+                                    .fontWeight(.semibold)
+                                Spacer()
+                                Button(isEditingAttributes ? "Done" : "Edit") {
+                                    withAnimation {
+                                        isEditingAttributes.toggle()
+                                        attributesSheet = nil // reset binding when switching
+                                    }
+                                }
+                                .font(.subheadline)
+                                .foregroundColor(.blue)
+                            }
+                        }
+                      //  .listRowInsets(EdgeInsets(.zero))
+                            
+                    } else {
+                        Section {
+                            AttributesDisplayView(item: item)
+                                .transition(.opacity.combined(with: .slide))
+                               // .listRowInsets(EdgeInsets(top: 05, leading: 20, bottom: 05, trailing: 20))
+                        } header: {
+                            HStack {
+                                Text("ATTRIBUTES")
+                                    .fontWeight(.semibold)
+                                Spacer()
+                                Button(isEditingAttributes ? "Done" : "Edit") {
+                                    withAnimation {
+                                        isEditingAttributes.toggle()
+                                        attributesSheet = nil // reset binding when switching
+                                    }
+                                }
+                                .font(.subheadline)
+                                .foregroundColor(.blue)
+                            }
+                        }
+                       // .listRowInsets(EdgeInsets(.zero))
+                    }
                     
                     // Outfits this item is Featured In
-                    if let outfitsSet = item.outfits as? Set<Outfit>, !outfitsSet.isEmpty {
-                        let outfits = outfitsSet.sorted {
-                            ($0.timestamp ?? .distantPast) > ($1.timestamp ?? .distantPast)
-                        }
+                    if let outfitsSet = item.outfits,
+                       let outfits = outfitsSet.array as? [Outfit],
+                        !outfits.isEmpty {
                         FeaturedOutfitsSection(outfits: outfits)
                     }
-
-
-
-                    
                 }
                 .listStyle(.plain)
             }
@@ -128,7 +158,7 @@ struct ItemDetailView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            let isWishlist = (item.collections as? Set<Collection>)?.contains { $0.type?.lowercased() == "wishlist" } ?? false
+            let isWishlist = (item.wardrobes as? Set<Wardrobe>)?.contains { $0.type?.lowercased() == "wishlist" } ?? false
             if isWishlist {
                 moveToClosetButton()
                     .background(Color(UIColor.systemBackground))
@@ -176,270 +206,6 @@ struct ItemDetailView: View {
             print("❌ Failed to save new photo: \(error.localizedDescription)")
         }
     }
-/*
-    // MARK: - Sections
-    private func attributesSection() -> some View {
-        Section {
-            categoryRow()
-            sizeRow()
-            colorRow()
-            seasonRow()
-            brandRow()
-            priceRow()
-            linkRow()
-            locationRow()
-            tagRow()
-        } header: {
-            Text("ATTRIBUTES")
-                .fontWeight(.semibold)
-        }
-    }
-    
-    // MARK: - Category Row
-    private func categoryRow() -> some View {
-        Button(action: { isCategoryDrawerPresented = true }) {
-            HStack {
-                Text("Category").foregroundColor(.black)
-                Spacer()
-                if let category = item.category?.name, !category.isEmpty {
-                    Text(category).foregroundColor(.gray)
-                }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
-            }
-        }
-        .sheet(isPresented: $isCategoryDrawerPresented) {
-            CategorySelectionView(item: item)
-        }
-    }
-    
-    // MARK: - Size Row
-    private var selectedSizeText: String? {
-        guard let size = item.size,
-              let value = size.value, !value.isEmpty else { return nil }
-        // Only show if the size belongs to the currently selected category
-        if let cat = item.category, size.category == cat {
-            return value
-        }
-        return nil
-    }
-
-    private func sizeRow() -> some View {
-        Button(action: { isSizeDrawerPresented = true }) {
-            HStack {
-                Text("Size").foregroundColor(.black)
-                Spacer()
-                if let label = selectedSizeText {
-                    Text(label).foregroundColor(.gray)
-                } /*else if item.category == nil {
-                    Text("Select category first").foregroundColor(.gray)
-                }*/
-                Image(systemName: "chevron.right").foregroundColor(.gray)
-            }
-        }
-        .sheet(isPresented: $isSizeDrawerPresented) {
-            SizeSelectionView(item: item)
-        }
-        // Optional: disable until a category is chosen
-        //.disabled(item.category == nil)
-        //.opacity(item.category == nil ? 0.5 : 1)
-    }
-
-
-    
-    // MARK: - Price Row
-    private func priceRow() -> some View {
-        Button(action: {
-            isPriceDrawerPresented = true
-        }) {
-            HStack {
-                Text("Price")
-                    .foregroundColor(.black)
-
-                Spacer()
-                
-                if let amount = item.price?.amount {
-                    HStack(spacing: 0) {
-                        Text(currencySymbol)
-                            .foregroundColor(.gray)
-                        
-                        Text(formattedPrice)
-                            .foregroundColor(.gray)
-                            .multilineTextAlignment(.trailing)
-                    }
-                }
-                
-                Image(systemName: "chevron.right")
-                    .foregroundColor(.gray)
-                    .padding(.leading, 4)
-            }
-        }
-        .sheet(isPresented: $isPriceDrawerPresented) {
-            PriceSelectionView(item: item)
-        }
-    }
-    private var formattedPrice: String {
-        if let amount = item.price?.amount {
-            let formatter = NumberFormatter()
-            formatter.numberStyle = .decimal
-            formatter.minimumFractionDigits = 2
-            formatter.maximumFractionDigits = 2
-            return formatter.string(from: NSDecimalNumber(decimal: amount as Decimal)) ?? "0.00"
-        }
-        return "0.00"
-    }
-
-
-
-
-    // MARK: - Row Helpers
-
-    private func colorRow() -> some View {
-        Button(action: { isColorDrawerPresented = true }) {
-            HStack {
-                Text("Colors").foregroundColor(.black)
-                Spacer()
-                if let selectedColorsSet = item.colors as? Set<AppColor>, !selectedColorsSet.isEmpty {
-                    let sortedColors = selectedColorsSet.sorted { ($0.name ?? "") < ($1.name ?? "") }
-                    HStack(spacing: 8) {
-                        ForEach(sortedColors.prefix(4), id: \.self) { appColor in
-                            Circle()
-                                .fill(colorFromName(appColor.name ?? ""))
-                                .frame(width: 20, height: 20)
-                                .overlay(Circle().stroke(Color.gray, lineWidth: 1))
-                        }
-                        if sortedColors.count > 4 {
-                            Text("…").foregroundColor(.gray).font(.headline)
-                        }
-                    }
-                }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
-            }
-        }
-        .sheet(isPresented: $isColorDrawerPresented) {
-            ColorSelectionView(item: item)
-        }
-    }
-
-    private func seasonRow() -> some View {
-        Button(action: { isSeasonDrawerPresented = true }) {
-            HStack {
-                Text("Seasons").foregroundColor(.black)
-                Spacer()
-                if let selectedSeasons = item.seasons as? Set<Season>, !selectedSeasons.isEmpty {
-                    let names = selectedSeasons.compactMap { $0.name }.sorted()
-                    Text(names.prefix(2).joined(separator: ", "))
-                        .foregroundColor(.gray)
-                    if names.count > 2 {
-                        Text("…").foregroundColor(.gray).font(.headline)
-                    }
-                }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
-            }
-        }
-        .sheet(isPresented: $isSeasonDrawerPresented) {
-            SeasonSelectionView(item: item)
-        }
-    }
-
-    private func brandRow() -> some View {
-        Button(action: { isBrandDrawerPresented = true }) {
-            HStack {
-                Text("Brand").foregroundColor(.black)
-                Spacer()
-                if let brand = item.brand?.name, !brand.isEmpty {
-                    Text(brand).foregroundColor(.gray)
-                }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
-            }
-        }
-        .sheet(isPresented: $isBrandDrawerPresented) {
-            BrandSelectionView(item: item)
-        }
-    }
-    
-    private func linkRow() -> some View {
-        let linkNamesArray = (item.links as? Set<Link>)?
-            .compactMap { $0.name }
-            .sorted() ?? []
-
-        let prefixNames = linkNamesArray.prefix(2)
-        let displayString = prefixNames.joined(separator: ", ")
-        let hasMore = linkNamesArray.count > 2
-
-        return Button(action: {
-            isLinkDrawerPresented = true
-        }) {
-            HStack {
-                Text(linkNamesArray.count <= 1 ? "Link" : "Links")
-                    .foregroundColor(.black)
-                Spacer()
-                if !displayString.isEmpty {
-                    HStack(spacing: 2) {
-                        Text(displayString)
-                            .foregroundColor(.gray)
-                            .lineLimit(1)
-                        if hasMore {
-                            Text("…")
-                                .foregroundColor(.gray)
-                                .font(.headline)
-                        }
-                    }
-                }
-                Image(systemName: "chevron.right")
-                    .foregroundColor(.gray)
-            }
-        }
-        .sheet(isPresented: $isLinkDrawerPresented) {
-            LinkSelectionView(item: item)
-        }
-    }
-
-    // MARK: - Location Row
-    private func locationRow() -> some View {
-        Button(action: { isLocationDrawerPresented = true }) {
-            HStack {
-                Text("Location").foregroundColor(.black)
-                Spacer()
-                if let location = item.location?.name, !location.isEmpty {
-                    Text(location).foregroundColor(.gray)
-                }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
-            }
-        }
-        .sheet(isPresented: $isLocationDrawerPresented) {
-            LocationSelectionView(item: item)
-        }
-    }
-    
-    // MARK: - Tag Row
-    // MARK: - Tag Row
-    private func tagRow() -> some View {
-        Button(action: {
-            isTagDrawerPresented = true
-        }) {
-            HStack {
-                Text("Tags")
-                    .foregroundColor(.black)
-
-                Spacer()
-
-                if let tagSet = item.tags as? Set<Tag>, !tagSet.isEmpty {
-                    let tagNames = tagSet.compactMap { $0.name }.sorted().joined(separator: ", ")
-                    Text(tagNames.prefix(20))
-                        .foregroundColor(.gray)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-
-                Image(systemName: "chevron.right")
-                    .foregroundColor(.gray)
-            }
-        }
-        .sheet(isPresented: $isTagDrawerPresented) {
-            TagSelectionView(item: item)
-        }
-    }
-*/
 
 
     // MARK: - Header Image
@@ -479,11 +245,11 @@ struct ItemDetailView: View {
     // MARK: - Move to Closet Button
     private func moveToClosetButton() -> some View {
         SlideToConfirmButton {
-            if let closetCollection = fetchCollection(type: "closet") {
-                // Safely cast collections to a mutable set
-                var currentCollections = item.collections as? Set<Collection> ?? []
-                currentCollections.insert(closetCollection)
-                item.collections = currentCollections as NSSet
+            if let closetWardrobe = fetchWardrobe(type: "closet") {
+                // Safely cast wardrobes to a mutable set
+                var currentWardrobes = item.wardrobes as? Set<Wardrobe> ?? []
+                currentWardrobes.insert(closetWardrobe)
+                item.wardrobes = currentWardrobes as NSSet
                 
                 item.timestamp = Date()
                 
@@ -499,8 +265,8 @@ struct ItemDetailView: View {
     }
 
     
-    private func fetchCollection(type: String) -> Collection? {
-        let request: NSFetchRequest<Collection> = Collection.fetchRequest()
+    private func fetchWardrobe(type: String) -> Wardrobe? {
+        let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
         request.predicate = NSPredicate(format: "type == %@", type)
         return try? viewContext.fetch(request).first
     }
@@ -575,27 +341,7 @@ struct ItemDetailView: View {
             .padding(.horizontal)
         }
     }
-/*
-    // MARK: - Price Helpers
 
-    private func loadInitialPrice() {
-        if let amount = item.price?.amount {
-            priceString = String(format: "%.2f", NSDecimalNumber(decimal: amount as Decimal).doubleValue)
-        }
-    }
-
-    private func updatePriceAmount(from input: String) {
-        let filtered = input.filter { "0123456789.".contains($0) }
-        if let value = Decimal(string: filtered) {
-            if item.price == nil {
-                let price = Price(context: PersistenceController.shared.container.viewContext)
-                price.currency = Locale.current.currency?.identifier ?? "USD"
-                item.price = price
-            }
-            item.price?.amount = ((value) as NSDecimalNumber)
-        }
-    }
-    */
     func deleteItem() {
         viewContext.delete(item)
 
