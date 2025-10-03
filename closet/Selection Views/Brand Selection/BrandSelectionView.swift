@@ -45,12 +45,15 @@ struct BrandSelectionView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer()
             } else {
-                // Use the reusable BrandListView with filtered brands here:
-                // We can't pass filteredBrands directly (array), so let's filter brands inside this view:
                 List {
                     ForEach(filteredBrands, id: \.self) { brand in
                         Button(action: {
-                            item.brand = brand
+                            // Toggle selection
+                            if item.brand == brand {
+                                item.brand = nil
+                            } else {
+                                item.brand = brand
+                            }
                             saveContext()
                             dismiss()
                         }) {
