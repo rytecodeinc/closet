@@ -13,28 +13,32 @@ import CoreData
 struct ItemGridView: View {
     @FetchRequest var closetItems: FetchedResults<Item>
     @ObservedObject var filterModel: FilterModel
-    var collectionType: String
+    var wardrobeType: String
+    var selectedWardrobe: Wardrobe
     
     @Environment(\.managedObjectContext) private var viewContext
-
     @State private var isImagePickerPresented = false
     @State private var pickedImage: UIImage? = nil
     @State private var imagePickerSource: UIImagePickerController.SourceType = .photoLibrary
     @State private var path = NavigationPath()
     
-    init(predicate: NSPredicate? = nil, filterModel: FilterModel, collectionType: String) {
+    init(filterModel: FilterModel, wardrobeType: String, selectedWardrobe: Wardrobe) {
         self.filterModel = filterModel
-        self.collectionType = collectionType
-
+        self.wardrobeType = wardrobeType
+        self.selectedWardrobe = selectedWardrobe
+        
+        // Base filter from the filterModel
         let basePredicate = makePredicate(for: filterModel)
         
-        // ✅ Filter items by relationship to Collection entity
-        let collectionPredicate = NSPredicate(format: "ANY collections.type == %@", collectionType)
+        // Always filter by selected wardrobe
+        let wardrobePredicate = NSPredicate(format: "ANY wardrobes == %@", selectedWardrobe)
         
-        let finalPredicate = basePredicate.map {
-            NSCompoundPredicate(andPredicateWithSubpredicates: [$0, collectionPredicate])
-        } ?? collectionPredicate
-
+        var predicates: [NSPredicate] = []
+        if let base = basePredicate { predicates.append(base) }
+        predicates.append(wardrobePredicate)
+        
+        let finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
+        
         _closetItems = FetchRequest(
             entity: Item.entity(),
             sortDescriptors: [NSSortDescriptor(keyPath: \Item.timestamp, ascending: false)],
@@ -71,11 +75,11 @@ struct ItemGridView: View {
                     Image(systemName: "line.3.horizontal.decrease.circle")
                 }
             }
-            ToolbarItem(placement: .navigationBarTrailing) {
-                NavigationLink(destination: ItemAddView(parentContext: viewContext, collectionType: collectionType)) {
+           /* ToolbarItem(placement: .navigationBarTrailing) {
+                NavigationLink(destination: ItemAddView(parentContext: viewContext, wardrobeType: wardrobeType)) {
                     Image(systemName: "plus")
                 }
-            }
+            }*/
         }
         .sheet(isPresented: $isImagePickerPresented) {
             ImagePicker(
@@ -84,7 +88,7 @@ struct ItemGridView: View {
                 allowsEditing: true
             ) { image in
                 if let image = image {
-                    createNewItem(with: image)
+                    createNewItem(with: image, in: selectedWardrobe)
                 }
                 isImagePickerPresented = false
             }
@@ -92,7 +96,7 @@ struct ItemGridView: View {
     }
 
     // MARK: - Create New Item
-    private func createNewItem(with image: UIImage) {
+    private func createNewItem(with image: UIImage, in wardrobe: Wardrobe) {
         let item = Item(context: viewContext)
         item.id = UUID()
         item.timestamp = Date()
@@ -105,21 +109,17 @@ struct ItemGridView: View {
             photo.item = item
         }
 
-        // ✅ Attach to the appropriate Collection
-        let request: NSFetchRequest<Collection> = Collection.fetchRequest()
-        request.predicate = NSPredicate(format: "type == %@", collectionType)
-        if let collection = try? viewContext.fetch(request).first {
-            collection.addToItems(item)
-        }
+        wardrobe.addToItems(item)   // <-- attach to the correct wardrobe
 
         do {
             try viewContext.save()
-            print("✅ New item saved with photo in \(collectionType)")
+            print("✅ New item saved in \(wardrobe.name ?? "unknown wardrobe")")
             path.append(item)
         } catch {
             print("❌ Failed to save new item: \(error.localizedDescription)")
         }
     }
+
 }
 
 

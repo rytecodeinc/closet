@@ -46,7 +46,7 @@ struct ItemView: View {
                    /* .background(LinearGradient(colors: [.white, .gray.opacity(0.5)], startPoint: .topLeading, endPoint: .bottomLeading))*/
             }
 
-            let isWishlist = (item.collections as? Set<Collection>)?.contains { $0.type?.lowercased() == "wishlist" } ?? false
+            let isWishlist = (item.wardrobes as? Set<Wardrobe>)?.contains { $0.type?.lowercased() == "wishlist" } ?? false
             
             if isWishlist {
                 Image(systemName: "heart.fill")
@@ -54,6 +54,7 @@ struct ItemView: View {
                     .padding(10)
             }
         }
+        
     }
 
     private func deleteItem() {
@@ -93,57 +94,67 @@ func migrateItemImages(context: NSManagedObjectContext) {
 
 // MARK: Migration
 func migrateWishlistItems(context: NSManagedObjectContext) {
-    // Fetch (or create) Closet collection
-    let closetCollection: Collection = {
-        let request: NSFetchRequest<Collection> = Collection.fetchRequest()
+    // Fetch (or create) Closet wardrobe
+    let closetWardrobe: Wardrobe = {
+        let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
         request.predicate = NSPredicate(format: "type == %@", "closet")
         if let existing = try? context.fetch(request).first {
             return existing
         } else {
-            let newCollection = Collection(context: context)
-            newCollection.id = UUID()
-            newCollection.type = "closet"
-            return newCollection
+            let newWardrobe = Wardrobe(context: context)
+            newWardrobe.id = UUID()
+            newWardrobe.type = "closet"
+            newWardrobe.name = "Closet"
+            newWardrobe.timestamp = Date()
+            return newWardrobe
         }
     }()
     
-    // Fetch (or create) Wishlist collection
-    let wishlistCollection: Collection = {
-        let request: NSFetchRequest<Collection> = Collection.fetchRequest()
+    // Fetch (or create) Wishlist wardrobe
+    let wishlistWardrobe: Wardrobe = {
+        let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
         request.predicate = NSPredicate(format: "type == %@", "wishlist")
         if let existing = try? context.fetch(request).first {
             return existing
         } else {
-            let newCollection = Collection(context: context)
-            newCollection.id = UUID()
-            newCollection.type = "wishlist"
-            return newCollection
+            let newWardrobe = Wardrobe(context: context)
+            newWardrobe.id = UUID()
+            newWardrobe.type = "wishlist"
+            newWardrobe.name = "Wishlist"
+            newWardrobe.timestamp = Date()
+            return newWardrobe
         }
     }()
     
     // Fetch all items
     let itemRequest: NSFetchRequest<Item> = Item.fetchRequest()
-    if let allItems = try? context.fetch(itemRequest) {
+    
+    do {
+        let allItems = try context.fetch(itemRequest)
+        
         for item in allItems {
-            // Convert collections to mutable set
-            var currentCollections = item.collections as? Set<Collection> ?? []
+            // Convert wardrobes to mutable set
+            var currentWardrobes = item.wardrobes as? Set<Wardrobe> ?? []
             
+            // Assign Wishlist if flagged
             if item.isWishlist {
-                currentCollections.insert(wishlistCollection)
-            } else {
-                currentCollections.insert(closetCollection)
+                currentWardrobes.insert(wishlistWardrobe)
             }
             
-            item.collections = currentCollections as NSSet
+            // Assign Closet if item has no wardrobes yet
+            if currentWardrobes.isEmpty {
+                currentWardrobes.insert(closetWardrobe)
+            }
+            
+            item.wardrobes = currentWardrobes as NSSet
         }
         
-        // Save context
-        do {
-            try context.save()
-            print("✅ Migration completed successfully!")
-        } catch {
-            print("❌ Migration failed: \(error)")
-        }
+        try context.save()
+        print("✅ Migration completed successfully!")
+        
+    } catch {
+        print("❌ Migration failed:", error)
     }
 }
+
 

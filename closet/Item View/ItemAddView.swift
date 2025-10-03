@@ -15,7 +15,7 @@ final class ItemAddViewModel: ObservableObject {
     @Published var draftItem: Item
     @Published var photoRefreshToken = UUID()
 
-    init(parentContext: NSManagedObjectContext, collectionType: String) {
+    init(parentContext: NSManagedObjectContext, selectedWardrobe: Wardrobe?) {
         let ctx = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
         ctx.parent = parentContext
         ctx.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
@@ -25,14 +25,11 @@ final class ItemAddViewModel: ObservableObject {
         item.id = UUID()
         item.timestamp = Date()
 
-        // ✅ Attach item to the correct Collection
-        let request: NSFetchRequest<Collection> = Collection.fetchRequest()
-        request.predicate = NSPredicate(format: "type == %@", collectionType)
-
-        if let collection = try? parentContext.fetch(request).first {
-            // attach inside child context, re-fault collection
-            if let childCollection = ctx.object(with: collection.objectID) as? Collection {
-                childCollection.addToItems(item)
+        // ✅ Attach item to the selected Wardrobe
+        if let wardrobe = selectedWardrobe {
+            // Re-fault into child context
+            if let childWardrobe = ctx.object(with: wardrobe.objectID) as? Wardrobe {
+                childWardrobe.addToItems(item)
             }
         }
 
@@ -48,6 +45,7 @@ final class ItemAddViewModel: ObservableObject {
         childContext.rollback()
     }
 }
+
 
 
 // MARK: - Reusable attributes section (unchanged rows, but sheets inherit child ctx)
@@ -266,8 +264,8 @@ struct ItemAddView: View {
     @State private var showMissingWarning = false
     @State private var missingFieldsDescription = ""
 
-    init(parentContext: NSManagedObjectContext, collectionType: String) {
-        _vm = StateObject(wrappedValue: ItemAddViewModel(parentContext: parentContext, collectionType: collectionType))
+    init(parentContext: NSManagedObjectContext, selectedWardrobe: Wardrobe?) {
+        _vm = StateObject(wrappedValue: ItemAddViewModel(parentContext: parentContext, selectedWardrobe: selectedWardrobe))
     }
 
     var body: some View {

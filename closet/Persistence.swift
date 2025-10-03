@@ -14,18 +14,18 @@ struct PersistenceController {
     static let preview: PersistenceController = {
         let result = PersistenceController(inMemory: true)
         let viewContext = result.container.viewContext
-        // Seed two collections
-        let closet = Collection(context: viewContext)
+        // Seed two wardrobes
+        let closet = Wardrobe(context: viewContext)
         closet.id = UUID()
         closet.name = "Closet"
         closet.type = "closet"
         
-        let wishlist = Collection(context: viewContext)
+        let wishlist = Wardrobe(context: viewContext)
         wishlist.id = UUID()
         wishlist.name = "Wishlist"
         wishlist.type = "wishlist"
         
-        // Seed items and attach them to one of the collections
+        // Seed items and attach them to one of the wardrobes
         for i in 0..<11 {
             let newItem = Item(context: viewContext)
             newItem.timestamp = Date()

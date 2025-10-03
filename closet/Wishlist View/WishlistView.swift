@@ -13,27 +13,170 @@ struct WishlistView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @StateObject var filterModel = FilterModel()
     
-    @FetchRequest private var closetItems: FetchedResults<Item>
+    @FetchRequest(
+        sortDescriptors: [NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)],
+        predicate: NSPredicate(format: "type == %@", "wishlist")
+    ) private var wishlists: FetchedResults<Wardrobe>
     
-    init() {
-        let basePredicate = makePredicate(for: FilterModel())
-        let closetPredicate = NSPredicate(format: "ANY collections.type == %@", "wishlist")
-        let finalPredicate = basePredicate.map {
-            NSCompoundPredicate(andPredicateWithSubpredicates: [$0, closetPredicate])
-        } ?? closetPredicate
-        
-        _closetItems = FetchRequest(
-            entity: Item.entity(),
-            sortDescriptors: [NSSortDescriptor(keyPath: \Item.timestamp, ascending: false)],
-            predicate: finalPredicate
-        )
-    }
-
+    @State private var selectedWishlist: Wardrobe?
+    @State private var showWishlistSheet = false
+    @State private var newWishlistName: String = ""
+    @State private var isCreatingNewWishlist = false
+    
     var body: some View {
         NavigationView {
-            ItemGridView(filterModel: filterModel, collectionType: "wishlist")
-                .navigationTitle("Wishlist")
+            mainContent()
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { navigationBarToolbar() }
+                .onAppear { setInitialWishlist() }
+                .alert("New Wishlist", isPresented: $isCreatingNewWishlist) {
+                    createWishlistAlertButtons()
+                } message: {
+                    Text("Enter a name for your new wishlist")
+                }
+                .sheet(isPresented: $showWishlistSheet) {
+                    wishlistSelectionSheet()
+                }
         }
     }
 }
+
+// MARK: - Body Subviews
+private extension WishlistView {
+    
+    @ViewBuilder
+    func mainContent() -> some View {
+        if let selected = selectedWishlist {
+            ItemGridView(
+                filterModel: filterModel,
+                wardrobeType: "wishlist",
+                selectedWardrobe: selected
+            )
+        } else {
+            Text("No Wishlist Selected")
+                .foregroundColor(.secondary)
+        }
+    }
+    
+    @ToolbarContentBuilder
+    func navigationBarToolbar() -> some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            wishlistSelectionButton()
+        }
+        ToolbarItem(placement: .navigationBarTrailing) {
+            addItemButton()
+        }
+    }
+    
+    func wishlistSelectionButton() -> some View {
+        Button {
+            showWishlistSheet = true
+            isCreatingNewWishlist = false
+        } label: {
+            HStack(spacing: 4) {
+                Text(selectedWishlist?.name ?? "Select Wishlist")
+                    .font(.headline)
+                Image(systemName: "chevron.down")
+                    .font(.footnote)
+            }
+        }
+    }
+    
+    @ViewBuilder
+    func addItemButton() -> some View {
+        if let selectedWishlist = selectedWishlist {
+            NavigationLink(
+                destination: ItemAddView(parentContext: viewContext, selectedWardrobe: selectedWishlist)
+            ) {
+                Image(systemName: "plus")
+            }
+        }
+    }
+    
+    /// Ensure the default "Wishlist" (seeded) is always used first
+    func setInitialWishlist() {
+        if selectedWishlist == nil {
+            if wishlists.isEmpty {
+                isCreatingNewWishlist = true   // force first-time creation
+            } else {
+                selectedWishlist = wishlists.first
+            }
+        }
+    }
+    
+    func createWishlistAlertButtons() -> some View {
+        Group {
+            TextField("i.e. Summer Items, Gifts", text: $newWishlistName)
+            Button("Create") {
+                if let newWishlist = createNewWishlist(named: newWishlistName) {
+                    selectedWishlist = newWishlist
+                }
+                showWishlistSheet = false
+            }
+            Button("Cancel", role: .cancel) { }
+        }
+    }
+    
+    @ViewBuilder
+    func wishlistSelectionSheet() -> some View {
+        NavigationView {
+            List {
+                ForEach(wishlists, id: \.self) { wishlist in
+                    Button {
+                        selectedWishlist = wishlist
+                        showWishlistSheet = false
+                    } label: {
+                        HStack {
+                            Text(wishlist.name ?? "Untitled")
+                            Spacer()
+                            if wishlist == selectedWishlist {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .navigationTitle("Your Wishlists")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Color(UIColor.secondarySystemBackground), for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        newWishlistName = ""
+                        isCreatingNewWishlist = true
+                    } label: {
+                        HStack {
+                            Text("Add")
+                            Image(systemName: "plus")
+                        }
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+    
+    private func createNewWishlist(named name: String) -> Wardrobe? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        
+        let newWishlist = Wardrobe(context: viewContext)
+        newWishlist.id = UUID()
+        newWishlist.type = "wishlist"
+        newWishlist.name = trimmed
+        newWishlist.timestamp = Date()
+        
+        do {
+            try viewContext.save()
+            return newWishlist
+        } catch {
+            print("❌ Failed to save new wishlist: \(error.localizedDescription)")
+            return nil
+        }
+    }
+}
+
 
