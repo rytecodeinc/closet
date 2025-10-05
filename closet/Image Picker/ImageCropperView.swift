@@ -23,6 +23,7 @@ struct ImageCropperView: View {
     @State private var originalForUndo: UIImage
     // Transform state
     @State private var scale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
     @State private var offset: CGSize = .zero
 
     @State private var cropViewSize: CGSize = .zero
@@ -56,7 +57,13 @@ struct ImageCropperView: View {
                             DragGesture().onChanged { self.offset = $0.translation }
                         )
                         .simultaneousGesture(
-                            MagnificationGesture().onChanged { self.scale = max(1.0, $0) }
+                            MagnificationGesture()
+                                .onChanged { value in
+                                    scale = lastScale * value
+                                }
+                                .onEnded { value in
+                                    lastScale = scale
+                                }
                         )
                         .frame(width: side, height: side)
                         .clipped()
@@ -119,7 +126,86 @@ struct ImageCropperView: View {
             }
         }
     }
+    
+    func removeBackground(borderWidth: Float = 1.0) {
+        guard let ciInput = CIImage(image: currentImage) else {
+            print("Failed to create CIImage")
+            return
+        }
 
+        isProcessingBackgroundRemoval = true
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let request = VNGenerateForegroundInstanceMaskRequest()
+            let handler = VNImageRequestHandler(ciImage: ciInput)
+
+            do {
+                try handler.perform([request])
+                guard let result = request.results?.first else {
+                    print("No results from mask request")
+                    DispatchQueue.main.async { isProcessingBackgroundRemoval = false }
+                    return
+                }
+
+                guard let maskBuffer = try? result.generateScaledMaskForImage(forInstances: result.allInstances, from: handler) else {
+                    print("Failed to generate mask")
+                    DispatchQueue.main.async { isProcessingBackgroundRemoval = false }
+                    return
+                }
+
+                let maskImage = CIImage(cvPixelBuffer: maskBuffer)
+                let transparentBackground = CIImage(color: .clear).cropped(to: ciInput.extent)
+
+                // Create border by expanding mask slightly
+                let borderMask: CIImage
+                if borderWidth > 0 {
+                    let morphology = CIFilter.morphologyMaximum()
+                    morphology.inputImage = maskImage
+                    morphology.radius = borderWidth
+                    borderMask = morphology.outputImage ?? maskImage
+                } else {
+                    borderMask = maskImage
+                }
+
+                // Fill the border mask with black
+                let blackBorder = CIImage(color: .black)
+                    .cropped(to: ciInput.extent)
+                    .applyingFilter("CIBlendWithMask", parameters: [
+                        "inputBackgroundImage": CIImage(color: .clear).cropped(to: ciInput.extent),
+                        "inputMaskImage": borderMask
+                    ])
+
+                // Blend original image over black border
+                let blendFilter = CIFilter.blendWithMask()
+                blendFilter.inputImage = ciInput
+                blendFilter.backgroundImage = blackBorder
+                blendFilter.maskImage = maskImage
+
+                if let output = blendFilter.outputImage,
+                   let cgImage = CIContext().createCGImage(output, from: output.extent) {
+                    let finalUIImage = UIImage(cgImage: cgImage, scale: currentImage.scale, orientation: currentImage.imageOrientation)
+
+                    DispatchQueue.main.async {
+                        self.originalForUndo = self.currentImage // save for undo
+                        self.currentImage = finalUIImage
+                        self.isProcessingBackgroundRemoval = false
+                    }
+                } else {
+                    DispatchQueue.main.async {
+                        print("Failed to create output image")
+                        self.isProcessingBackgroundRemoval = false
+                    }
+                }
+
+            } catch {
+                DispatchQueue.main.async {
+                    print("Error during background removal: \(error)")
+                    self.isProcessingBackgroundRemoval = false
+                }
+            }
+        }
+    }
+/* Old removebackground without border
     func removeBackground() {
         guard let ciInput = CIImage(image: currentImage) else {
             print("Failed to create CIImage")
@@ -181,7 +267,7 @@ struct ImageCropperView: View {
             }
         }
     }
-
+*/
     func undoBackgroundRemoval() {
         currentImage = originalForUndo
     }
