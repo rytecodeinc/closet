@@ -12,40 +12,51 @@ struct FeaturedOutfitsSection: View {
     let outfits: [Outfit]
 
     var body: some View {
-        Section(header: Text("Featured In")) {
+        Section(header: Text("FEATURED OUTFITS")) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(outfits, id: \.objectID) { outfit in
-                        NavigationLink(destination: OutfitDetailView(outfit: outfit)) {
-                            VStack {
-                                if let imageData = outfit.image,
-                                   let uiImage = UIImage(data: imageData) {
-                                    Image(uiImage: uiImage)
-                                        .resizable()
-                                        .aspectRatio(1, contentMode: .fill)
-                                        .frame(width: 80, height: 80)
-                                        .clipped()
-                                        .cornerRadius(8)
-                                        .border(.gray.opacity(0.3))
-                                } else {
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(Color(.systemGray5))
-                                        .frame(width: 80, height: 80)
-                                        .overlay(
-                                            Image(systemName: "photo")
-                                                .foregroundColor(.gray)
-                                        )
-                                }
-
-                                Text(outfit.name ?? "Outfit")
-                                    .font(.caption)
-                                    .lineLimit(1)
-                            }
-                        }
+                        FeaturedOutfitCell(outfit: outfit)
                     }
                 }
                 .padding(.vertical, 4)
             }
+        }
+    }
+}
+
+struct FeaturedOutfitCell: View {
+    let outfit: Outfit
+
+    var body: some View {
+        NavigationLink(destination: OutfitDetailView(outfit: outfit)) {
+            VStack {
+                OutfitImageView(outfit: outfit)
+                    .frame(width: 80, height: 80)
+                    .cornerRadius(8)
+                    .border(.gray.opacity(0.3))
+            }
+        }
+    }
+}
+
+struct OutfitImageView: View {
+    let outfit: Outfit
+
+    var body: some View {
+        if let imageData = outfit.image,
+           let uiImage = UIImage(data: imageData) {
+            Image(uiImage: uiImage)
+                .resizable()
+                .aspectRatio(1, contentMode: .fill)
+                .clipped()
+        } else {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(.systemGray5))
+                .overlay(
+                    Image(systemName: "photo")
+                        .foregroundColor(.gray)
+                )
         }
     }
 }
