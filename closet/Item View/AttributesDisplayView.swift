@@ -1,109 +1,125 @@
+//
+//  AttributesDisplayView.swift
+//  closet
+//
+//  Created by Dan Warner on 9/27/25.
+//
+
+
 import SwiftUI
 
 struct AttributesDisplayView: View {
-    let item: Item
-    
+    @ObservedObject var item: Item
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            
-            // MARK: Category → Subcategory
-            if let category = item.category {
-                HStack {
-                    Label("Category", systemImage: "square.grid.2x2")
-                        .font(.headline)
-                    Spacer()
-                    Text(category.name)
+
+            // MARK: Brand + size
+            HStack {
+                if let brand = item.brand?.name {
+                    Text(brand)
                         .font(.body)
-                        .foregroundColor(.primary)
+                       // .fontWeight(.semibold)
+                } else {
+                    Text("No brand set")
+                        .foregroundColor(.secondary)
                 }
-            }
-            
-            if let subcategory = item.subcategory {
-                HStack {
-                    Label("Subcategory", systemImage: "list.bullet")
-                        .font(.headline)
-                    Spacer()
-                    Text(subcategory.name)
+                Spacer()
+                if let size = item.size?.value {
+                    Text(size)
                         .font(.body)
+                } else {
+                    Text("No size set")
                         .foregroundColor(.secondary)
                 }
             }
             
-            Divider()
-            
-            // MARK: Size
-            if let size = item.size {
-                attributeRow(label: "Size", value: size, icon: "ruler")
-            }
-            
-            // MARK: Color
-            if let colorName = item.color {
-                attributeRow(label: "Color", value: colorName, icon: "paintpalette")
-            }
-            
-            // MARK: Season
-            if let season = item.season {
-                attributeRow(label: "Season", value: season, icon: "sun.max")
-            }
-            
-            // MARK: Brand
-            if let brand = item.brand {
-                attributeRow(label: "Brand", value: brand, icon: "tag")
-            }
-            
-            // MARK: Price
-            if let price = item.price {
-                attributeRow(label: "Price", value: "$\(price, specifier: "%.2f")", icon: "dollarsign.circle")
-            }
-            
-            // MARK: Link
-            if let link = item.link {
-                HStack {
-                    Label("Link", systemImage: "link")
-                        .font(.headline)
-                    Spacer()
-                    Link("View", destination: URL(string: link)!)
-                        .font(.body)
-                        .foregroundColor(.blue)
+            // MARK: Category + Color
+            HStack {
+                if let categoryName = item.category?.name {
+                    if let subName = item.subcategory?.name {
+                        Text("\(categoryName) • \(subName)")
+                            .font(.body)
+                            .foregroundColor(.primary)
+                    } else {
+                        Text(categoryName)
+                            .font(.body)
+                            .foregroundColor(.primary)
+                    }
+                }  else {
+                    Text("No category set")
+                        .foregroundColor(.secondary)
                 }
-            }
-            
-            // MARK: Location
-            if let location = item.location {
-                attributeRow(label: "Location", value: location, icon: "mappin.and.ellipse")
-            }
-            
-            // MARK: Tags
-            if let tags = item.tags, !tags.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("Tags", systemImage: "number")
-                        .font(.headline)
-                    HStack {
-                        ForEach(tags, id: \.self) { tag in
-                            Text(tag)
-                                .font(.caption)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(Color.gray.opacity(0.2))
-                                .cornerRadius(8)
+                
+                Spacer()
+                if let colors = item.colors as? Set<AppColor>, !colors.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(colors.sorted(by: { ($0.name ?? "") < ($1.name ?? "") }), id: \.self) { appColor in
+                            if let name = appColor.name {
+                                Circle()
+                                    .fill(colorFromName(name))
+                                    .frame(width: 20, height: 20)
+                                    .overlay(Circle().stroke(Color.gray, lineWidth: 1))
+                            }
                         }
+                    }
+                }  else {
+                    Text("No color set")
+                        .foregroundColor(.secondary)
+                }
+
+            }
+            
+            HStack{
+                // MARK: Location
+                 if let location = item.location?.name {
+                     Text(location)
+                         .font(.body)
+                 } else {
+                     Text("No location set")
+                         .foregroundColor(.secondary)
+                 }
+                Spacer()
+                // MARK: Season
+                VStack(alignment: .leading, spacing: 4) {
+                    if let seasons = item.seasons as? Set<Season>, !seasons.isEmpty {
+                        let names = seasons.compactMap { $0.name }.sorted().joined(separator: ", ")
+                        Text(names)
+                            .font(.body)
+                    }  else {
+                        Text("No season set")
+                            .foregroundColor(.secondary)
                     }
                 }
             }
-        }
-        .padding()
-        .background(RoundedRectangle(cornerRadius: 16).fill(Color(.systemBackground)))
-        .shadow(color: Color.black.opacity(0.05), radius: 4, x: 0, y: 2)
-    }
-    
-    private func attributeRow(label: String, value: String, icon: String) -> some View {
-        HStack {
-            Label(label, systemImage: icon)
-                .font(.headline)
-            Spacer()
-            Text(value)
-                .font(.body)
-                .foregroundColor(.primary)
+            
+
+            HStack{
+                // MARK: Links
+                if let links = item.links as? Set<Link>, !links.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(Array(links).sorted { ($0.name ?? "") < ($1.name ?? "") }, id: \.self) { link in
+                            Text(link.name ?? link.url?.absoluteString ?? "")
+                                .font(.body)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                Spacer()
+                if let price = item.price?.amount?.stringValue {
+                    Text("$\(price)")
+                        .font(.body)
+                }
+            }
+            HStack{
+                // MARK: Tags
+                if let tags = item.tags as? Set<Tag>, !tags.isEmpty {
+                    let names = tags.compactMap { $0.name }.sorted().joined(separator: ", ")
+                    Text(names)
+                        .font(.body)
+                }
+            }
+            
         }
     }
 }

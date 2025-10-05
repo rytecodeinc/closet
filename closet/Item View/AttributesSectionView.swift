@@ -33,9 +33,9 @@ struct AttributesSectionView: View {
             linkRow()
             locationRow()
             tagRow()
-        } header: {
+        }/* header: {
             Text("ATTRIBUTES").fontWeight(.semibold)
-        }
+        }*/
         /* Present the appropriate drawer; inherits environment(\.managedObjectContext)
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
@@ -100,6 +100,7 @@ extension AttributesSectionView {
                 }
                 Image(systemName: "chevron.right")
                     .foregroundColor(.gray)
+                    .font(.caption)
             }
             // Optional accessibility hint
             .accessibilityElement(children: .combine)
@@ -124,7 +125,9 @@ extension AttributesSectionView {
                 if let label = selectedSizeText {
                     Text(label).foregroundColor(.gray)
                 }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.gray)
+                    .font(.caption)
             }
         }
     }
@@ -147,7 +150,9 @@ extension AttributesSectionView {
                         if sorted.count > 4 { Text("…").foregroundColor(.gray).font(.headline) }
                     }
                 }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.gray)
+                    .font(.caption)
             }
         }
     }
@@ -163,7 +168,9 @@ extension AttributesSectionView {
                     Text(names.prefix(2).joined(separator: ", ")).foregroundColor(.gray)
                     if names.count > 2 { Text("…").foregroundColor(.gray).font(.headline) }
                 }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.gray)
+                    .font(.caption)
             }
         }
     }
@@ -177,7 +184,9 @@ extension AttributesSectionView {
                 if let brand = item.brand?.name, !brand.isEmpty {
                     Text(brand).foregroundColor(.gray)
                 }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.gray)
+                    .font(.caption)
             }
         }
     }
@@ -196,7 +205,10 @@ extension AttributesSectionView {
                             .multilineTextAlignment(.trailing)
                     }
                 }
-                Image(systemName: "chevron.right").foregroundColor(.gray).padding(.leading, 4)
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.gray)
+                    .font(.caption)
+                    .padding(.leading, 4)
             }
         }
     }
@@ -217,7 +229,9 @@ extension AttributesSectionView {
                         if hasMore { Text("…").foregroundColor(.gray).font(.headline) }
                     }
                 }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.gray)
+                    .font(.caption)
             }
         }
     }
@@ -231,7 +245,9 @@ extension AttributesSectionView {
                 if let loc = item.location?.name, !loc.isEmpty {
                     Text(loc).foregroundColor(.gray)
                 }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.gray)
+                    .font(.caption)
             }
         }
     }
@@ -249,7 +265,9 @@ extension AttributesSectionView {
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.gray)
+                    .font(.caption)
             }
         }
     }
