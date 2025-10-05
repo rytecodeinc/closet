@@ -17,7 +17,7 @@ struct EmptyStateView: View {
                 .scaledToFit()
                 .frame(width: 100, height: 100)
                 .foregroundColor(.gray)
-            Text("No Items")
+            Text("Click the '+' button to add items")
                 .font(.headline)
                 .foregroundColor(.gray)
             Spacer() // Keep it centered vertically
