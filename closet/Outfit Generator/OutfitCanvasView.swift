@@ -14,6 +14,9 @@ struct OutfitCanvasView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
     
+    // Optional outfit for editing
+    let outfitToEdit: Outfit?
+    
     // Fetch closet items (not wishlist items)
     @FetchRequest(
         entity: Item.entity(),
@@ -28,43 +31,50 @@ struct OutfitCanvasView: View {
     @State private var showingSaveAlert = false
     @State private var selectedItemID: UUID?
     
+    // Initialize with optional outfit to edit
+    init(outfitToEdit: Outfit? = nil) {
+        self.outfitToEdit = outfitToEdit
+    }
+    
     // Calculate square collage dimensions
     private var squareSize: CGFloat {
         let screenWidth = UIScreen.main.bounds.width
-        let padding: CGFloat = 0 // 16 padding on each side
+        let padding: CGFloat = 0
         return screenWidth - padding
     }
     
     var body: some View {
-            VStack(spacing: 0) {
-                // Outfit Collage Area
-                outfitCollageArea
-                
-                // Divider
-                Divider()
-                    .padding(.vertical, 10)
-                
-                // Closet Items Grid
-                closetItemsGrid
-                
-                Spacer()
-            }
-            .navigationTitle("Create Outfit")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") {
-                        saveOutfit()
-                    }
-                    .disabled(outfitItems.isEmpty)
+        VStack(spacing: 0) {
+            // Outfit Collage Area
+            outfitCollageArea
+            
+            // Divider
+            Divider()
+                .padding(.vertical, 10)
+            
+            // Closet Items Grid
+            closetItemsGrid
+            
+            Spacer()
+        }
+        .navigationTitle(outfitToEdit == nil ? "Create Outfit" : "Edit Outfit")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("Save") {
+                    saveOutfit()
                 }
+                .disabled(outfitItems.isEmpty)
             }
-            .alert("Outfit Saved", isPresented: $showingSaveAlert) {
-                Button("OK") {
-                    dismiss()
-                }
+        }
+        .alert("Outfit Saved", isPresented: $showingSaveAlert) {
+            Button("OK") {
+                dismiss()
             }
-        
+        }
+        .onAppear {
+            loadOutfitIfEditing()
+        }
     }
     
     // MARK: - Outfit Collage Area
@@ -135,6 +145,38 @@ struct OutfitCanvasView: View {
         }
     }
     
+    // MARK: - Load Outfit for Editing
+    private func loadOutfitIfEditing() {
+        guard let outfit = outfitToEdit,
+              let transformationData = outfit.transformationData else {
+            return
+        }
+        
+        // Decode the transformation data
+        let decoder = JSONDecoder()
+        guard let savedItems = try? decoder.decode([SavedOutfitItem].self, from: transformationData) else {
+            return
+        }
+        
+        // Reconstruct outfit items
+        let items = outfit.items as? Set<Item> ?? []
+        
+        outfitItems = savedItems.compactMap { savedItem in
+            // Find the matching item
+            guard let item = items.first(where: { $0.objectID.uriRepresentation().absoluteString == savedItem.itemID }) else {
+                return nil
+            }
+            
+            return OutfitItem(
+                item: item,
+                position: CGPoint(x: savedItem.positionX, y: savedItem.positionY),
+                scale: savedItem.scale,
+                rotation: savedItem.rotation,
+                zIndex: savedItem.zIndex
+            )
+        }
+    }
+    
     // MARK: - Helper Functions
     private func addItemToOutfit(_ item: Item) {
         // Check if item is already in outfit
@@ -181,49 +223,66 @@ struct OutfitCanvasView: View {
     }
     
     private func bringToFront(_ outfitItem: OutfitItem) {
-        // Clear selection first
         selectedItemID = nil
-        
-        // Get the highest current zIndex
         let maxZIndex = outfitItems.map { $0.zIndex }.max() ?? 0
         
-        // Update the item's zIndex to be highest
         if let index = outfitItems.firstIndex(where: { $0.id == outfitItem.id }) {
             outfitItems[index].zIndex = maxZIndex + 1
         }
         
-        // Select the item
         selectedItemID = outfitItem.id
     }
     
     private func removeItem(_ outfitItem: OutfitItem) {
-        //withAnimation(.spring()) {
-            outfitItems.removeAll { $0.id == outfitItem.id }
-       // }
+        outfitItems.removeAll { $0.id == outfitItem.id }
     }
     
     private func saveOutfit() {
-        // Clear selection to avoid saving selection borders
         selectedItemID = nil
         
-        // Create the collage image
         guard let collageImage = captureCollageAsImage() else {
             print("Failed to capture collage image")
             return
         }
         
-        let newOutfit = Outfit(context: viewContext)
-        newOutfit.id = UUID()
-        newOutfit.timestamp = Date()
+        // Use existing outfit if editing, or create new one
+        let outfit = outfitToEdit ?? Outfit(context: viewContext)
         
-        // Save the collage image as Data
+        if outfitToEdit == nil {
+            outfit.id = UUID()
+        }
+        outfit.timestamp = Date()
+        
+        // Save the collage image
         if let imageData = collageImage.pngData() {
-            newOutfit.image = imageData
+            outfit.image = imageData
         }
         
-        // Add items to outfit (without transformation data)
+        // Clear existing items if editing
+        if outfitToEdit != nil {
+            outfit.removeFromItems(outfit.items ?? NSSet())
+        }
+        
+        // Add items to outfit
         for outfitItem in outfitItems {
-            newOutfit.addToItems(outfitItem.item)
+            outfit.addToItems(outfitItem.item)
+        }
+        
+        // Save transformation data
+        let savedItems = outfitItems.map { outfitItem in
+            SavedOutfitItem(
+                itemID: outfitItem.item.objectID.uriRepresentation().absoluteString,
+                positionX: outfitItem.position.x,
+                positionY: outfitItem.position.y,
+                scale: outfitItem.scale,
+                rotation: outfitItem.rotation,
+                zIndex: outfitItem.zIndex
+            )
+        }
+        
+        let encoder = JSONEncoder()
+        if let transformationData = try? encoder.encode(savedItems) {
+            outfit.transformationData = transformationData
         }
         
         do {
@@ -240,12 +299,11 @@ struct OutfitCanvasView: View {
                 .fill(Color.white)
                 .frame(width: squareSize, height: squareSize)
 
-            // Use the exact same DraggableOutfitItemView
             ForEach(outfitItems.sorted(by: { $0.zIndex < $1.zIndex })) { outfitItem in
                 DraggableOutfitItemView(
                     outfitItem: outfitItem,
                     collageSize: squareSize,
-                    isSelected: false, // hide selection borders when saving
+                    isSelected: false,
                     onPositionChanged: { _ in },
                     onScaleChanged: { _ in },
                     onRotationChanged: { _ in },
@@ -267,8 +325,16 @@ struct OutfitCanvasView: View {
             hostingController.view.drawHierarchy(in: hostingController.view.bounds, afterScreenUpdates: true)
         }
     }
+}
 
-
+// MARK: - Saved Outfit Item Model (for JSON encoding)
+struct SavedOutfitItem: Codable {
+    let itemID: String
+    let positionX: CGFloat
+    let positionY: CGFloat
+    let scale: CGFloat
+    let rotation: Double
+    let zIndex: Int
 }
 
 // MARK: - OutfitItem Model
@@ -321,13 +387,12 @@ struct DraggableOutfitItemView: View {
     
     var body: some View {
         ZStack {
-            // Selection border
             if isSelected {
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(Color.gray.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [5]))
                     .frame(width: itemSize, height: itemSize)
             }
-            // Item image
+            
             if let primaryPhoto = (outfitItem.item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }),
                let photoData = primaryPhoto.data,
                let uiImage = UIImage(data: photoData) {
@@ -335,8 +400,6 @@ struct DraggableOutfitItemView: View {
                     .resizable()
                     .aspectRatio(1, contentMode: .fill)
                     .frame(width: itemSize, height: itemSize)
-                   // .clipShape(RoundedRectangle(cornerRadius: 8))
-                    
             } else {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color(.systemGray5))
@@ -347,7 +410,6 @@ struct DraggableOutfitItemView: View {
                     )
             }
             
-            // Delete button
             if isSelected {
                 VStack {
                     HStack {

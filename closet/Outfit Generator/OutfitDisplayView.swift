@@ -13,6 +13,9 @@ struct OutfitDisplayView: View {
     @Environment(\.managedObjectContext) private var viewContext
     
     @State private var outfits: [Outfit] = []
+    @State private var isEditing: Bool = false // <-- tracks edit mode
+    @State private var outfitToDelete: Outfit? = nil
+    @State private var showingDeleteConfirmation: Bool = false
     
     private let gridColumns = [
         GridItem(.flexible(), spacing: 0),
@@ -25,7 +28,6 @@ struct OutfitDisplayView: View {
         NavigationView {
             Group {
                 if outfits.isEmpty {
-                    // Fallback text if no outfits
                     VStack(spacing: 12) {
                         Image(systemName: "tshirt")
                             .font(.system(size: 40))
@@ -33,7 +35,7 @@ struct OutfitDisplayView: View {
                         Text("No saved outfits yet")
                             .font(.headline)
                             .foregroundColor(.secondary)
-                        Text("Create an outfit and save it to see it here.")
+                        Text("Outfits are collages of items from your closet.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
@@ -43,23 +45,39 @@ struct OutfitDisplayView: View {
                     ScrollView {
                         LazyVGrid(columns: gridColumns, spacing: 0) {
                             ForEach(outfits, id: \.objectID) { outfit in
-                                NavigationLink(destination: OutfitDetailView(outfit: outfit)) {
-                                    if let imageData = outfit.image,
-                                       let uiImage = UIImage(data: imageData) {
-                                        Image(uiImage: uiImage)
-                                            .resizable()
-                                            .aspectRatio(1, contentMode: .fill)
-                                            .frame(width: squareSize)
-                                            .clipped()
-                                            .border(.gray.opacity(0.3), width: 0.5)
-                                    } else {
-                                        RoundedRectangle(cornerRadius: 12)
-                                            .fill(Color(.systemGray5))
-                                            .frame(height: 180)
-                                            .overlay(
-                                                Image(systemName: "photo")
-                                                    .foregroundColor(.secondary)
-                                            )
+                                ZStack(alignment: .topTrailing) {
+                                    NavigationLink(destination: OutfitDetailView(outfit: outfit)) {
+                                        if let imageData = outfit.image,
+                                           let uiImage = UIImage(data: imageData) {
+                                            Image(uiImage: uiImage)
+                                                .resizable()
+                                                .aspectRatio(1, contentMode: .fill)
+                                                .frame(width: squareSize)
+                                                .clipped()
+                                                .border(.gray.opacity(0.3), width: 0.5)
+                                        } else {
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .fill(Color(.systemGray5))
+                                                .frame(width: squareSize, height: squareSize)
+                                                .overlay(
+                                                    Image(systemName: "photo")
+                                                        .foregroundColor(.secondary)
+                                                )
+                                        }
+                                    }
+                                    .buttonStyle(PlainButtonStyle()) // remove NavigationLink styling
+                                    
+                                    // Delete button overlay in edit mode
+                                    if isEditing {
+                                        Button {
+                                            outfitToDelete = outfit
+                                            showingDeleteConfirmation = true
+                                        } label: {
+                                            Image(systemName: "minus.circle.fill")
+                                                .foregroundColor(.red)
+                                                .font(.system(size: 14))
+                                                .padding(6)
+                                        }
                                     }
                                 }
                             }
@@ -67,37 +85,64 @@ struct OutfitDisplayView: View {
                     }
                 }
             }
-            .navigationTitle("Looks")
+            .navigationTitle("Outfits")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 fetchOutfits()
             }
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    // Toggle Edit Mode
+                    Button(isEditing ? "Done" : "Edit") {
+                        isEditing.toggle()
+                    }
+                }
+                
                 ToolbarItem(placement: .navigationBarTrailing) {
                     NavigationLink(destination: OutfitCanvasView()) {
                         Image(systemName: "plus")
                     }
                 }
             }
+            // Confirmation alert before deleting
+            .alert("Delete Outfit?", isPresented: $showingDeleteConfirmation, presenting: outfitToDelete) { outfit in
+                Button("Delete", role: .destructive) {
+                    deleteOutfit(outfit)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { outfit in
+                Text("Are you sure you want to delete this outfit?")
+            }
         }
     }
     
     // MARK: - Core Data fetch
-        private func fetchOutfits() {
-            let request = NSFetchRequest<Outfit>(entityName: "Outfit")
-            request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: false)]
-
-            do {
-                let results = try viewContext.fetch(request)
-                // Assign results to state on main thread (viewContext usually is main)
-                DispatchQueue.main.async {
-                    self.outfits = results
-                }
-            } catch {
-                print("Failed to fetch outfits: \(error)")
-                DispatchQueue.main.async {
-                    self.outfits = []
-                }
+     func fetchOutfits() {
+        let request = NSFetchRequest<Outfit>(entityName: "Outfit")
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: false)]
+        
+        do {
+            let results = try viewContext.fetch(request)
+            DispatchQueue.main.async {
+                self.outfits = results
+                
+            }
+        } catch {
+            print("Failed to fetch outfits: \(error)")
+            DispatchQueue.main.async {
+                self.outfits = []
             }
         }
+    }
+    
+    private func deleteOutfit(_ outfit: Outfit) {
+        viewContext.delete(outfit)
+        do {
+            try viewContext.save()
+            fetchOutfits()
+        } catch {
+            print("Failed to delete outfit: \(error)")
+        }
+    }
 }
+
