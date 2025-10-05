@@ -24,17 +24,17 @@ struct ContentView: View {
                         Image(systemName: "hanger")
                         Text("Closet")
                     }
-                ClosetView()
+                OutfitDisplayView()
                     .tabItem {
                         Image(systemName: "book")
-                        Text("Looks")
+                        Text("Outfits")
                     }
                 WishlistView()
                     .tabItem {
                         Image(systemName: "heart")
                         Text("Wishlist")
                     }
-                ClosetView()
+                OutfitCalendarView()
                     .tabItem {
                         Image(systemName: "calendar")
                         Text("Calendar")
@@ -50,6 +50,7 @@ struct ContentView: View {
                 print("Content View Data seeding")
                 DataSeeder(context: viewContext)
                 migrateItemImages(context: viewContext)
+                migrateWishlistItems(context: viewContext)
             }
         }
     }
