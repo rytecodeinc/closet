@@ -23,6 +23,8 @@ struct ClosetView: View {
     @State private var newClosetName: String = ""
     @State private var isCreatingNewCloset = false
     
+    @State private var showSizeAlert = false
+    
     var body: some View {
         NavigationView {
             mainContent()
@@ -36,6 +38,11 @@ struct ClosetView: View {
                 }
                 .sheet(isPresented: $showClosetSheet) {
                     closetSelectionSheet()
+                }
+                .sheet(isPresented: $showSizeAlert) {
+                    WhatSizeView()
+                        .environment(\.managedObjectContext, viewContext)
+                        .presentationDetents([.medium, .large])
                 }
         }
     }
@@ -65,8 +72,16 @@ private extension ClosetView {
             closetSelectionButton()
         }
         ToolbarItem(placement: .navigationBarTrailing) {
+            Button {
+                showSizeAlert.toggle()
+            } label: {
+                Image(systemName: "ruler")
+            }
+        }
+        ToolbarItem(placement: .navigationBarTrailing) {
             addItemButton()
         }
+        
     }
     
     func closetSelectionButton() -> some View {
