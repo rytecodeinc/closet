@@ -1,7 +1,18 @@
+//
+//  EventDrawerView.swift
+//  closet
+//
+//  Created by Dan Warner on 9/20/25.
+//
+
+import Foundation
+import SwiftUI
+import CoreData
+
 // MARK: - Event Drawer View
 struct EventDrawerView: View {
+    @Environment(\.managedObjectContext) private var viewContext
     let selectedDate: Date
-    let events: [Event]
     let onDismiss: () -> Void
     let onNavigateDate: (Date) -> Void
     
@@ -12,15 +23,45 @@ struct EventDrawerView: View {
         return formatter
     }()
     
+    @State private var showingCreateEvent = false
+    
+    // 👇 Dynamic fetch request bound to selectedDate
+    @FetchRequest private var events: FetchedResults<Event>
+    
+    init(
+        selectedDate: Date,
+        onDismiss: @escaping () -> Void,
+        onNavigateDate: @escaping (Date) -> Void
+    ) {
+        self.selectedDate = selectedDate
+        self.onDismiss = onDismiss
+        self.onNavigateDate = onNavigateDate
+        
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: selectedDate)
+        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
+        
+        let request: NSFetchRequest<Event> = Event.fetchRequest()
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Event.timestamp, ascending: false)]
+        request.predicate = NSPredicate(format: "date >= %@ AND date < %@", startOfDay as NSDate, endOfDay as NSDate)
+        
+        _events = FetchRequest(fetchRequest: request)
+    }
+    
     var body: some View {
         VStack(spacing: 0) {
-           // SelectionHeader(title: dateFormatter.string(from: selectedDate))
-            /* Drag handle
-            RoundedRectangle(cornerRadius: 2)
-                .fill(Color.secondary)
-                .frame(width: 40, height: 4)
-                .padding(.top, 8)
-            */
+            Button(action: { showingCreateEvent = true }) {
+                HStack {
+                    Image(systemName: "plus")
+                    Text("Add Event")
+                        .font(.body)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding()
+            
+            Divider()
+            
             // Header with date navigation
             HStack {
                 Button(action: { navigateDate(-1) }) {
@@ -42,7 +83,6 @@ struct EventDrawerView: View {
                 }
             }
             .padding(20)
-      //      .padding(.vertical, 16)
             
             Divider()
             
@@ -64,7 +104,12 @@ struct EventDrawerView: View {
                 ScrollView {
                     LazyVStack(spacing: 12) {
                         ForEach(events, id: \.objectID) { event in
-                            EventRowView(event: event)
+                            NavigationLink(
+                                destination: EventOutfitSelectionView(event: event)
+                                    .environment(\.managedObjectContext, viewContext)
+                            ) {
+                                EventRowView(event: event)
+                            }
                         }
                     }
                     .padding(.horizontal, 20)
@@ -74,13 +119,15 @@ struct EventDrawerView: View {
             
             Spacer()
         }
-        .presentationDetents([.medium, .large])
+        .sheet(isPresented: $showingCreateEvent) {
+            CreateEventView(initialDate: selectedDate)
+                .environment(\.managedObjectContext, viewContext)
+        }
         .background(
             Color(.systemBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
                 .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: -5)
         )
-      //  .frame(maxHeight: UIScreen.main.bounds.height * 0.6)
         .gesture(
             DragGesture()
                 .onEnded { value in
@@ -98,8 +145,10 @@ struct EventDrawerView: View {
     }
 }
 
+
 // MARK: - Event Row View
 struct EventRowView: View {
+    
     let event: Event
     
     private let timeFormatter: DateFormatter = {
@@ -109,51 +158,69 @@ struct EventRowView: View {
     }()
     
     var body: some View {
-        HStack(spacing: 12) {
-            // Time indicator
-            VStack(alignment: .leading) {
-                Text(timeFormatter.string(from: event.time ?? Date()))
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundColor(.secondary)
-            }
-            .frame(width: 60, alignment: .leading)
-            
-            // Event content
-            VStack(alignment: .leading, spacing: 4) {
-                Text(event.name ?? "Untitled Event")
-                    .font(.headline)
-                    .foregroundColor(.primary)
-                
-                if let location = event.location, !location.isEmpty {
-                    Text(location)
+            HStack(spacing: 12) {
+                // Time indicator
+                VStack(alignment: .leading) {
+                    Text(timeFormatter.string(from: event.time ?? Date()))
                         .font(.caption)
+                        .fontWeight(.medium)
                         .foregroundColor(.secondary)
                 }
+                .frame(width: 60, alignment: .leading)
                 
-                // Outfit count
-                let outfitCount = (event.outfits as? Set<Outfit>)?.count ?? 0
-                if outfitCount > 0 {
-                    Text("\(outfitCount) outfit\(outfitCount == 1 ? "" : "s")")
-                        .font(.caption)
-                        .foregroundColor(.blue)
+                // Event content
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(event.name ?? "Untitled Event")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    
+                    if let location = event.location, !location.isEmpty {
+                        Text(location)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    // Outfit images
+                    if let outfitsSet = event.outfits as? Set<Outfit>, !outfitsSet.isEmpty {
+                        HStack(spacing: 4) {
+                            ForEach(Array(outfitsSet.prefix(3)), id: \.objectID) { outfit in
+                                if let imageData = outfit.image,
+                                   let uiImage = UIImage(data: imageData) {
+                                    Image(uiImage: uiImage)
+                                        .resizable()
+                                        .aspectRatio(1, contentMode: .fill)
+                                        .frame(width: 60, height: 60)
+                                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 4)
+                                                .stroke(Color.gray.opacity(0.3), lineWidth: 0.5)
+                                        )
+                                }
+                            }
+                            if outfitsSet.count > 3 {
+                                Text("+\(outfitsSet.count - 3)")
+                                    .font(.caption2)
+                                    .foregroundColor(.blue)
+                                    .padding(.leading, 2)
+                            }
+                        }
+                        .padding(.top, 2)
+                    }
                 }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
-            
-            Spacer()
-            
-            // Chevron
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundColor(.secondary)
+            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(.secondarySystemBackground))
+            )
         }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color(.secondarySystemBackground))
-        )
-    }
 }
 
 // MARK: - Create Event View
@@ -163,8 +230,13 @@ struct CreateEventView: View {
     
     @State private var eventName = "Outfit of the Day"
     @State private var eventLocation = ""
-    @State private var eventDate = Date()
+    @State private var eventDate: Date
     @State private var eventTime = Date()
+    
+    // 👇 Custom initializer to allow pre-filling with selectedDate
+    init(initialDate: Date) {
+        _eventDate = State(initialValue: initialDate)
+    }
     
     var body: some View {
         NavigationView {
@@ -183,15 +255,11 @@ struct CreateEventView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
+                    Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") {
-                        saveEvent()
-                    }
-                    .disabled(eventName.isEmpty)
+                    Button("Save") { saveEvent() }
+                        .disabled(eventName.isEmpty)
                 }
             }
         }
@@ -202,10 +270,7 @@ struct CreateEventView: View {
         newEvent.id = UUID()
         newEvent.name = eventName
         newEvent.location = eventLocation.isEmpty ? nil : eventLocation
-
-        // Normalize the date to include only the day
         newEvent.date = Calendar.current.startOfDay(for: eventDate)
-
         newEvent.time = eventTime
         newEvent.timestamp = Date()
         
@@ -216,5 +281,7 @@ struct CreateEventView: View {
             print("Error saving event: \(error)")
         }
     }
-
 }
+
+
+

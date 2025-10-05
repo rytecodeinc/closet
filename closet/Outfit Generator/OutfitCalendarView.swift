@@ -1,186 +1,230 @@
+//
+//  OutfitCalendarView.swift
+//  closet
+//
+//  Created by Dan Warner on 9/20/25.
+//
+
+
+import SwiftUI
+import CoreData
+
 import SwiftUI
 import CoreData
 
 struct OutfitCalendarView: View {
     @Environment(\.managedObjectContext) private var viewContext
-    
-    // Fetch events for the current visible date range
-    @FetchRequest(
-        entity: Event.entity(),
-        sortDescriptors: [NSSortDescriptor(keyPath: \Event.date, ascending: true)]
-    ) var events: FetchedResults<Event>
-    
+    @State private var events: [Event] = []
+
     @State private var selectedDate: Date? = nil
     @State private var showingEventDrawer = false
     @State private var showingCreateEvent = false
-    @State private var scrollViewID = UUID()
     
+    @State private var currentMonth: Date = Date()
+    @State private var dragOffset: CGFloat = 0
+    @State private var isDragging = false
+        
     private let calendar = Calendar.current
-    private let dateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        return formatter
-    }()
     
     var body: some View {
         NavigationView {
-            ZStack {
-                VStack(spacing: 0) {
-                    // Calendar scroll view
-                    calendarScrollView
-                }
-                .navigationTitle("Calendar")
-                .navigationBarTitleDisplayMode(.large)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("New Event") {
-                            showingCreateEvent = true
+            GeometryReader { geo in
+                ZStack(alignment: .top) {
+                    
+                    VStack(spacing: 0) {
+                        Divider()
+                        daysOfWeekHeader
+                        
+                        // Calendar grid with drag
+                        calendarGrid(for: currentMonth, geo: geo)
+                            .offset(y: dragOffset)
+                            .gesture(
+                                DragGesture()
+                                    .onChanged { value in
+                                        dragOffset = value.translation.height
+                                        isDragging = true
+                                    }
+                                    .onEnded { value in
+                                        let threshold = geo.size.height / 6
+                                        if value.translation.height < -threshold {
+                                            changeMonth(by: 1)
+                                        } else if value.translation.height > threshold {
+                                            changeMonth(by: -1)
+                                        }
+                                        withAnimation(.spring()) {
+                                            dragOffset = 0
+                                        }
+                                        isDragging = false
+                                    }
+                            )
+                    }
+                    .padding(.top, 8)
+                    .padding(.bottom, geo.safeAreaInsets.bottom)
+                    .navigationTitle(monthYearString(for: currentMonth))
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        // jump to today
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button(action: {
+                                let today = Date()
+                                withAnimation(.spring()) {
+                                    currentMonth = startOfMonth(for: today) // set month to today's month
+                                    selectedDate = today                    // highlight today
+                                }
+                            }) {
+                                Image(systemName: "calendar")
+                            }
+                        }
+                        // create new event
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button(action: {
+                                showingCreateEvent = true
+                            }) {
+                                Image(systemName: "plus")
+                            }
+                        }
+                        
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            
+                            // Arrow navigation
+                            HStack {
+                                Button(action: { changeMonth(by: -1) }) {
+                                    Image(systemName: "chevron.up")
+                                        .font(.footnote)
+                                        .foregroundColor(.secondary)
+                                }
+                                Button(action: { changeMonth(by: 1) }) {
+                                    Image(systemName: "chevron.down")
+                                        .font(.footnote)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
                         }
                     }
-                }
-                
-                // Event drawer
-                if showingEventDrawer, let selectedDate = selectedDate {
-                    EventDrawerView(
-                        selectedDate: selectedDate,
-                        events: eventsForDate(selectedDate),
-                        onDismiss: {
-                            showingEventDrawer = false
-                            self.selectedDate = nil
-                        },
-                        onNavigateDate: { newDate in
-                            self.selectedDate = newDate
-                        }
-                    )
-                    .transition(.move(edge: .bottom))
+                    
                 }
             }
         }
+        .onAppear { fetchEvents() }
+        .sheet(isPresented: $showingEventDrawer) {
+            Group {
+                if let selectedDate = selectedDate {
+                    NavigationView {
+                        EventDrawerView(
+                            selectedDate: selectedDate,
+                            onDismiss: {
+                                showingEventDrawer = false
+                                self.selectedDate = nil
+                            },
+                            onNavigateDate: { newDate in
+                                self.selectedDate = newDate
+                                self.currentMonth = startOfMonth(for: newDate)
+                            }
+                        )
+                        .onDisappear {
+                            fetchEvents()
+                        }
+                    }
+                } else {
+                    EmptyView()
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
+
         .sheet(isPresented: $showingCreateEvent) {
-            CreateEventView()
+            CreateEventView(initialDate: selectedDate ?? Date())
                 .environment(\.managedObjectContext, viewContext)
+                .onDisappear { fetchEvents() }
         }
     }
     
-    // MARK: - Calendar Scroll View
-    private var calendarScrollView: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(spacing: 0) {
-                    ForEach(monthsToDisplay, id: \.self) { month in
-                        monthView(for: month)
-                            .id(month)
-                    }
-                }
-            }
-            .onAppear {
-                // Scroll to current month on appear
-                proxy.scrollTo(startOfMonth(for: Date()), anchor: .top)
-            }
-        }
-    }
-    
-    // MARK: - Month View
-    private func monthView(for month: Date) -> some View {
-        VStack(spacing: 0) {
-            // Month header
-            monthHeader(for: month)
-            
-            // Days of week header
-            daysOfWeekHeader
-            
-            // Calendar grid
-            calendarGrid(for: month)
-        }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 20)
-    }
-    
-    private func monthHeader(for month: Date) -> some View {
-        HStack {
-            Text(monthYearString(for: month))
-                .font(.title2)
-                .fontWeight(.semibold)
-            Spacer()
-        }
-        .padding(.vertical, 16)
-    }
-    
+    // MARK: - Days of Week Header
     private var daysOfWeekHeader: some View {
         HStack(spacing: 0) {
             ForEach(calendar.shortWeekdaySymbols, id: \.self) { day in
-                Text(String(day.prefix(1)))
+                Text(String(day.prefix(3)))
                     .font(.caption)
                     .fontWeight(.medium)
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity)
             }
         }
+        .frame(height: 30)
         .padding(.bottom, 8)
     }
     
-    // MARK: - Calendar Grid
-    private func calendarGrid(for month: Date) -> some View {
-        let days = daysInMonth(month)
-        let columns = Array(repeating: GridItem(.flexible()), count: 7)
-        
-        return LazyVGrid(columns: columns, spacing: 1) {
-            ForEach(days, id: \.self) { day in
-                if calendar.isDate(day, equalTo: month, toGranularity: .month) {
-                    dayCell(for: day)
-                } else {
-                    // Empty cell for days outside current month
-                    Rectangle()
-                        .fill(Color.clear)
-                        .frame(height: 50)
-                }
-            }
+    // MARK: - Change Month
+    private func changeMonth(by value: Int) {
+        withAnimation(.spring()) {
+            currentMonth = calendar.date(byAdding: .month, value: value, to: currentMonth) ?? currentMonth
         }
-        .background(
-            Rectangle()
-                .fill(Color.gray.opacity(0.3))
-                .frame(height: 1),
-            alignment: .top
-        )
     }
     
-    // MARK: - Day Cell
-    private func dayCell(for date: Date) -> some View {
+    // MARK: - Calendar Grid
+    private func calendarGrid(for month: Date, geo: GeometryProxy) -> some View {
+        let weekdayHeaderHeight: CGFloat = 16
+        let verticalPadding: CGFloat = 16 + 16
+        let rows = 6
+        let availableHeight = geo.size.height - weekdayHeaderHeight - verticalPadding - 0 // adjust for calendar day height
+        let cellHeight = (availableHeight / CGFloat(rows)).rounded()
+        
+        let days = daysInMonth(month)
+        let columns = Array(repeating: GridItem(.flexible(),  spacing: 0), count: 7)
+        
+        return LazyVGrid(columns: columns, spacing: 0) {
+            ForEach(days, id: \.self) { day in
+                dayCell(for: day, in: month, height: cellHeight)
+            }
+        }
+    }
+    
+    private func dayCell(for date: Date, in displayedMonth: Date, height: CGFloat) -> some View {
+        let isCurrentMonth = calendar.isDate(date, equalTo: displayedMonth, toGranularity: .month)
         let dayEvents = eventsForDate(date)
         let isSelected = selectedDate != nil && calendar.isDate(date, inSameDayAs: selectedDate!)
         let isToday = calendar.isDateInToday(date)
-        
-        return VStack(spacing: 2) {
-            ZStack {
-                // Background for today/selected
-                if isToday || isSelected {
-                    Circle()
-                        .fill(isSelected ? Color.blue : Color.blue.opacity(0.2))
-                        .frame(width: 32, height: 32)
+        let cellWidth = UIScreen.main.bounds.width / 7
+
+        return VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 2) {
+                // Day number with circle background
+                ZStack {
+                    if isToday || isSelected {
+                        Circle()
+                            .fill(isSelected ? Color.blue : Color.blue.opacity(0.2))
+                            .frame(width: cellWidth * 0.5, height: cellWidth * 0.5)
+                    }
+                    Text("\(calendar.component(.day, from: date))")
+                        .font(.system(size: 14, weight: isToday ? .semibold : .regular))
+                        .foregroundColor(
+                            isSelected ? .white :
+                                (isToday ? .blue :
+                                    (isCurrentMonth ? .primary : .gray.opacity(0.5)))
+                            
+                        )
+                        .frame(width: cellWidth * 0.5, height: cellWidth * 0.5)
                 }
                 
-                // Day number
-                Text("\(calendar.component(.day, from: date))")
-                    .font(.system(size: 16, weight: isToday ? .semibold : .regular))
-                    .foregroundColor(isSelected ? .white : (isToday ? .blue : .primary))
-            }
-            
-            // Event indicators
-            HStack(spacing: 1) {
-                ForEach(0..<min(dayEvents.count, 3), id: \.self) { _ in
-                    Circle()
-                        .fill(Color.blue)
-                        .frame(width: 4, height: 4)
+                // Event indicators
+                VStack(spacing: 3) {
+                    ForEach(0..<min(dayEvents.count, 3), id: \.self) { _ in
+                        Circle()
+                            .fill(Color.blue)
+                            .frame(width: 4, height: 4)
+                    }
+                    if dayEvents.count > 3 {
+                        Text("+")
+                            .font(.system(size: 8))
+                            .foregroundColor(.blue)
+                    }
                 }
-                if dayEvents.count > 3 {
-                    Text("+")
-                        .font(.system(size: 8))
-                        .foregroundColor(.blue)
-                }
+                .frame(width: cellWidth, height: 8)
+                
+                Spacer() // push everything to the top
             }
-            .frame(height: 8)
         }
-        .frame(height: 50)
+        .frame(width: cellWidth, height: height)
         .contentShape(Rectangle())
         .overlay(
             Rectangle()
@@ -195,19 +239,6 @@ struct OutfitCalendarView: View {
     }
     
     // MARK: - Helper Functions
-    private var monthsToDisplay: [Date] {
-        let currentDate = Date()
-        var months: [Date] = []
-        
-        // Show 6 months before and after current month
-        for i in -6...6 {
-            if let month = calendar.date(byAdding: .month, value: i, to: currentDate) {
-                months.append(startOfMonth(for: month))
-            }
-        }
-        return months
-    }
-    
     private func startOfMonth(for date: Date) -> Date {
         let components = calendar.dateComponents([.year, .month], from: date)
         return calendar.date(from: components) ?? date
@@ -215,16 +246,14 @@ struct OutfitCalendarView: View {
     
     private func daysInMonth(_ month: Date) -> [Date] {
         guard let monthRange = calendar.range(of: .day, in: .month, for: month),
-              let firstOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: month)) else {
-            return []
-        }
-        
+              let firstOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: month)) else { return [] }
+
         let firstWeekday = calendar.component(.weekday, from: firstOfMonth)
-        let paddingDays = firstWeekday - calendar.firstWeekday
-        
+        let paddingDays = (firstWeekday - calendar.firstWeekday + 7) % 7
+
         var days: [Date] = []
-        
-        // Add padding days from previous month
+
+        // Previous month fillers
         if paddingDays > 0 {
             for i in (1...paddingDays).reversed() {
                 if let day = calendar.date(byAdding: .day, value: -i, to: firstOfMonth) {
@@ -232,16 +261,16 @@ struct OutfitCalendarView: View {
                 }
             }
         }
-        
-        // Add days of current month
+
+        // Current month
         for day in monthRange {
             if let date = calendar.date(byAdding: .day, value: day - 1, to: firstOfMonth) {
                 days.append(date)
             }
         }
-        
-        // Add padding days from next month to complete the grid
-        let remainingCells = 42 - days.count // 6 weeks * 7 days
+
+        // Next month fillers to reach 42 cells
+        let remainingCells = 42 - days.count
         if remainingCells > 0 {
             let lastDayOfMonth = days.last ?? firstOfMonth
             for i in 1...remainingCells {
@@ -250,7 +279,8 @@ struct OutfitCalendarView: View {
                 }
             }
         }
-        
+
+
         return days
     }
     
@@ -261,223 +291,35 @@ struct OutfitCalendarView: View {
     }
     
     private func eventsForDate(_ date: Date) -> [Event] {
-        return events.filter { event in
-            calendar.isDate(event.date ?? Date(), inSameDayAs: date)
+        let dayStart = startOfDay(date)
+        return events.filter {
+            startOfDay($0.date ?? Date()) == dayStart
         }
     }
-}
 
-// MARK: - Event Drawer View
-struct EventDrawerView: View {
-    let selectedDate: Date
-    let events: [Event]
-    let onDismiss: () -> Void
-    let onNavigateDate: (Date) -> Void
-    
-    private let calendar = Calendar.current
-    private let dateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEEE, MMMM d"
-        return formatter
-    }()
-    
-    var body: some View {
-        VStack(spacing: 0) {
-            // Drag handle
-            RoundedRectangle(cornerRadius: 2)
-                .fill(Color.secondary)
-                .frame(width: 40, height: 4)
-                .padding(.top, 8)
-            
-            // Header with date navigation
-            HStack {
-                Button(action: { navigateDate(-1) }) {
-                    Image(systemName: "chevron.left")
-                        .foregroundColor(.primary)
-                }
-                
-                Spacer()
-                
-                Text(dateFormatter.string(from: selectedDate))
-                    .font(.headline)
-                    .fontWeight(.semibold)
-                
-                Spacer()
-                
-                Button(action: { navigateDate(1) }) {
-                    Image(systemName: "chevron.right")
-                        .foregroundColor(.primary)
-                }
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
-            
-            Divider()
-            
-            // Events list
-            if events.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "calendar")
-                        .font(.system(size: 40))
-                        .foregroundColor(.secondary)
-                    Text("No events scheduled")
-                        .font(.headline)
-                        .foregroundColor(.secondary)
-                    Text("Tap 'New Event' to add an event")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                .padding(.vertical, 40)
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        ForEach(events, id: \.objectID) { event in
-                            EventRowView(event: event)
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 16)
-                }
-            }
-            
-            Spacer()
-        }
-        .background(
-            Color(.systemBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-                .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: -5)
-        )
-        .frame(maxHeight: UIScreen.main.bounds.height * 0.6)
-        .gesture(
-            DragGesture()
-                .onEnded { value in
-                    if value.translation.y > 100 {
-                        onDismiss()
-                    }
-                }
-        )
+    private func startOfDay(_ date: Date) -> Date {
+        calendar.startOfDay(for: date)
     }
-    
-    private func navigateDate(_ direction: Int) {
-        if let newDate = calendar.date(byAdding: .day, value: direction, to: selectedDate) {
-            onNavigateDate(newDate)
-        }
-    }
-}
 
-// MARK: - Event Row View
-struct EventRowView: View {
-    let event: Event
     
-    private let timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        return formatter
-    }()
-    
-    var body: some View {
-        HStack(spacing: 12) {
-            // Time indicator
-            VStack(alignment: .leading) {
-                Text(timeFormatter.string(from: event.time ?? Date()))
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundColor(.secondary)
-            }
-            .frame(width: 60, alignment: .leading)
-            
-            // Event content
-            VStack(alignment: .leading, spacing: 4) {
-                Text(event.name ?? "Untitled Event")
-                    .font(.headline)
-                    .foregroundColor(.primary)
-                
-                if let location = event.location, !location.isEmpty {
-                    Text(location)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                
-                // Outfit count
-                let outfitCount = (event.outfits as? Set<Outfit>)?.count ?? 0
-                if outfitCount > 0 {
-                    Text("\(outfitCount) outfit\(outfitCount == 1 ? "" : "s")")
-                        .font(.caption)
-                        .foregroundColor(.blue)
-                }
-            }
-            
-            Spacer()
-            
-            // Chevron
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundColor(.secondary)
-        }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color(.secondarySystemBackground))
-        )
-    }
-}
-
-// MARK: - Create Event View
-struct CreateEventView: View {
-    @Environment(\.managedObjectContext) private var viewContext
-    @Environment(\.dismiss) private var dismiss
-    
-    @State private var eventName = "Outfit of the Day"
-    @State private var eventLocation = ""
-    @State private var eventDate = Date()
-    @State private var eventTime = Date()
-    
-    var body: some View {
-        NavigationView {
-            Form {
-                Section("Event Details") {
-                    TextField("Event Name", text: $eventName)
-                    TextField("Location (Optional)", text: $eventLocation)
-                }
-                
-                Section("Date & Time") {
-                    DatePicker("Date", selection: $eventDate, displayedComponents: .date)
-                    DatePicker("Time", selection: $eventTime, displayedComponents: .hourAndMinute)
-                }
-            }
-            .navigationTitle("New Event")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") {
-                        saveEvent()
-                    }
-                    .disabled(eventName.isEmpty)
-                }
-            }
-        }
-    }
-    
-    private func saveEvent() {
-        let newEvent = Event(context: viewContext)
-        newEvent.id = UUID()
-        newEvent.name = eventName
-        newEvent.location = eventLocation.isEmpty ? nil : eventLocation
-        newEvent.date = eventDate
-        newEvent.time = eventTime
-        newEvent.timestamp = Date()
-        
+    private func fetchEvents() {
+        let request = NSFetchRequest<Event>(entityName: "Event")
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Event.timestamp, ascending: false)]
         do {
-            try viewContext.save()
-            dismiss()
+            let results = try viewContext.fetch(request)
+            DispatchQueue.main.async { self.events = results }
         } catch {
-            print("Error saving event: \(error)")
+            print("Failed to fetch events: \(error)")
+            DispatchQueue.main.async { self.events = [] }
         }
     }
 }
+
+
+
+
+
+
+
+
+
