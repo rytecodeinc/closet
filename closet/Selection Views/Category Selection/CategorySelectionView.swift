@@ -9,14 +9,6 @@ import SwiftUI
 import CoreData
 import Foundation
 
-import SwiftUI
-import CoreData
-import Foundation
-
-import SwiftUI
-import CoreData
-import Foundation
-
 struct CategorySelectionView: View {
     @ObservedObject var item: Item
     @Environment(\.managedObjectContext) private var viewContext
@@ -48,46 +40,37 @@ struct CategorySelectionView: View {
                         HStack {
                             Text(name)
                                 .foregroundColor(.black)
-                            Spacer()
-                            if selectedCategoryName == name && selectedSubcategoryName == nil {
-                                Image(systemName: "checkmark")
-                                    .foregroundColor(.blue)
-                            }
-                            if hasSubs {
-                                Image(systemName: isOpen ? "chevron.down" : "chevron.right")
-                                    .foregroundColor(.gray)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            if hasSubs {
-                                if !isOpen {
-                                    // First tap: expand only
-                                    toggle(category)
-                                } else {
-                                    // Expanded: toggle parent category selection
-                                    let parentSelected = (selectedCategoryName == name && selectedSubcategoryName == nil)
-                                    if parentSelected {
-                                        // Deselect all
+                                .onTapGesture {
+                                    // Select the category (does NOT affect expansion)
+                                    if selectedCategoryName == name && selectedSubcategoryName == nil {
                                         selectedCategoryName = nil
-                                        selectedSubcategoryName = nil
                                     } else {
-                                        // Select parent (clear any sub)
                                         selectedCategoryName = name
                                         selectedSubcategoryName = nil
                                     }
                                 }
-                            } else {
-                                // No subcategories: toggle this category
-                                if selectedCategoryName == name {
-                                    selectedCategoryName = nil
-                                    selectedSubcategoryName = nil
-                                } else {
-                                    selectedCategoryName = name
-                                    selectedSubcategoryName = nil
-                                }
+
+                            Spacer()
+                            
+                            if hasSubs {
+                                // Chevron is the expand/collapse button
+                                Image(systemName: isOpen ? "chevron.down" : "chevron.right")
+                                    .foregroundColor(.gray)
+                                    .onTapGesture {
+                                        toggle(category)
+                                    }
+                            }
+
+                            if selectedCategoryName == name && selectedSubcategoryName == nil {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.blue)
                             }
                         }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            toggle(category)
+                        }
+
 
                         // Subcategory rows (only when expanded)
                         if isOpen {
