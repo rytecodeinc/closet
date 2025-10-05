@@ -10,7 +10,9 @@ import SwiftUI
 import CoreData
 
 struct OutfitDetailView: View {
-    let outfit: Outfit
+    @ObservedObject var outfit: Outfit
+    @Environment(\.dismiss) private var dismiss
+    
     private var screenWidth: CGFloat { UIScreen.main.bounds.width }
     
     var body: some View {
@@ -62,5 +64,10 @@ struct OutfitDetailView: View {
         }
         .navigationTitle("Outfit Details")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            NavigationLink(destination: OutfitCanvasView(outfitToEdit: outfit)) {
+                Text("Edit Outfit")
+            }
+        }
     }
 }
