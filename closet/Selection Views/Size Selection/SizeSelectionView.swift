@@ -93,10 +93,14 @@ struct SizeSelectionView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            if let id = size.id {
-                selectedSizeID = id
-            } else {
+            guard let id = size.id else { return }
+            
+            if selectedSizeID == id {
+                // Deselect if tapped again
                 selectedSizeID = nil
+                item.size = nil
+            } else {
+                selectedSizeID = id
                 item.size = size
             }
         }
