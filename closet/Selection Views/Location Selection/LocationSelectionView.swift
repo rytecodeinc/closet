@@ -28,7 +28,7 @@ struct LocationSelectionView: View {
 
         VStack(spacing: 12) {
             HStack {
-                TextField("Add or select a location", text: $newLocationName)
+                TextField("Where is this item stored?", text: $newLocationName)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
 
                 Button("Add") {

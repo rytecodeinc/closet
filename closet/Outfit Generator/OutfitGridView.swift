@@ -9,7 +9,7 @@ import Foundation
 import CoreData
 import SwiftUI
 
-struct OutfitDisplayView: View {
+struct OutfitGridView: View {
     @Environment(\.managedObjectContext) private var viewContext
     
     @State private var outfits: [Outfit] = []
