@@ -25,13 +25,13 @@ struct AttributesSectionView: View {
     var body: some View {
         Section {
             categoryRow()
+            brandRow()
             sizeRow()
             colorRow()
             seasonRow()
-            brandRow()
+            locationRow()
             priceRow()
             linkRow()
-            locationRow()
             tagRow()
         }/* header: {
             Text("ATTRIBUTES").fontWeight(.semibold)
@@ -191,15 +191,21 @@ extension AttributesSectionView {
         }
     }
 
-    // Price
+    // Price Row
     func priceRow() -> some View {
         Button { activeSheet = .price } label: {
             HStack {
                 Text("Price").foregroundColor(.primary)
                 Spacer()
-                if let amount = item.price?.amount {
-                    HStack(spacing: 0) {
-                        Text(currencySymbol).foregroundColor(.gray)
+                if let price = item.price, let amount = price.amount {
+                    let currencySymbol = (price.currency != nil)
+                        ? Locale(identifier: Locale.identifier(fromComponents: [NSLocale.Key.currencyCode.rawValue: price.currency!]))
+                            .currencySymbol ?? "$"
+                        : Locale.current.currencySymbol ?? "$"
+                    
+                    HStack(spacing: 2) {
+                        Text(currencySymbol)
+                            .foregroundColor(.gray)
                         Text(NumberFormatter.currency2.string(from: amount) ?? "0.00")
                             .foregroundColor(.gray)
                             .multilineTextAlignment(.trailing)
@@ -212,6 +218,7 @@ extension AttributesSectionView {
             }
         }
     }
+
 
     // Links
     func linkRow() -> some View {
