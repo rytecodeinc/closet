@@ -295,10 +295,9 @@ struct OutfitCanvasView: View {
     
     private func captureCollageAsImage() -> UIImage? {
         let collageView = ZStack {
-            Rectangle()
-                .fill(Color.white)
-                .frame(width: squareSize, height: squareSize)
-
+            Color(red: 247/255, green: 247/255, blue: 247/255)
+                    .ignoresSafeArea()
+            // gray background color of outfits
             ForEach(outfitItems.sorted(by: { $0.zIndex < $1.zIndex })) { outfitItem in
                 DraggableOutfitItemView(
                     outfitItem: outfitItem,
@@ -316,6 +315,8 @@ struct OutfitCanvasView: View {
         .frame(width: squareSize, height: squareSize)
 
         let hostingController = UIHostingController(rootView: collageView)
+        hostingController.sizingOptions = .intrinsicContentSize
+        hostingController.view.insetsLayoutMarginsFromSafeArea = false
         hostingController.view.frame = CGRect(origin: .zero, size: CGSize(width: squareSize, height: squareSize))
         hostingController.view.backgroundColor = .clear
         hostingController.view.layoutIfNeeded()

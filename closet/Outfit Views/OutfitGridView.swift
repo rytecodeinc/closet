@@ -18,8 +18,8 @@ struct OutfitGridView: View {
     @State private var showingDeleteConfirmation: Bool = false
     
     private let gridColumns = [
-        GridItem(.flexible(), spacing: 0),
-        GridItem(.flexible(), spacing: 0)
+        GridItem(.flexible(), spacing: 6),
+        GridItem(.flexible(), spacing: 6)
     ]
     
     private var squareSize = UIScreen.main.bounds.width / 2.0
@@ -43,7 +43,7 @@ struct OutfitGridView: View {
                     .padding()
                 } else {
                     ScrollView {
-                        LazyVGrid(columns: gridColumns, spacing: 0) {
+                        LazyVGrid(columns: gridColumns, spacing: 6) {
                             ForEach(outfits, id: \.objectID) { outfit in
                                 ZStack(alignment: .topTrailing) {
                                     NavigationLink(destination: OutfitDetailView(outfit: outfit)) {
@@ -54,7 +54,7 @@ struct OutfitGridView: View {
                                                 .aspectRatio(1, contentMode: .fill)
                                                 .frame(width: squareSize)
                                                 .clipped()
-                                                .border(.gray.opacity(0.3), width: 0.5)
+                                               // .border(.gray.opacity(0.3), width: 0.5)
                                         } else {
                                             RoundedRectangle(cornerRadius: 12)
                                                 .fill(Color(.systemGray5))

@@ -145,10 +145,35 @@ private extension ClosetView {
                     } label: {
                         HStack {
                             Text(closet.name ?? "Untitled")
+                            
+                            // Add "Default" label next to the first closet
+                            if closet == closets.first {
+                                Text("Default")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(
+                                        Capsule()
+                                            .fill(Color(UIColor.secondarySystemBackground))
+                                    )
+                            }
+                            
                             Spacer()
+                            
                             if closet == selectedCloset {
                                 Image(systemName: "checkmark")
                                     .foregroundColor(.blue)
+                            }
+                        }
+                    }
+                    // Prevent swipe-to-delete on the first (default) closet
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        if closet != closets.first {
+                            Button(role: .destructive) {
+                                deleteCloset(closet)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
                             }
                         }
                     }
@@ -175,6 +200,7 @@ private extension ClosetView {
         }
         .presentationDetents([.medium, .large])
     }
+
     
     private func createNewCloset(named name: String) -> Wardrobe? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -194,6 +220,21 @@ private extension ClosetView {
             return nil
         }
     }
+    
+    private func deleteCloset(_ closet: Wardrobe) {
+        viewContext.delete(closet)
+        do {
+            try viewContext.save()
+        } catch {
+            print("❌ Failed to delete closet: \(error.localizedDescription)")
+        }
+
+        // Reset selectedCloset if the deleted one was selected
+        if selectedCloset == closet {
+            selectedCloset = closets.first
+        }
+    }
+
 }
 
 

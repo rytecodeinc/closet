@@ -9,9 +9,6 @@
 import SwiftUI
 import CoreData
 
-import SwiftUI
-import CoreData
-
 struct OutfitCalendarView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @State private var events: [Event] = []
@@ -186,50 +183,16 @@ struct OutfitCalendarView: View {
         let isToday = calendar.isDateInToday(date)
         let cellWidth = UIScreen.main.bounds.width / 7
 
-        return VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 2) {
-                // Day number with circle background
-                ZStack {
-                    if isToday || isSelected {
-                        Circle()
-                            .fill(isSelected ? Color.blue : Color.blue.opacity(0.2))
-                            .frame(width: cellWidth * 0.5, height: cellWidth * 0.5)
-                    }
-                    Text("\(calendar.component(.day, from: date))")
-                        .font(.system(size: 14, weight: isToday ? .semibold : .regular))
-                        .foregroundColor(
-                            isSelected ? .white :
-                                (isToday ? .blue :
-                                    (isCurrentMonth ? .primary : .gray.opacity(0.5)))
-                            
-                        )
-                        .frame(width: cellWidth * 0.5, height: cellWidth * 0.5)
-                }
-                
-                // Event indicators
-                VStack(spacing: 3) {
-                    ForEach(0..<min(dayEvents.count, 3), id: \.self) { _ in
-                        Circle()
-                            .fill(Color.blue)
-                            .frame(width: 4, height: 4)
-                    }
-                    if dayEvents.count > 3 {
-                        Text("+")
-                            .font(.system(size: 8))
-                            .foregroundColor(.blue)
-                    }
-                }
-                .frame(width: cellWidth, height: 8)
-                
-                Spacer() // push everything to the top
-            }
+        return VStack(spacing: 2) {
+            dayNumberView(for: date, isToday: isToday, isSelected: isSelected, isCurrentMonth: isCurrentMonth, cellWidth: cellWidth)
+
+            eventListView(for: dayEvents, cellWidth: cellWidth)
+
+            Spacer(minLength: 2)
         }
         .frame(width: cellWidth, height: height)
         .contentShape(Rectangle())
-        .overlay(
-            Rectangle()
-                .stroke(Color.gray.opacity(0.3), lineWidth: 0.5)
-        )
+        .overlay(Rectangle().stroke(Color.gray.opacity(0.3), lineWidth: 0.5))
         .onTapGesture {
             selectedDate = date
             withAnimation(.easeInOut(duration: 0.3)) {
@@ -237,6 +200,56 @@ struct OutfitCalendarView: View {
             }
         }
     }
+
+    @ViewBuilder
+    private func dayNumberView(for date: Date, isToday: Bool, isSelected: Bool, isCurrentMonth: Bool, cellWidth: CGFloat) -> some View {
+        ZStack {
+            if isToday || isSelected {
+                Circle()
+                    .fill(isSelected ? Color.blue : Color.blue.opacity(0.2))
+                    .frame(width: cellWidth * 0.5, height: cellWidth * 0.5)
+            }
+
+            Text("\(calendar.component(.day, from: date))")
+                .font(.system(size: 14, weight: isToday ? .semibold : .regular))
+                .foregroundColor(
+                    isSelected ? .white :
+                        (isToday ? .blue :
+                            (isCurrentMonth ? .primary : .gray.opacity(0.5)))
+                )
+                .frame(width: cellWidth * 0.5, height: cellWidth * 0.5)
+        }
+    }
+
+    @ViewBuilder
+    private func eventListView(for dayEvents: [Event], cellWidth: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(0..<min(dayEvents.count, 3), id: \.self) { index in
+                if let eventName = dayEvents[index].name {
+                    Text(eventName)
+                        .font(.system(size: 8, weight: .semibold))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 3)
+                        .padding(.vertical, 1)
+                        .background(
+                            RoundedRectangle(cornerRadius: 3)
+                                .fill(.blue)
+                        )
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            if dayEvents.count > 3 {
+                Text("+\(dayEvents.count - 3) more")
+                    .font(.system(size: 8))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .frame(width: cellWidth - 4, alignment: .leading)
+    }
+
+
     
     // MARK: - Helper Functions
     private func startOfMonth(for date: Date) -> Date {

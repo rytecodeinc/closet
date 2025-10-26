@@ -8,7 +8,7 @@
 import SwiftUI
 import CoreData
 
-struct EmptyStateView: View {
+struct EmptyItemStateView: View {
     var body: some View {
         VStack {
             Spacer() // Push the content to the center
