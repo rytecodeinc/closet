@@ -1,3 +1,13 @@
+//
+//  WardrobeListView.swift
+//  closet
+//
+//  Created by Dan Warner on 10/25/25.
+//
+
+import SwiftUI
+import CoreData
+
 struct WardrobeListView: View {
     @Binding var selectedWardrobes: Set<Wardrobe>
 

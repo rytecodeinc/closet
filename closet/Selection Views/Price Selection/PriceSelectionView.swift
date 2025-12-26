@@ -9,8 +9,6 @@
 import SwiftUI
 import CoreData
 
-import SwiftUI
-
 struct PriceSelectionView: View {
     @ObservedObject var item: Item
     @Environment(\.managedObjectContext) private var viewContext

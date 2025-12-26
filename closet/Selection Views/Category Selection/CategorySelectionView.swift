@@ -52,19 +52,21 @@ struct CategorySelectionView: View {
 
                             Spacer()
                             
+                            if selectedCategoryName == name && selectedSubcategoryName == nil {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.blue)
+                            }
+                            
                             if hasSubs {
                                 // Chevron is the expand/collapse button
                                 Image(systemName: isOpen ? "chevron.down" : "chevron.right")
                                     .foregroundColor(.gray)
+                                    .font(.caption)
                                     .onTapGesture {
                                         toggle(category)
                                     }
                             }
 
-                            if selectedCategoryName == name && selectedSubcategoryName == nil {
-                                Image(systemName: "checkmark")
-                                    .foregroundColor(.blue)
-                            }
                         }
                         .contentShape(Rectangle())
                         .onTapGesture {

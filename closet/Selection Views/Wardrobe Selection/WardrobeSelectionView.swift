@@ -1,3 +1,13 @@
+//
+//  WardrobeSelectionView.swift
+//  closet
+//
+//  Created by Dan Warner on 10/25/25.
+//
+
+import SwiftUI
+import CoreData
+
 struct WardrobeSelectionView: View {
     @ObservedObject var item: Item
     @Environment(\.managedObjectContext) private var viewContext

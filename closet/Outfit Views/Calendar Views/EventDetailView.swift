@@ -21,6 +21,12 @@ struct EventDetailView: View {
     
     @Environment(\.managedObjectContext) private var viewContext
     
+    private let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.timeStyle = .short
+        return f
+    }()
+    
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 15) {
@@ -44,15 +50,28 @@ struct EventDetailView: View {
                             .fontWeight(.bold)
                         
                     }
-                    HStack{
+                    HStack {
                         Image(systemName: "clock")
                             .frame(width: 40, alignment: .top)
-                        if let time = event.time {
-                            Text("\(time, formatter: DateFormatter.eventDateTimeFormatter)")
+                        
+                        if let startDate = event.startDate, let endDate = event.endDate {
+                            HStack {
+                                Text(timeFormatter.string(from: startDate))
+                                Text("–")
+                                Text(timeFormatter.string(from: endDate))
+                            }
+                        } else if let startDate = event.startDate {
+                            Text(timeFormatter.string(from: startDate))
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        } else {
+                            Text("No time set")
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
                         }
                     }
+
+
                     
                     HStack(alignment: .top) {
                         Image(systemName: "mappin.and.ellipse")

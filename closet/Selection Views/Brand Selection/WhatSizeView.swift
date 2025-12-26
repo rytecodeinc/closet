@@ -53,16 +53,29 @@ struct WhatSizeView: View {
 
     // Fetch all visible brands
     private func fetchBrands() {
-        let request: NSFetchRequest<Brand> = Brand.fetchRequest()
-        request.predicate = NSPredicate(format: "isVisible == YES")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Brand.name, ascending: true)]
+        let request: NSFetchRequest<Item> = Item.fetchRequest()
+        
         do {
-            brands = try viewContext.fetch(request)
+            let allItems = try viewContext.fetch(request)
+            
+            // Filter items that have at least one wardrobe of type "closet"
+            let closetItems = allItems.filter { item in
+                if let wardrobes = item.wardrobes as? Set<Wardrobe> {
+                    return wardrobes.contains { $0.type == "closet" }
+                }
+                return false
+            }
+            
+            // Extract unique brands
+            let brandArray = closetItems.compactMap { $0.brand }
+            brands = Array(Set(brandArray)).sorted { ($0.name ?? "") < ($1.name ?? "") }
         } catch {
-            print("❌ Failed to fetch brands: \(error.localizedDescription)")
+            print("❌ Failed to fetch closet brands: \(error.localizedDescription)")
             brands = []
         }
     }
+
+
     
     // Fetch unique sizes for a brand from the user's items
     private func fetchSizes(for brand: Brand) -> [String] {
@@ -88,29 +101,36 @@ struct BrandItemsView: View {
 
     var body: some View {
         List(items, id: \.self) { item in
-            HStack {
-                if let imageData = item.image, let uiImage = UIImage(data: imageData) {
-                    Image(uiImage: uiImage)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: 50, height: 50)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                } else {
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(Color.gray.opacity(0.3))
-                        .frame(width: 50, height: 50)
+            NavigationLink(destination: ItemDetailView(item: item)) {
+                HStack {
+                    if let primary = (item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }),
+                       let imageData = primary.data,
+                       let uiImage = UIImage(data: imageData) {
+                        
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 50, height: 50)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        
+                    } else {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.gray.opacity(0.3))
+                            .frame(width: 50, height: 50)
+                    }
+                    
+                    VStack(alignment: .leading) {
+                        Text(item.category?.name ?? "Unknown")
+                            .font(.subheadline)
+                        Text(item.size?.value ?? "N/A")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
-                
-                VStack(alignment: .leading) {
-                    Text(item.category?.name ?? "Unknown")
-                        .font(.subheadline)
-                    Text(item.size?.value ?? "N/A")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
         }
+        .listStyle(.plain)
         .navigationTitle(brand.name ?? "Brand Items")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { fetchItems() }

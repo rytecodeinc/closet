@@ -47,9 +47,12 @@ struct ItemAddView: View {
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
-                Button("Cancel") {
+                Button(role: .destructive) {
                     vm.discard()
                     dismiss()
+                } label: {
+                    Text("Cancel")
+                        .foregroundColor(.red)
                 }
             }
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -296,6 +299,7 @@ private struct ItemAttributesSection: View {
     
     @State private var isWardrobeDrawerPresented = false
     @State private var isCategoryDrawerPresented = false
+    @State private var isSizeDrawerPresented = false
     @State private var isColorDrawerPresented = false
     @State private var isSeasonDrawerPresented = false
     @State private var isBrandDrawerPresented = false
@@ -308,8 +312,9 @@ private struct ItemAttributesSection: View {
 
     var body: some View {
         Section {
-         //   wardrobeRow()
+            wardrobeRow()
             categoryRow()
+            sizeRow()
             colorRow()
             seasonRow()
             brandRow()
@@ -323,7 +328,7 @@ private struct ItemAttributesSection: View {
     }
     
     
-    /*
+    
     private func wardrobeRow() -> some View {
         Button { isWardrobeDrawerPresented = true } label: {
             HStack {
@@ -341,10 +346,10 @@ private struct ItemAttributesSection: View {
             }
         }
         .sheet(isPresented: $isWardrobeDrawerPresented) {
-            WardrobeSelectionView(item: item)
+            SetWardrobeView(item: item)
                 .environment(\.managedObjectContext, item.managedObjectContext!)
         }
-    }*/
+    }
 
     private func categoryRow() -> some View {
         Button { isCategoryDrawerPresented = true } label: {
@@ -356,8 +361,25 @@ private struct ItemAttributesSection: View {
             }
         }
         .sheet(isPresented: $isCategoryDrawerPresented) {
-            CategorySetView(item: item)
+            SetCategoryView(item: item)
                 .environment(\.managedObjectContext, item.managedObjectContext!) // ensure child ctx
+        }
+    }
+    
+    private func sizeRow() -> some View {
+        Button { isSizeDrawerPresented = true } label: {
+            HStack {
+                Text("Size").foregroundColor(.primary)
+                Spacer()
+                if let size = item.size, let value = size.value, !value.isEmpty {
+                    Text(value).foregroundColor(.gray)
+                }
+                Image(systemName: "chevron.right").foregroundColor(.gray)
+            }
+        }
+        .sheet(isPresented: $isSizeDrawerPresented) {
+            SetSizeView(item: item)
+                .environment(\.managedObjectContext, item.managedObjectContext!)
         }
     }
 
@@ -382,7 +404,7 @@ private struct ItemAttributesSection: View {
             }
         }
         .sheet(isPresented: $isColorDrawerPresented) {
-            ColorSelectionView(item: item)
+            SetColorView(item: item)
                 .environment(\.managedObjectContext, item.managedObjectContext!)
         }
     }
@@ -401,7 +423,7 @@ private struct ItemAttributesSection: View {
             }
         }
         .sheet(isPresented: $isSeasonDrawerPresented) {
-            SeasonSelectionView(item: item)
+            SetSeasonView(item: item)
                 .environment(\.managedObjectContext, item.managedObjectContext!)
         }
     }
@@ -438,7 +460,7 @@ private struct ItemAttributesSection: View {
             }
         }
         .sheet(isPresented: $isPriceDrawerPresented) {
-            PriceSelectionView(item: item)
+            SetPriceView(item: item)
                 .environment(\.managedObjectContext, item.managedObjectContext!)
         }
     }
@@ -462,7 +484,7 @@ private struct ItemAttributesSection: View {
             }
         }
         .sheet(isPresented: $isLinkDrawerPresented) {
-            LinkSelectionView(item: item)
+            SetLinkView(item: item)
                 .environment(\.managedObjectContext, item.managedObjectContext!)
         }
     }
@@ -477,7 +499,7 @@ private struct ItemAttributesSection: View {
             }
         }
         .sheet(isPresented: $isLocationDrawerPresented) {
-            LocationSelectionView(item: item)
+            SetLocationView(item: item)
                 .environment(\.managedObjectContext, item.managedObjectContext!)
         }
     }
@@ -498,7 +520,7 @@ private struct ItemAttributesSection: View {
             }
         }
         .sheet(isPresented: $isTagDrawerPresented) {
-            TagSelectionView(item: item)
+            SetTagView(item: item)
                 .environment(\.managedObjectContext, item.managedObjectContext!)
         }
     }

@@ -166,16 +166,10 @@ struct CreateEventView: View {
             DispatchQueue.main.async {
                 selectedLocationTitle = suggestion.title
                 selectedLocationSubtitle = suggestion.subtitle
-                
-                let parts = [
-                    placemark.name,
-                    placemark.thoroughfare,
-                    placemark.locality,
-                    placemark.administrativeArea,
-                    placemark.postalCode
-                ].compactMap { $0 }
-                eventLocation = parts.joined(separator: ", ")
+
+                eventLocation = placemark.name ?? suggestion.title
             }
+
         }
     }
     

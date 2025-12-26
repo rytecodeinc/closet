@@ -24,6 +24,7 @@ struct AttributesSectionView: View {
 
     var body: some View {
         Section {
+            wardrobeRow()
             categoryRow()
             brandRow()
             sizeRow()
@@ -33,45 +34,46 @@ struct AttributesSectionView: View {
             priceRow()
             linkRow()
             tagRow()
-        }/* header: {
-            Text("ATTRIBUTES").fontWeight(.semibold)
-        }*/
-        /* Present the appropriate drawer; inherits environment(\.managedObjectContext)
-        .sheet(item: $activeSheet) { sheet in
-            switch sheet {
-            case .category:
-                CategorySelectionView(item: item)
-            case .size:
-                SizeSelectionView(item: item)
-            case .color:
-                ColorSelectionView(item: item)
-            case .season:
-                SeasonSelectionView(item: item)
-            case .brand:
-                BrandSelectionView(item: item)
-            case .price:
-                PriceSelectionView(item: item)
-            case .link:
-                LinkSelectionView(item: item)
-            case .location:
-                LocationSelectionView(item: item)
-            case .tag:
-                TagSelectionView(item: item)
-            }
-        }*/
+        }
     }
 }
 
 // MARK: - Sheet enum
 extension AttributesSectionView {
     enum Sheet: String, Identifiable {
-        case category, size, color, season, brand, price, link, location, tag
+        case wardrobe, category, size, color, season, brand, price, link, location, tag
         var id: String { rawValue }
     }
 }
 
 // MARK: - Rows
 extension AttributesSectionView {
+    func wardrobeRow() -> some View {
+        Button { activeSheet = .wardrobe } label: {
+            HStack {
+                Text("Wardrobes")
+                    .foregroundColor(.primary)
+                Spacer()
+                
+                if let wardrobes = item.wardrobes as? Set<Wardrobe>, !wardrobes.isEmpty {
+                    // Display names, e.g., "Closet • Capsule • Summer"
+                    let names = wardrobes.compactMap { $0.name }.sorted()
+                    Text(names.prefix(2).joined(separator: ", "))
+                        .foregroundColor(.gray)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    if names.count > 2 {
+                        Text("…").foregroundColor(.gray).font(.headline)
+                    }
+                }
+                
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.gray)
+                    .font(.caption)
+            }
+        }
+    }
+    
     // Category
     // Helper: what to show on the right side of the row
     private var categoryDisplayText: String? {
@@ -319,15 +321,16 @@ extension AttributesSectionView.Sheet {
     @ViewBuilder
     func destination(for item: Item) -> some View {
         switch self {
-        case .category:  CategorySelectionView(item: item)
-        case .size:      SizeSelectionView(item: item)
-        case .color:     ColorSelectionView(item: item)
-        case .season:    SeasonSelectionView(item: item)
-        case .brand:     BrandSelectionView(item: item)
-        case .price:     PriceSelectionView(item: item)
-        case .link:      LinkSelectionView(item: item)
-        case .location:  LocationSelectionView(item: item)
-        case .tag:       TagSelectionView(item: item)
+        case .wardrobe:  SetWardrobeView(item: item)
+        case .category:  SetCategoryView(item: item)
+        case .size:      SetSizeView(item: item)
+        case .color:     SetColorView(item: item)
+        case .season:    SetSeasonView(item: item)
+        case .brand:     SetBrandView(item: item)
+        case .price:     SetPriceView(item: item)
+        case .link:      SetLinkView(item: item)
+        case .location:  SetLocationView(item: item)
+        case .tag:       SetTagView(item: item)
         }
     }
 }

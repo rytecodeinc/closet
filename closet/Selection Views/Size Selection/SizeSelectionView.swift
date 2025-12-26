@@ -10,10 +10,6 @@ import SwiftUI
 import CoreData
 import Foundation
 
-import SwiftUI
-import CoreData
-import Foundation
-
 struct SizeSelectionView: View {
     @ObservedObject var item: Item
     @Environment(\.managedObjectContext) private var viewContext

@@ -8,8 +8,8 @@
 import SwiftUI
 import Foundation
 
-struct FilterView: View {
-    @ObservedObject var filterModel: FilterModel
+struct ItemFilterView: View {
+    @ObservedObject var filterModel: ItemFilterModel
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {

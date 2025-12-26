@@ -37,9 +37,13 @@ struct EventDrawerView: View {
         
         let startOfDay = Calendar.current.startOfDay(for: selectedDate)
         let endOfDay = Calendar.current.date(byAdding: .day, value: 1, to: startOfDay)!
+
         let request: NSFetchRequest<Event> = Event.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Event.timestamp, ascending: false)]
-        request.predicate = NSPredicate(format: "date >= %@ AND date < %@", startOfDay as NSDate, endOfDay as NSDate)
+
+        // Use startDate instead of date
+        request.predicate = NSPredicate(format: "startDate >= %@ AND startDate < %@", startOfDay as NSDate, endOfDay as NSDate)
+
         _events = FetchRequest(fetchRequest: request)
     }
 
@@ -96,10 +100,10 @@ struct EventDrawerView: View {
                                 .environment(\.managedObjectContext, viewContext)) {
                                     EventRowView(event: event)
                                 }
-                                .listRowBackground(
+                               /* .listRowBackground(
                                     RoundedRectangle(cornerRadius: 8)
                                         .fill(Color.blue.opacity(0.1))
-                                )
+                                )*/
                         }
                         .onDelete { indexSet in
                             for index in indexSet {
@@ -163,16 +167,16 @@ struct EventRowView: View {
         return f
     }()
 
-    private let imageSize: CGFloat = 70
+    private let imageSize: CGFloat = 120
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             // time column
-            Text(timeFormatter.string(from: event.time ?? Date()))
-                .font(.caption)
-                .fontWeight(.medium)
+            Text(timeFormatter.string(from: event.startDate ?? Date()))
+             //   .font(.caption)
+             //   .fontWeight(.medium)
                 .foregroundColor(.secondary)
-                .frame(width: 50, alignment: .leading)
+                .frame(width: 70)
 
             // main content (title + horizontally scrollable media)
             VStack(alignment: .leading, spacing: 8) {
@@ -183,9 +187,13 @@ struct EventRowView: View {
                         .foregroundColor(.primary)
 
                     if let location = event.location, !location.isEmpty {
-                        Text(location)
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
+                        HStack(spacing: 0) {
+                          //  Text(" at ")
+                            Text(location)
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+                        
                     }
                 }
 

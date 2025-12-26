@@ -9,7 +9,7 @@ import SwiftUI
 import CoreData
 import Foundation
 
-class FilterModel: ObservableObject {
+class ItemFilterModel: ObservableObject {
     @Published var selectedColors: Set<String> = []
     @Published var selectedSeasons: Set<String> = []
     @Published var selectedBrand: Brand? = nil
@@ -28,7 +28,7 @@ class FilterModel: ObservableObject {
 }
 
 
-func makePredicate(for filterModel: FilterModel) -> NSPredicate? {
+func makePredicate(for filterModel: ItemFilterModel) -> NSPredicate? {
     var subpredicates: [NSPredicate] = []
 
     if !filterModel.selectedColors.isEmpty {

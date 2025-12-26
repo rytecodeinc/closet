@@ -11,7 +11,7 @@ import CoreData
 
 struct WishlistView: View {
     @Environment(\.managedObjectContext) private var viewContext
-    @StateObject var filterModel = FilterModel()
+    @StateObject var filterModel = ItemFilterModel()
     
     @FetchRequest(
         sortDescriptors: [NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)],
@@ -63,9 +63,9 @@ private extension WishlistView {
         ToolbarItem(placement: .principal) {
             wishlistSelectionButton()
         }
-        ToolbarItem(placement: .navigationBarTrailing) {
+      /*  ToolbarItem(placement: .navigationBarTrailing) {
             addItemButton()
-        }
+        }*/
     }
     
     func wishlistSelectionButton() -> some View {
@@ -77,7 +77,7 @@ private extension WishlistView {
                 Text(selectedWishlist?.name ?? "Select Wishlist")
                     .font(.headline)
                 Image(systemName: "chevron.down")
-                    .font(.footnote)
+                    .font(.caption)
             }
         }
     }
@@ -128,10 +128,34 @@ private extension WishlistView {
                     } label: {
                         HStack {
                             Text(wishlist.name ?? "Untitled")
+                            
+                            // Add “Default” badge for the first wishlist
+                            if wishlist == wishlists.first {
+                                Text("Default")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(
+                                        Capsule()
+                                            .fill(Color(UIColor.secondarySystemBackground))
+                                    )
+                            }
+                            
                             Spacer()
                             if wishlist == selectedWishlist {
                                 Image(systemName: "checkmark")
                                     .foregroundColor(.blue)
+                            }
+                        }
+                    }
+                    // Prevent deleting the default wishlist
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        if wishlist != wishlists.first {
+                            Button(role: .destructive) {
+                                deleteWishlist(wishlist)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
                             }
                         }
                     }
@@ -142,7 +166,7 @@ private extension WishlistView {
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(Color(UIColor.secondarySystemBackground), for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
-            .toolbar {
+           /* .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
                         newWishlistName = ""
@@ -154,10 +178,11 @@ private extension WishlistView {
                         }
                     }
                 }
-            }
+            }*/
         }
         .presentationDetents([.medium, .large])
     }
+
     
     private func createNewWishlist(named name: String) -> Wardrobe? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -177,6 +202,21 @@ private extension WishlistView {
             return nil
         }
     }
+    
+    private func deleteWishlist(_ wishlist: Wardrobe) {
+        viewContext.delete(wishlist)
+        do {
+            try viewContext.save()
+        } catch {
+            print("❌ Failed to delete wishlist: \(error.localizedDescription)")
+        }
+
+        // If the deleted wishlist was selected, reset to the default one
+        if selectedWishlist == wishlist {
+            selectedWishlist = wishlists.first
+        }
+    }
+
 }
 
 

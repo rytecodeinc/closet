@@ -11,14 +11,14 @@ import CoreData
 
 struct ClosetView: View {
     @Environment(\.managedObjectContext) private var viewContext
-    @StateObject var filterModel = FilterModel()
+    @StateObject var filterModel = ItemFilterModel()
     
     @FetchRequest(
         sortDescriptors: [NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)],
         predicate: NSPredicate(format: "type == %@", "closet")
     ) private var closets: FetchedResults<Wardrobe>
     
-    @State private var selectedCloset: Wardrobe?
+    @State private var selectedWardrobe: Wardrobe?
     @State private var showClosetSheet = false
     @State private var newClosetName: String = ""
     @State private var isCreatingNewCloset = false
@@ -53,7 +53,7 @@ private extension ClosetView {
     
     @ViewBuilder
     func mainContent() -> some View {
-        if let selected = selectedCloset {
+        if let selected = selectedWardrobe {
             ItemGridView(
                 filterModel: filterModel,
                 wardrobeType: "closet",
@@ -78,9 +78,9 @@ private extension ClosetView {
                 Image(systemName: "ruler")
             }
         }
-        ToolbarItem(placement: .navigationBarTrailing) {
+     /*   ToolbarItem(placement: .navigationBarTrailing) {
             addItemButton()
-        }
+        }*/
         
     }
     
@@ -90,19 +90,19 @@ private extension ClosetView {
             isCreatingNewCloset = false
         } label: {
             HStack(spacing: 4) {
-                Text(selectedCloset?.name ?? "Select Closet")
+                Text(selectedWardrobe?.name ?? "Select Closet")
                     .font(.headline)
                 Image(systemName: "chevron.down")
-                    .font(.footnote)
+                    .font(.caption)
             }
         }
     }
     
     @ViewBuilder
     func addItemButton() -> some View {
-        if let selectedCloset = selectedCloset {
+        if let selectedWardrobe = selectedWardrobe {
             NavigationLink(
-                destination: ItemAddView(parentContext: viewContext, selectedWardrobe: selectedCloset)
+                destination: ItemAddView(parentContext: viewContext, selectedWardrobe: selectedWardrobe)
             ) {
                 Image(systemName: "plus")
             }
@@ -111,11 +111,11 @@ private extension ClosetView {
     
     /// Ensure the default "Closet" (seeded) is always used first
     func setInitialCloset() {
-        if selectedCloset == nil {
+        if selectedWardrobe == nil {
             if closets.isEmpty {
                 isCreatingNewCloset = true   // force first-time creation
             } else {
-                selectedCloset = closets.first
+                selectedWardrobe = closets.first
             }
         }
     }
@@ -126,7 +126,7 @@ private extension ClosetView {
             TextField("i.e. Vacation, Business Trip", text: $newClosetName)
             Button("Create") {
                 if let newCloset = createNewCloset(named: newClosetName) {
-                    selectedCloset = newCloset
+                    selectedWardrobe = newCloset
                 }
                 showClosetSheet = false
             }
@@ -140,7 +140,7 @@ private extension ClosetView {
             List {
                 ForEach(closets, id: \.self) { closet in
                     Button {
-                        selectedCloset = closet
+                        selectedWardrobe = closet
                         showClosetSheet = false
                     } label: {
                         HStack {
@@ -161,7 +161,7 @@ private extension ClosetView {
                             
                             Spacer()
                             
-                            if closet == selectedCloset {
+                            if closet == selectedWardrobe {
                                 Image(systemName: "checkmark")
                                     .foregroundColor(.blue)
                             }
@@ -230,8 +230,8 @@ private extension ClosetView {
         }
 
         // Reset selectedCloset if the deleted one was selected
-        if selectedCloset == closet {
-            selectedCloset = closets.first
+        if selectedWardrobe == closet {
+            selectedWardrobe = closets.first
         }
     }
 

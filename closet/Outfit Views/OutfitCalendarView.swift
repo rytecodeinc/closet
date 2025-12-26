@@ -304,11 +304,13 @@ struct OutfitCalendarView: View {
     }
     
     private func eventsForDate(_ date: Date) -> [Event] {
-        let dayStart = startOfDay(date)
+        let dayStart = calendar.startOfDay(for: date)
         return events.filter {
-            startOfDay($0.date ?? Date()) == dayStart
+            guard let eventStart = $0.startDate else { return false }
+            return calendar.isDate(eventStart, inSameDayAs: dayStart)
         }
     }
+
 
     private func startOfDay(_ date: Date) -> Date {
         calendar.startOfDay(for: date)

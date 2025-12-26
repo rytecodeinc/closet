@@ -16,23 +16,22 @@ struct OutfitView: View {
     private let backgroundColor = Color(red: 247/255, green: 247/255, blue: 247/255)
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 2) {
             // Outfit image
             if let imageData = outfit.image,
                let uiImage = UIImage(data: imageData) {
                 Image(uiImage: uiImage)
                     .resizable()
                     .scaledToFill()
-                    .frame(width: UIScreen.main.bounds.width / 3,
-                           height: UIScreen.main.bounds.width / 3)
+                    .aspectRatio(1, contentMode: .fill)
+                    .frame(minWidth: 120, minHeight: 120)
                     .clipped()
                     .background(backgroundColor)
-                    .cornerRadius(8)
             } else {
-                RoundedRectangle(cornerRadius: 8)
+                Rectangle()
                     .fill(backgroundColor)
-                    .frame(width: UIScreen.main.bounds.width / 3,
-                           height: UIScreen.main.bounds.width / 3)
+                    .aspectRatio(1, contentMode: .fill)
+                    .frame(minWidth: 120, minHeight: 120)
                     .overlay(
                         Image(systemName: "photo")
                             .foregroundColor(.secondary)
@@ -40,7 +39,7 @@ struct OutfitView: View {
                     )
             }
 
-            // Optional outfit info below the image
+            /* Optional outfit info below the image
             VStack(alignment: .leading, spacing: 2) {
                 if let name = outfit.name, !name.isEmpty {
                     Text(name)
@@ -58,7 +57,7 @@ struct OutfitView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 4)
-            .padding(.top, 2)
+            .padding(.top, 2)*/
         }
         .contentShape(Rectangle()) // ensures full tap area in NavigationLink
     }

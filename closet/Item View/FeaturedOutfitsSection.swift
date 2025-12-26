@@ -12,7 +12,7 @@ struct FeaturedOutfitsSection: View {
     let outfits: [Outfit]
 
     var body: some View {
-        Section(header: Text("FEATURED OUTFITS")) {
+       
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(outfits, id: \.objectID) { outfit in
@@ -21,12 +21,12 @@ struct FeaturedOutfitsSection: View {
                 }
                 .padding(.vertical, 4)
             }
-        }
+        
     }
 }
 
 struct FeaturedOutfitCell: View {
-    let outfit: Outfit
+    @ObservedObject var outfit: Outfit
 
     var body: some View {
         NavigationLink(destination: OutfitDetailView(outfit: outfit)) {
@@ -41,7 +41,7 @@ struct FeaturedOutfitCell: View {
 }
 
 struct OutfitImageView: View {
-    let outfit: Outfit
+    @ObservedObject var outfit: Outfit
 
     var body: some View {
         if let imageData = outfit.image,

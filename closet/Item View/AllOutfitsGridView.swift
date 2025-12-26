@@ -1,40 +1,68 @@
-struct AllOutfitsGridView: View {
-    let outfits: [Outfit]
+//
+//  AllOutfitsGridView.swift
+//  closet
+//
+//  Created by Dan Warner on 10/8/25.
+//
 
+import SwiftUI
+import CoreData
+
+struct AllOutfitsGridView: View {
+    let item: Item  // Pass the item instead of outfits array
+    
+    @FetchRequest private var outfits: FetchedResults<Outfit>
+    
+    init(item: Item) {
+        self.item = item
+        // Fetch outfits that contain this item
+        _outfits = FetchRequest(
+            entity: Outfit.entity(),
+            sortDescriptors: [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: false)],
+            predicate: NSPredicate(format: "items CONTAINS %@", item)
+        )
+    }
+    
     private let columns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
+        GridItem(.flexible(), spacing: 6),
+        GridItem(.flexible(), spacing: 6)
     ]
 
     var body: some View {
         ScrollView {
-            LazyVGrid(columns: columns, spacing: 12) {
+            LazyVGrid(columns: columns, spacing: 6) {
                 ForEach(outfits, id: \.objectID) { outfit in
                     NavigationLink(destination: OutfitDetailView(outfit: outfit)) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            OutfitImageView(outfit: outfit)
-                                .frame(height: 180)
-                                .cornerRadius(10)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 10)
-                                        .stroke(Color.gray.opacity(0.2))
-                                )
-                            
-                            if let name = outfit.name, !name.isEmpty {
-                                Text(name)
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(.primary)
-                                    .lineLimit(1)
-                            }
-                        }
+                        OutfitGridCell(outfit: outfit)
                     }
                 }
             }
-            .padding()
         }
         .navigationTitle("Featured Outfits")
         .navigationBarTitleDisplayMode(.inline)
-        .background(Color(UIColor.systemGroupedBackground))
+    }
+}
+
+private struct OutfitGridCell: View {
+    @ObservedObject var outfit: Outfit
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            OutfitImageView(outfit: outfit)
+                .frame(height: UIScreen.main.bounds.width * 0.5)
+               // .cornerRadius(10)
+               /* .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.gray.opacity(0.2))
+                )*/
+
+           /* if let name = outfit.name, !name.isEmpty {
+                Text(name)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+            }*/
+        }
     }
 }

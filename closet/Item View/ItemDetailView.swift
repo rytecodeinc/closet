@@ -12,6 +12,29 @@ import CoreData
 
 struct ItemDetailView: View {
     @ObservedObject var item: Item
+    @FetchRequest private var outfits: FetchedResults<Outfit>
+    
+    init(item: Item) {
+        self._item = ObservedObject(wrappedValue: item)
+        
+        // Only create a predicate if the object has been saved and has an ID
+        if let objectID = item.objectID.uriRepresentation().absoluteString as String?,
+           !item.objectID.isTemporaryID {
+            let predicate = NSPredicate(format: "ANY items == %@", item)
+            _outfits = FetchRequest(
+                entity: Outfit.entity(),
+                sortDescriptors: [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: false)],
+                predicate: predicate
+            )
+        } else {
+            // Create a harmless "empty" fetch request to avoid crashes
+            _outfits = FetchRequest(
+                entity: Outfit.entity(),
+                sortDescriptors: [],
+                predicate: NSPredicate(value: false)
+            )
+        }
+    }
     @State private var isEditingAttributes = false
     @State private var attributesSheet: AttributesSectionView.Sheet?
     @State private var isImageFullScreen = false
@@ -38,30 +61,57 @@ struct ItemDetailView: View {
                         .listRowSeparator(.hidden)
                         .listSectionSpacing(.compact)
                     
+                    /* Share button icon
+                    if let primaryPhoto = (item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }),
+                       let imageData = primaryPhoto.data,
+                       let image = UIImage(data: imageData) {
+                        
+                        HStack {
+                               // Text("Search with Google Lens")
+                                Spacer()
+                                ShareLink(item: Image(uiImage: image), preview: SharePreview("Share Item", image: Image(uiImage: image))) {
+                                    Image(systemName: "square.and.arrow.up")
+                                }
+                            }
+                        .listRowSeparator(.hidden)
+                    }*/
+                    
                     // ATTRIBUTES Section
-                    if isEditingAttributes {
+                //    if isEditingAttributes {
                         Section{
                             AttributesSectionView(item: item, activeSheet: $attributesSheet)
                                 .transition(.opacity.combined(with: .slide))
-                              //  .listRowInsets(EdgeInsets(top: 05, leading: 20, bottom: 05, trailing: 20))
+                                .listRowInsets(EdgeInsets(top: 05, leading: 20, bottom: 05, trailing: 20))
                         } header: {
                             HStack {
                                 Text("ATTRIBUTES")
                                     .fontWeight(.semibold)
                                 Spacer()
-                                Button(isEditingAttributes ? "Done" : "Edit") {
-                                    withAnimation {
-                                        isEditingAttributes.toggle()
-                                        attributesSheet = nil // reset binding when switching
+                                if let primaryPhoto = (item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }),
+                                   let imageData = primaryPhoto.data,
+                                   let image = UIImage(data: imageData) {
+
+                                    let shareText = """
+                                    \(item.name ?? "Wishlist Item")
+                                    Brand: \(item.brand?.name ?? "N/A")
+                                    Size: \(item.size?.value ?? "N/A")
+                                    Category: \(item.category?.name ?? "N/A")
+                                    """
+
+                                    let sharePayload = ShareableItem(text: shareText, image: image)
+
+                                    ShareLink(
+                                        item: sharePayload,
+                                        preview: SharePreview(item.name ?? "Share Item", image: Image(uiImage: image))
+                                    ) {
+                                        Image(systemName: "square.and.arrow.up")
                                     }
                                 }
-                                .font(.subheadline)
-                                .foregroundColor(.blue)
                             }
                         }
                       //  .listRowInsets(EdgeInsets(.zero))
                             
-                    } else {
+                /*    } else {
                         Section {
                             AttributesDisplayView(item: item)
                                 .transition(.opacity.combined(with: .slide))
@@ -82,16 +132,29 @@ struct ItemDetailView: View {
                             }
                         }
                        // .listRowInsets(EdgeInsets(.zero))
-                    }
+                    }*/
                     
-                    // Outfits this item is Featured In
-                    if let outfitsSet = item.outfits,
-                       let outfits = outfitsSet.array as? [Outfit],
-                        !outfits.isEmpty {
-                        FeaturedOutfitsSection(outfits: outfits)
+                    
+                    // Show outfits section only if there are results
+                    if !outfits.isEmpty {
+                        Section {
+                            FeaturedOutfitsSection(outfits: Array(outfits))
+                        } header: {
+                            HStack {
+                                Text("FEATURED OUTFITS")
+                                    .fontWeight(.semibold)
+                                Spacer()
+                                NavigationLink(destination: AllOutfitsGridView(item: item)) {
+                                    Text("View All")
+                                        .font(.subheadline)
+                                        .foregroundColor(.blue)
+                                }
+                            }
+                        }
                     }
                 }
                 .listStyle(.plain)
+               // .listSectionSpacing(.compact)
             }
         }
         .sheet(item: $attributesSheet) { $0.destination(for: item) }
@@ -351,6 +414,53 @@ struct ItemDetailView: View {
         } catch {
             // Handle the error (e.g., log it or show alert)
             print("Failed to delete item: \(error.localizedDescription)")
+        }
+    }
+    
+    private func SearchWithGoogleLens() {
+        guard let primaryPhoto = (item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }),
+              let imageData = primaryPhoto.data,
+              let image = UIImage(data: imageData) else {
+            print("❌ No primary image found")
+            return
+        }
+        
+        // Save image to temporary directory
+        let tempDirectory = FileManager.default.temporaryDirectory
+        let fileName = "lens_search_\(UUID().uuidString).jpg"
+        let fileURL = tempDirectory.appendingPathComponent(fileName)
+        
+        guard let jpegData = image.jpegData(compressionQuality: 0.8) else {
+            print("❌ Failed to convert image to JPEG")
+            return
+        }
+        
+        do {
+            try jpegData.write(to: fileURL)
+            
+            // Try Google app first, then fall back to browser
+            if let googleLensURL = URL(string: "googleapp://lens") {
+                if UIApplication.shared.canOpenURL(googleLensURL) {
+                    // Copy image to pasteboard so Google Lens can access it
+                    UIPasteboard.general.image = image
+                    UIApplication.shared.open(googleLensURL)
+                } else {
+                    // Fallback: Open Google Lens web version
+                    openGoogleLensWeb(with: image)
+                }
+            }
+        } catch {
+            print("❌ Failed to save image: \(error.localizedDescription)")
+        }
+    }
+    
+    private func openGoogleLensWeb(with image: UIImage) {
+        // Copy image to pasteboard for potential paste
+        UIPasteboard.general.image = image
+        
+        // Open Google Lens web interface
+        if let url = URL(string: "https://lens.google.com/") {
+            UIApplication.shared.open(url)
         }
     }
 }

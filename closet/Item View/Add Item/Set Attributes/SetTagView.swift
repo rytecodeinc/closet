@@ -54,7 +54,7 @@ struct SetTagView: View {
             fetchTags()
         }
         .sheet(isPresented: $showAddTagView) {
-            TagDisplayView(item: item)
+            SetTagDisplayView(item: item)
                 .environment(\.managedObjectContext, viewContext)
         }
         .presentationDetents([.medium, .large])

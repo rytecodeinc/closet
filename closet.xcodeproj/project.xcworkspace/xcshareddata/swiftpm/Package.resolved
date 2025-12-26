@@ -1,0 +1,15 @@
+{
+  "originHash" : "314c33c8f4c18d82a8c4438264174a7b2099cb12cd1ad44ea784ccfc9fa64dfe",
+  "pins" : [
+    {
+      "identity" : "swipeactions",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/c-villain/SwipeActions",
+      "state" : {
+        "revision" : "1fe7b4e2cea808b50f9dbdb64796153bd1f9edfe",
+        "version" : "0.4.1"
+      }
+    }
+  ],
+  "version" : 3
+}

@@ -24,9 +24,10 @@ struct ContentView: View {
                         Image(systemName: "hanger")
                         Text("Closet")
                     }
-                OutfitDisplayView()
+                OutfitGridView()
                     .tabItem {
                         Image(systemName: "book")
+                        //    .environment(\.symbolVariants, .none)
                         Text("Outfits")
                     }
                 WishlistView()

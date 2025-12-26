@@ -6,7 +6,19 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		6C0D2AEE2E98C1D800849F4C /* AppShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 6C0D2AE42E98C1D800849F4C /* AppShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		6C0D2AFE2E9B747000849F4C /* SwipeActions in Frameworks */ = {isa = PBXBuildFile; productRef = 6C0D2AFD2E9B747000849F4C /* SwipeActions */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
+		6C0D2AEC2E98C1D800849F4C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 6CD1D46D2DAAF40C00913D5D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 6C0D2AE32E98C1D800849F4C;
+			remoteInfo = AppShareExtension;
+		};
 		6CD1D48C2DAAF40E00913D5D /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 6CD1D46D2DAAF40C00913D5D /* Project object */;
@@ -23,15 +35,58 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		6C0D2AF32E98C1D800849F4C /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				6C0D2AEE2E98C1D800849F4C /* AppShareExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		6C0D2AE42E98C1D800849F4C /* AppShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AppShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		6CD1D4752DAAF40C00913D5D /* closet.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = closet.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6CD1D48B2DAAF40E00913D5D /* closetTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = closetTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		6CD1D4952DAAF40E00913D5D /* closetUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = closetUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		6C0D2ADF2E98BC0B00849F4C /* Exceptions for "closet" folder in "closet" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 6CD1D4742DAAF40C00913D5D /* closet */;
+		};
+		6C0D2AF22E98C1D800849F4C /* Exceptions for "AppShareExtension" folder in "AppShareExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 6C0D2AE32E98C1D800849F4C /* AppShareExtension */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		6C0D2AE52E98C1D800849F4C /* AppShareExtension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				6C0D2AF22E98C1D800849F4C /* Exceptions for "AppShareExtension" folder in "AppShareExtension" target */,
+			);
+			path = AppShareExtension;
+			sourceTree = "<group>";
+		};
 		6CD1D4772DAAF40C00913D5D /* closet */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				6C0D2ADF2E98BC0B00849F4C /* Exceptions for "closet" folder in "closet" target */,
+			);
 			path = closet;
 			sourceTree = "<group>";
 		};
@@ -48,10 +103,18 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		6C0D2AE12E98C1D800849F4C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		6CD1D4722DAAF40C00913D5D /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6C0D2AFE2E9B747000849F4C /* SwipeActions in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -78,6 +141,7 @@
 				6CD1D4772DAAF40C00913D5D /* closet */,
 				6CD1D48E2DAAF40E00913D5D /* closetTests */,
 				6CD1D4982DAAF40E00913D5D /* closetUITests */,
+				6C0D2AE52E98C1D800849F4C /* AppShareExtension */,
 				6CD1D4762DAAF40C00913D5D /* Products */,
 			);
 			sourceTree = "<group>";
@@ -88,6 +152,7 @@
 				6CD1D4752DAAF40C00913D5D /* closet.app */,
 				6CD1D48B2DAAF40E00913D5D /* closetTests.xctest */,
 				6CD1D4952DAAF40E00913D5D /* closetUITests.xctest */,
+				6C0D2AE42E98C1D800849F4C /* AppShareExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -95,6 +160,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		6C0D2AE32E98C1D800849F4C /* AppShareExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6C0D2AEF2E98C1D800849F4C /* Build configuration list for PBXNativeTarget "AppShareExtension" */;
+			buildPhases = (
+				6C0D2AE02E98C1D800849F4C /* Sources */,
+				6C0D2AE12E98C1D800849F4C /* Frameworks */,
+				6C0D2AE22E98C1D800849F4C /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				6C0D2AE52E98C1D800849F4C /* AppShareExtension */,
+			);
+			name = AppShareExtension;
+			packageProductDependencies = (
+			);
+			productName = AppShareExtension;
+			productReference = 6C0D2AE42E98C1D800849F4C /* AppShareExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		6CD1D4742DAAF40C00913D5D /* closet */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 6CD1D49F2DAAF40E00913D5D /* Build configuration list for PBXNativeTarget "closet" */;
@@ -102,16 +189,19 @@
 				6CD1D4712DAAF40C00913D5D /* Sources */,
 				6CD1D4722DAAF40C00913D5D /* Frameworks */,
 				6CD1D4732DAAF40C00913D5D /* Resources */,
+				6C0D2AF32E98C1D800849F4C /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				6C0D2AED2E98C1D800849F4C /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				6CD1D4772DAAF40C00913D5D /* closet */,
 			);
 			name = closet;
 			packageProductDependencies = (
+				6C0D2AFD2E9B747000849F4C /* SwipeActions */,
 			);
 			productName = closet;
 			productReference = 6CD1D4752DAAF40C00913D5D /* closet.app */;
@@ -170,9 +260,12 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 1620;
+				LastSwiftUpdateCheck = 1640;
 				LastUpgradeCheck = 1620;
 				TargetAttributes = {
+					6C0D2AE32E98C1D800849F4C = {
+						CreatedOnToolsVersion = 16.4;
+					};
 					6CD1D4742DAAF40C00913D5D = {
 						CreatedOnToolsVersion = 16.2;
 					};
@@ -195,6 +288,9 @@
 			);
 			mainGroup = 6CD1D46C2DAAF40C00913D5D;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				6C0D2AFC2E9B747000849F4C /* XCRemoteSwiftPackageReference "SwipeActions" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 6CD1D4762DAAF40C00913D5D /* Products */;
 			projectDirPath = "";
@@ -203,11 +299,19 @@
 				6CD1D4742DAAF40C00913D5D /* closet */,
 				6CD1D48A2DAAF40E00913D5D /* closetTests */,
 				6CD1D4942DAAF40E00913D5D /* closetUITests */,
+				6C0D2AE32E98C1D800849F4C /* AppShareExtension */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		6C0D2AE22E98C1D800849F4C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		6CD1D4732DAAF40C00913D5D /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -232,6 +336,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		6C0D2AE02E98C1D800849F4C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		6CD1D4712DAAF40C00913D5D /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -256,6 +367,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		6C0D2AED2E98C1D800849F4C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 6C0D2AE32E98C1D800849F4C /* AppShareExtension */;
+			targetProxy = 6C0D2AEC2E98C1D800849F4C /* PBXContainerItemProxy */;
+		};
 		6CD1D48D2DAAF40E00913D5D /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 6CD1D4742DAAF40C00913D5D /* closet */;
@@ -269,6 +385,61 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		6C0D2AF02E98C1D800849F4C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 98S75SX3J9;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AppShareExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AppShareExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = rytecode.closet.AppShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		6C0D2AF12E98C1D800849F4C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 98S75SX3J9;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AppShareExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AppShareExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = rytecode.closet.AppShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 		6CD1D49D2DAAF40E00913D5D /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -396,6 +567,8 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = closet/Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Allow user to take photos of their closet items to directly upload";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -406,11 +579,12 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 16.6;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 15.2;
 				MARKETING_VERSION = 1.0;
+				NEW_SETTING = "";
 				PRODUCT_BUNDLE_IDENTIFIER = rytecode.closet;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
@@ -435,6 +609,8 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = closet/Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Allow user to take photos of their closet items to directly upload";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -445,11 +621,12 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 16.6;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 15.2;
 				MARKETING_VERSION = 1.0;
+				NEW_SETTING = "";
 				PRODUCT_BUNDLE_IDENTIFIER = rytecode.closet;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
@@ -554,6 +731,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		6C0D2AEF2E98C1D800849F4C /* Build configuration list for PBXNativeTarget "AppShareExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6C0D2AF02E98C1D800849F4C /* Debug */,
+				6C0D2AF12E98C1D800849F4C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		6CD1D4702DAAF40C00913D5D /* Build configuration list for PBXProject "closet" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -591,6 +777,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		6C0D2AFC2E9B747000849F4C /* XCRemoteSwiftPackageReference "SwipeActions" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/c-villain/SwipeActions";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.4.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		6C0D2AFD2E9B747000849F4C /* SwipeActions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 6C0D2AFC2E9B747000849F4C /* XCRemoteSwiftPackageReference "SwipeActions" */;
+			productName = SwipeActions;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 6CD1D46D2DAAF40C00913D5D /* Project object */;
 }
