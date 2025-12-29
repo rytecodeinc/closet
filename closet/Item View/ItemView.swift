@@ -32,7 +32,7 @@ struct ItemView: View {
                     .frame(minWidth: 120, minHeight: 120)
                     .clipped()
                   //  .border(.gray.opacity(0.3), width: 0.5)
-                    .background(.red)
+                    .background(Color(red: 247/255, green: 247/255, blue: 247/255))
 
 
                    /* .background(LinearGradient(colors: [.white, .gray.opacity(0.5)], startPoint: .topLeading, endPoint: .bottomLeading))*/
