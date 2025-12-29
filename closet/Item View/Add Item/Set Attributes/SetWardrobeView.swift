@@ -20,6 +20,26 @@ struct SetWardrobeView: View {
             WardrobeListView(selectedWardrobes: $selectedWardrobes)
         }
         .onAppear {
+            // Run deduplication on the parent context to ensure no duplicates
+            // Get the parent context from the child context
+            if let parentContext = viewContext.parent {
+                deduplicateWardrobes(context: parentContext)
+                // Save parent context to persist deduplication
+                if parentContext.hasChanges {
+                    try? parentContext.save()
+                }
+                // Refresh the child context to see changes from parent
+                viewContext.refreshAllObjects()
+                // Process pending changes to update fetched results
+                viewContext.processPendingChanges()
+            } else {
+                // If no parent, run on current context
+                deduplicateWardrobes(context: viewContext)
+                if viewContext.hasChanges {
+                    try? viewContext.save()
+                }
+            }
+            
             // Preselect wardrobes the item currently belongs to
             if let wardrobes = item.wardrobes as? Set<Wardrobe> {
                 selectedWardrobes = wardrobes

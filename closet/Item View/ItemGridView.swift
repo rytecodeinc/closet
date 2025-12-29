@@ -9,15 +9,15 @@
 import SwiftUI
 import UIKit
 import CoreData
+import Combine
 
 struct ItemGridView: View {
-    @FetchRequest var closetItems: FetchedResults<Item>
-    
     @ObservedObject var filterModel: ItemFilterModel
     var wardrobeType: String
     var selectedWardrobe: Wardrobe
     
     @Environment(\.managedObjectContext) private var viewContext
+    @State private var closetItems: [Item] = []
     @State private var isImagePickerPresented = false
     @State private var pickedImage: UIImage? = nil
     @State private var imagePickerSource: UIImagePickerController.SourceType = .photoLibrary
@@ -25,39 +25,24 @@ struct ItemGridView: View {
     @State private var selectedTab: String = "Items"
     
     @State private var outfits: [Outfit] = []
-    
-    @State private var currentTopIndex: Int? = nil
-    @State private var isControlsHidden: Bool = false
-    
-    init(filterModel: ItemFilterModel, wardrobeType: String, selectedWardrobe: Wardrobe) {
-        self.filterModel = filterModel
-        self.wardrobeType = wardrobeType
-        self.selectedWardrobe = selectedWardrobe
-        
-        // Base filter from the filterModel
-        let basePredicate = makePredicate(for: filterModel)
-        
-        // Always filter by selected wardrobe
-        let wardrobePredicate = NSPredicate(format: "ANY wardrobes == %@", selectedWardrobe)
-        
-        var predicates: [NSPredicate] = []
-        if let base = basePredicate { predicates.append(base) }
-        predicates.append(wardrobePredicate)
-        
-        let finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
-        
-        _closetItems = FetchRequest(
-            entity: Item.entity(),
-            sortDescriptors: [NSSortDescriptor(keyPath: \Item.timestamp, ascending: false)],
-            predicate: finalPredicate
-        )
-    }
 
     let gridColumns = [
         GridItem(.flexible(), spacing: 2),
         GridItem(.flexible(), spacing: 2),
         GridItem(.flexible(), spacing: 2)
     ]
+    
+    // Computed property to track filter changes
+    private var filterKey: String {
+        var key = ""
+        key += filterModel.selectedColors.sorted().joined(separator: ",")
+        key += filterModel.selectedSeasons.sorted().joined(separator: ",")
+        key += filterModel.selectedBrand?.objectID.uriRepresentation().absoluteString ?? ""
+        key += filterModel.selectedTags.map { $0.objectID.uriRepresentation().absoluteString }.sorted().joined(separator: ",")
+        key += filterModel.minPrice?.description ?? ""
+        key += filterModel.maxPrice?.description ?? ""
+        return key
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -85,8 +70,24 @@ struct ItemGridView: View {
             .tabViewStyle(.page(indexDisplayMode: .never))
         }
         .navigationBarTitleDisplayMode(.inline)
-        .animation(.easeInOut(duration: 0.25), value: isControlsHidden)
-        .onAppear(perform: fetchOutfits)
+        .onAppear {
+            fetchItems()
+            fetchOutfits()
+        }
+        .onChange(of: filterKey) {
+            fetchItems()
+        }
+        .onChange(of: selectedWardrobe.objectID) {
+            fetchItems()
+            fetchOutfits()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSManagedObjectContextDidSave)) { notification in
+            // Refresh items when context saves (items added/deleted/updated elsewhere)
+            if let context = notification.object as? NSManagedObjectContext,
+               context === viewContext || context.parent === viewContext {
+                fetchItems()
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 NavigationLink(destination: ItemFilterView(filterModel: filterModel)) {
@@ -101,7 +102,7 @@ struct ItemGridView: View {
                         Image(systemName: "plus")
                     }
                 } else if selectedTab == "Outfits" {
-                    NavigationLink(destination: OutfitCanvasView()) {
+                    NavigationLink(destination: OutfitCanvasView(wardrobeType: wardrobeType, initialWardrobe: selectedWardrobe)) {
                         Image(systemName: "plus")
                     }
                 }
@@ -144,6 +145,92 @@ struct ItemGridView: View {
     }*/
     
     // MARK: - Core Data fetch
+    func fetchItems() {
+        let request = NSFetchRequest<Item>(entityName: "Item")
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.timestamp, ascending: false)]
+        
+        // Build predicate from filterModel, but exclude wardrobe filter since we handle it separately below
+        var subpredicates: [NSPredicate] = []
+        
+        // Add all filter predicates except wardrobe (we'll handle wardrobe separately)
+        if !filterModel.selectedColors.isEmpty {
+            let colorPredicate = NSPredicate(format: "ANY colors.name IN %@", Array(filterModel.selectedColors))
+            subpredicates.append(colorPredicate)
+        }
+        if !filterModel.selectedSeasons.isEmpty {
+            let seasonPredicate = NSPredicate(format: "ANY seasons.name IN %@", Array(filterModel.selectedSeasons))
+            subpredicates.append(seasonPredicate)
+        }
+        if let brand = filterModel.selectedBrand, let brandName = brand.name, !brandName.isEmpty {
+            let brandPredicate = NSPredicate(format: "brand.name ==[c] %@", brandName)
+            subpredicates.append(brandPredicate)
+        }
+        if let minPrice = filterModel.minPrice {
+            let minPricePredicate = NSPredicate(format: "price.amount >= %@", minPrice as NSDecimalNumber)
+            subpredicates.append(minPricePredicate)
+        }
+        if let maxPrice = filterModel.maxPrice {
+            let maxPricePredicate = NSPredicate(format: "price.amount <= %@", maxPrice as NSDecimalNumber)
+            subpredicates.append(maxPricePredicate)
+        }
+        if !filterModel.selectedTags.isEmpty {
+            let tagNames = filterModel.selectedTags.compactMap { $0.name }
+            let tagPredicate = NSPredicate(format: "ANY tags.name IN %@", tagNames)
+            subpredicates.append(tagPredicate)
+        }
+        // Handle category/subcategory filtering
+        if let subcategoryName = filterModel.selectedSubcategoryName, !subcategoryName.isEmpty,
+           let categoryName = filterModel.selectedCategoryName, !categoryName.isEmpty {
+            // Filter by subcategory (which also implies the category)
+            let subcategoryPredicate = NSPredicate(format: "subcategory.name ==[c] %@ AND category.name ==[c] %@", subcategoryName, categoryName)
+            subpredicates.append(subcategoryPredicate)
+        } else if let categoryName = filterModel.selectedCategoryName, !categoryName.isEmpty {
+            // Filter by category only
+            let categoryPredicate = NSPredicate(format: "category.name ==[c] %@", categoryName)
+            subpredicates.append(categoryPredicate)
+        }
+        if let sizeValue = filterModel.selectedSizeValue, !sizeValue.isEmpty {
+            let sizePredicate = NSPredicate(format: "size.value == %@", sizeValue)
+            subpredicates.append(sizePredicate)
+        }
+        if let location = filterModel.selectedLocation {
+            let locationPredicate = NSPredicate(format: "location == %@", location)
+            subpredicates.append(locationPredicate)
+        }
+        
+        // Handle wardrobe filtering: use filterModel.selectedWardrobes if set, otherwise use selectedWardrobe
+        let wardrobePredicate: NSPredicate
+        if !filterModel.selectedWardrobes.isEmpty {
+            // If user selected specific wardrobes in filter, use those
+            wardrobePredicate = NSPredicate(format: "ANY wardrobes IN %@", Array(filterModel.selectedWardrobes))
+        } else {
+            // Otherwise, use the view's selected wardrobe
+            wardrobePredicate = NSPredicate(format: "ANY wardrobes == %@", selectedWardrobe)
+        }
+        subpredicates.append(wardrobePredicate)
+        
+        // Combine all predicates
+        let finalPredicate: NSPredicate
+        if subpredicates.count == 1 {
+            finalPredicate = subpredicates.first!
+        } else {
+            finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: subpredicates)
+        }
+        request.predicate = finalPredicate
+        
+        do {
+            let results = try viewContext.fetch(request)
+            DispatchQueue.main.async {
+                self.closetItems = results
+            }
+        } catch {
+            print("Failed to fetch items: \(error)")
+            DispatchQueue.main.async {
+                self.closetItems = []
+            }
+        }
+    }
+    
     func fetchOutfits() {
         let request = NSFetchRequest<Outfit>(entityName: "Outfit")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: false)]
@@ -179,12 +266,14 @@ struct ItemGridView: View {
             photo.item = item
         }
 
-        wardrobe.addToItems(item)   // <-- attach to the correct wardrobe
+                wardrobe.addToItems(item)   // <-- attach to the correct wardrobe
 
         do {
             try viewContext.save()
             print("✅ New item saved in \(wardrobe.name ?? "unknown wardrobe")")
             path.append(item)
+            // Refresh items after adding new one
+            fetchItems()
         } catch {
             print("❌ Failed to save new item: \(error.localizedDescription)")
         }
@@ -197,7 +286,7 @@ struct ItemGridView: View {
             } else {
                 ScrollView(showsIndicators: false) {
                     LazyVGrid(columns: gridColumns, spacing: 2) {
-                        ForEach(Array(closetItems.enumerated()), id: \.element.objectID) { index, item in
+                        ForEach(closetItems, id: \.objectID) { item in
                             NavigationLink(destination: ItemDetailView(item: item)) {
                                 ItemView(item: item)
                                   /*  .background(

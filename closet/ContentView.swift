@@ -48,10 +48,9 @@ struct ContentView: View {
             }
             .onAppear {
                 print("-- ContentView appeared")
-                print("Content View Data seeding")
-                DataSeeder(context: viewContext)
                 migrateItemImages(context: viewContext)
                 migrateWishlistItems(context: viewContext)
+                deduplicateWardrobes(context: viewContext)
             }
         }
     }

@@ -28,10 +28,6 @@ struct closetApp: App {
         WindowGroup {
             ContentView()
                 .environment(\.managedObjectContext, persistenceController.container.viewContext)
-                .onAppear() {
-                    print("App appeared")
-                    DataSeeder(context: persistenceController.container.viewContext)
-                }
         }
     }
 }

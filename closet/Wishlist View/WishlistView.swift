@@ -22,6 +22,9 @@ struct WishlistView: View {
     @State private var showWishlistSheet = false
     @State private var newWishlistName: String = ""
     @State private var isCreatingNewWishlist = false
+    @State private var editingWardrobe: Wardrobe?
+    @State private var editingName: String = ""
+    @State private var showEditAlert = false
     
     var body: some View {
         NavigationView {
@@ -33,6 +36,11 @@ struct WishlistView: View {
                     createWishlistAlertButtons()
                 } message: {
                     Text("Enter a name for your new wishlist")
+                }
+                .alert("Edit Wardrobe", isPresented: $showEditAlert) {
+                    editWishlistAlertButtons()
+                } message: {
+                    Text("Enter a new name for this wardrobe")
                 }
                 .sheet(isPresented: $showWishlistSheet) {
                     wishlistSelectionSheet()
@@ -117,37 +125,70 @@ private extension WishlistView {
         }
     }
     
+    func editWishlistAlertButtons() -> some View {
+        Group {
+            TextField("Wardrobe name", text: $editingName)
+            Button("Save") {
+                if let wardrobe = editingWardrobe {
+                    updateWardrobeName(wardrobe, to: editingName)
+                }
+                editingWardrobe = nil
+                editingName = ""
+            }
+            Button("Cancel", role: .cancel) {
+                editingWardrobe = nil
+                editingName = ""
+            }
+        }
+    }
+    
     @ViewBuilder
     func wishlistSelectionSheet() -> some View {
         NavigationView {
             List {
                 ForEach(wishlists, id: \.self) { wishlist in
-                    Button {
-                        selectedWishlist = wishlist
-                        showWishlistSheet = false
-                    } label: {
-                        HStack {
-                            Text(wishlist.name ?? "Untitled")
-                            
-                            // Add “Default” badge for the first wishlist
-                            if wishlist == wishlists.first {
-                                Text("Default")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(
-                                        Capsule()
-                                            .fill(Color(UIColor.secondarySystemBackground))
-                                    )
+                    ZStack(alignment: .trailing) {
+                        Button {
+                            selectedWishlist = wishlist
+                            showWishlistSheet = false
+                        } label: {
+                            HStack {
+                                Text(wishlist.name ?? "Untitled")
+                                
+                                if wishlist == selectedWishlist {
+                                    Image(systemName: "checkmark")
+                                        .foregroundColor(.blue)
+                                }
+                                
+                                // Add "Default" badge for the first wishlist
+                                if wishlist == wishlists.first {
+                                    Text("Default")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(
+                                            Capsule()
+                                                .fill(Color(UIColor.secondarySystemBackground))
+                                        )
+                                }
+                                
+                                Spacer()
                             }
-                            
-                            Spacer()
-                            if wishlist == selectedWishlist {
-                                Image(systemName: "checkmark")
-                                    .foregroundColor(.blue)
-                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
+                        .buttonStyle(.plain)
+                        
+                        Button {
+                            editingWardrobe = wishlist
+                            editingName = wishlist.name ?? ""
+                            showEditAlert = true
+                        } label: {
+                            Image(systemName: "pencil")
+                                .foregroundColor(.blue)
+                                .padding(.horizontal, 8)
+                        }
+                        .buttonStyle(.plain)
                     }
                     // Prevent deleting the default wishlist
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
@@ -214,6 +255,18 @@ private extension WishlistView {
         // If the deleted wishlist was selected, reset to the default one
         if selectedWishlist == wishlist {
             selectedWishlist = wishlists.first
+        }
+    }
+    
+    private func updateWardrobeName(_ wardrobe: Wardrobe, to newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        
+        wardrobe.name = trimmed
+        do {
+            try viewContext.save()
+        } catch {
+            print("❌ Failed to update wardrobe name: \(error.localizedDescription)")
         }
     }
 

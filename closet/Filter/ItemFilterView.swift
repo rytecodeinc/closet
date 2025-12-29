@@ -15,6 +15,64 @@ struct ItemFilterView: View {
     var body: some View {
         NavigationStack {
                 List {
+                    // Wardrobe filter
+                    NavigationLink(destination: WardrobeListView(selectedWardrobes: $filterModel.selectedWardrobes)) {
+                        HStack {
+                            Text("Wardrobes")
+                            Spacer()
+                            if !filterModel.selectedWardrobes.isEmpty {
+                                Text(filterModel.selectedWardrobes.compactMap { $0.name }.sorted().joined(separator: ", "))
+                                    .foregroundColor(.gray)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                    
+                    // Category filter
+                    NavigationLink(destination: CategoryFilterListView(selectedCategoryName: $filterModel.selectedCategoryName, selectedSubcategoryName: $filterModel.selectedSubcategoryName)) {
+                        HStack {
+                            Text("Category")
+                            Spacer()
+                            if let categoryName = filterModel.selectedCategoryName {
+                                if let subcategoryName = filterModel.selectedSubcategoryName {
+                                    Text("\(categoryName) • \(subcategoryName)")
+                                        .foregroundColor(.gray)
+                                        .lineLimit(1)
+                                } else {
+                                    Text(categoryName)
+                                        .foregroundColor(.gray)
+                                        .lineLimit(1)
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Brand filter
+                    NavigationLink(destination: BrandListView(selectedBrand: $filterModel.selectedBrand)) {
+                        HStack {
+                            Text("Brand")
+                            Spacer()
+                            if let brand = filterModel.selectedBrand {
+                                Text(brand.name ?? "None")
+                                    .foregroundColor(.gray)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                    
+                    // Size filter
+                    NavigationLink(destination: SizeListView(selectedSizeValue: $filterModel.selectedSizeValue)) {
+                        HStack {
+                            Text("Size")
+                            Spacer()
+                            if let sizeValue = filterModel.selectedSizeValue {
+                                Text(sizeValue)
+                                    .foregroundColor(.gray)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                    
                     // Color filter
                     NavigationLink(destination: ColorListView(selectedColorNames: $filterModel.selectedColors)) {
                         HStack {
@@ -41,13 +99,13 @@ struct ItemFilterView: View {
                         }
                     }
                     
-                    // Brand filter
-                    NavigationLink(destination: BrandListView(selectedBrand: $filterModel.selectedBrand)) {
+                    // Location filter
+                    NavigationLink(destination: LocationListView(selectedLocation: $filterModel.selectedLocation)) {
                         HStack {
-                            Text("Brand")
+                            Text("Location")
                             Spacer()
-                            if let brand = filterModel.selectedBrand {
-                                Text(brand.name ?? "None")
+                            if let location = filterModel.selectedLocation {
+                                Text(location.name ?? "None")
                                     .foregroundColor(.gray)
                                     .lineLimit(1)
                             }

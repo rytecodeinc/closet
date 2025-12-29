@@ -34,6 +34,7 @@ struct AttributesSectionView: View {
             priceRow()
             linkRow()
             tagRow()
+            notesRow()
         }
     }
 }
@@ -41,7 +42,7 @@ struct AttributesSectionView: View {
 // MARK: - Sheet enum
 extension AttributesSectionView {
     enum Sheet: String, Identifiable {
-        case wardrobe, category, size, color, season, brand, price, link, location, tag
+        case wardrobe, category, size, color, season, brand, price, link, location, tag, notes
         var id: String { rawValue }
     }
 }
@@ -280,6 +281,25 @@ extension AttributesSectionView {
             }
         }
     }
+    
+    // Notes
+    func notesRow() -> some View {
+        Button { activeSheet = .notes } label: {
+            HStack {
+                Text("Notes").foregroundColor(.primary)
+                Spacer()
+                if let notes = item.notes, !notes.isEmpty {
+                    Text(notes.prefix(30))
+                        .foregroundColor(.gray)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.gray)
+                    .font(.caption)
+            }
+        }
+    }
 }
 
 // MARK: - Optional local formatter if you do not already have one elsewhere
@@ -331,6 +351,7 @@ extension AttributesSectionView.Sheet {
         case .link:      SetLinkView(item: item)
         case .location:  SetLocationView(item: item)
         case .tag:       SetTagView(item: item)
+        case .notes:     SetNotesView(item: item)
         }
     }
 }

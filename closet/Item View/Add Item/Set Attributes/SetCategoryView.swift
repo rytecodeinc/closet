@@ -156,10 +156,11 @@ struct SetCategoryView: View {
     // MARK: - Fetchers
 
     private func fetchCategories() {
-        let request: NSFetchRequest<Category> = Category.fetchRequest()
+        let request = NSFetchRequest<Category>(entityName: "Category")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Category.name, ascending: true)]
         do {
             categories = try viewContext.fetch(request)
+            print("✅ Fetched \(categories.count) categories")
         } catch {
             print("❌ Failed to fetch categories: \(error)")
             categories = []
@@ -175,7 +176,7 @@ struct SetCategoryView: View {
     }
 
     private func fetchOrCreateCategory(named name: String) -> Category {
-        let request: NSFetchRequest<Category> = Category.fetchRequest()
+        let request = NSFetchRequest<Category>(entityName: "Category")
         request.predicate = NSPredicate(format: "name ==[c] %@", name)
         do {
             if let match = try viewContext.fetch(request).first {
@@ -192,7 +193,7 @@ struct SetCategoryView: View {
     }
 
     private func fetchSubcategory(named name: String, in category: Category) -> Subcategory? {
-        let req: NSFetchRequest<Subcategory> = Subcategory.fetchRequest()
+        let req = NSFetchRequest<Subcategory>(entityName: "Subcategory")
         req.fetchLimit = 1
         req.predicate = NSPredicate(format: "name ==[c] %@ AND category == %@", name, category)
         return try? viewContext.fetch(req).first

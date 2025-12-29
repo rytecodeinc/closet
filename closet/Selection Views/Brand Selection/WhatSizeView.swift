@@ -43,7 +43,7 @@ struct WhatSizeView: View {
                 }
                 .listStyle(.plain)
             }
-            .navigationTitle("What size am I?")
+            .navigationTitle("Size Reference")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(Color(UIColor.secondarySystemBackground), for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)

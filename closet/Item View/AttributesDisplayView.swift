@@ -120,6 +120,15 @@ struct AttributesDisplayView: View {
                 }
             }
             
+            // MARK: Notes
+            if let notes = item.notes, !notes.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(notes)
+                        .font(.body)
+                        .foregroundColor(.primary)
+                }
+            }
+            
         }
     }
 }

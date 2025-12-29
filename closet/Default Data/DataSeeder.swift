@@ -344,11 +344,19 @@ struct DataSeeder {
         ]
         
         for (name, type) in defaults {
-            let wardrobe = Wardrobe(context: context)
-            wardrobe.id = UUID()
-            wardrobe.name = name
-            wardrobe.type = type
-            wardrobe.timestamp = Date()
+            // Check if a wardrobe with this type already exists to prevent duplicates
+            let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
+            request.predicate = NSPredicate(format: "type == %@", type)
+            request.fetchLimit = 1
+            
+            if try context.fetch(request).isEmpty {
+                // Only create if it doesn't exist
+                let wardrobe = Wardrobe(context: context)
+                wardrobe.id = UUID()
+                wardrobe.name = name
+                wardrobe.type = type
+                wardrobe.timestamp = Date()
+            }
         }
         try context.save()
     }

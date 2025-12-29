@@ -17,12 +17,43 @@ struct OutfitCanvasView: View {
     // Optional outfit for editing
     let outfitToEdit: Outfit?
     
-    // Fetch closet items (not wishlist items)
+    // Wardrobe type to filter by (closet or wishlist)
+    let wardrobeType: String
+    
+    // Fetch all wardrobes (we'll filter by type)
     @FetchRequest(
-        entity: Item.entity(),
-        sortDescriptors: [NSSortDescriptor(keyPath: \Item.timestamp, ascending: false)],
-        predicate: NSPredicate(format: "isWishlist == %@", NSNumber(value: false))
-    ) var closetItems: FetchedResults<Item>
+        entity: Wardrobe.entity(),
+        sortDescriptors: [NSSortDescriptor(keyPath: \Wardrobe.name, ascending: true)]
+    ) private var allWardrobes: FetchedResults<Wardrobe>
+    
+    // Filter wardrobes by type
+    private var wardrobes: [Wardrobe] {
+        allWardrobes.filter { $0.type == wardrobeType }
+    }
+    
+    // Selected wardrobe for filtering items
+    @State private var selectedWardrobe: Wardrobe?
+    @State private var isWardrobeSelectionPresented = false
+    
+    // Fetch items filtered by selected wardrobe
+    private var closetItems: [Item] {
+        guard let wardrobe = selectedWardrobe else { return [] }
+        let request: NSFetchRequest<Item> = Item.fetchRequest()
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.timestamp, ascending: false)]
+        // Filter by wardrobe type: if wishlist, show wishlist items; if closet, show non-wishlist items
+        if wardrobeType == "wishlist" {
+            request.predicate = NSPredicate(format: "isWishlist == %@ AND ANY wardrobes == %@", NSNumber(value: true), wardrobe)
+        } else {
+            request.predicate = NSPredicate(format: "isWishlist == %@ AND ANY wardrobes == %@", NSNumber(value: false), wardrobe)
+        }
+        
+        do {
+            return try viewContext.fetch(request)
+        } catch {
+            print("Failed to fetch items: \(error)")
+            return []
+        }
+    }
     
     // State for outfit creation
     @State private var outfitItems: [OutfitItem] = []
@@ -31,9 +62,11 @@ struct OutfitCanvasView: View {
     @State private var showingSaveAlert = false
     @State private var selectedItemID: UUID?
     
-    // Initialize with optional outfit to edit
-    init(outfitToEdit: Outfit? = nil) {
+    // Initialize with optional outfit to edit, wardrobe type, and initial wardrobe
+    init(outfitToEdit: Outfit? = nil, wardrobeType: String = "closet", initialWardrobe: Wardrobe? = nil) {
         self.outfitToEdit = outfitToEdit
+        self.wardrobeType = wardrobeType
+        _selectedWardrobe = State(initialValue: initialWardrobe)
     }
     
     // Calculate square collage dimensions
@@ -51,6 +84,12 @@ struct OutfitCanvasView: View {
             // Divider
             Divider()
                 .padding(.vertical, 10)
+            
+            // Wardrobe Selection Row
+            wardrobeSelectionRow
+            
+            // Divider
+            Divider()
             
             // Closet Items Grid
             closetItemsGrid
@@ -72,8 +111,24 @@ struct OutfitCanvasView: View {
                 dismiss()
             }
         }
+        .sheet(isPresented: $isWardrobeSelectionPresented) {
+            NavigationView {
+                SingleWardrobeSelectionView(selectedWardrobe: $selectedWardrobe, wardrobeType: wardrobeType)
+            }
+            .presentationDetents([.medium, .large])
+        }
         .onAppear {
+            // Set default wardrobe to first closet wardrobe if none selected
+            if selectedWardrobe == nil, let firstWardrobe = wardrobes.first {
+                selectedWardrobe = firstWardrobe
+            }
             loadOutfitIfEditing()
+        }
+        .onChange(of: wardrobes) { newWardrobes in
+            // If the selected wardrobe is no longer in the list (e.g., deleted), reset to first
+            if let current = selectedWardrobe, !newWardrobes.contains(current) {
+                selectedWardrobe = newWardrobes.first
+            }
         }
     }
     
@@ -132,13 +187,48 @@ struct OutfitCanvasView: View {
         }
     }
     
+    // MARK: - Wardrobe Selection Row
+    private var wardrobeSelectionRow: some View {
+        Button {
+            isWardrobeSelectionPresented = true
+        } label: {
+            HStack {
+                Text("Wardrobe")
+                    .foregroundColor(.primary)
+                Spacer()
+                if let wardrobe = selectedWardrobe {
+                    Text(wardrobe.name ?? "Untitled")
+                        .foregroundColor(.gray)
+                } else {
+                    Text("Select Wardrobe")
+                        .foregroundColor(.gray)
+                }
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.gray)
+                    .font(.caption)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+    
     // MARK: - Closet Items Grid
     private var closetItemsGrid: some View {
         ScrollView {
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 1), count: 3), spacing: 1) {
-                ForEach(closetItems, id: \.objectID) { item in
-                    ClosetItemView(item: item) {
-                        addItemToOutfit(item)
+            if selectedWardrobe == nil {
+                VStack {
+                    Text("Please select a wardrobe")
+                        .foregroundColor(.secondary)
+                        .padding()
+                }
+            } else {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 1), count: 3), spacing: 1) {
+                    ForEach(closetItems, id: \.objectID) { item in
+                        ClosetItemView(item: item) {
+                            addItemToOutfit(item)
+                        }
                     }
                 }
             }

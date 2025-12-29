@@ -22,8 +22,9 @@ struct ClosetView: View {
     @State private var showClosetSheet = false
     @State private var newClosetName: String = ""
     @State private var isCreatingNewCloset = false
-    
-    @State private var showSizeAlert = false
+    @State private var editingWardrobe: Wardrobe?
+    @State private var editingName: String = ""
+    @State private var showEditAlert = false
     
     var body: some View {
         NavigationView {
@@ -36,13 +37,13 @@ struct ClosetView: View {
                 } message: {
                     Text("Enter a name for your new closet")
                 }
+                .alert("Edit Wardrobe", isPresented: $showEditAlert) {
+                    editClosetAlertButtons()
+                } message: {
+                    Text("Enter a new name for this wardrobe")
+                }
                 .sheet(isPresented: $showClosetSheet) {
                     closetSelectionSheet()
-                }
-                .sheet(isPresented: $showSizeAlert) {
-                    WhatSizeView()
-                        .environment(\.managedObjectContext, viewContext)
-                        .presentationDetents([.medium, .large])
                 }
         }
     }
@@ -70,13 +71,6 @@ private extension ClosetView {
     func navigationBarToolbar() -> some ToolbarContent {
         ToolbarItem(placement: .principal) {
             closetSelectionButton()
-        }
-        ToolbarItem(placement: .navigationBarTrailing) {
-            Button {
-                showSizeAlert.toggle()
-            } label: {
-                Image(systemName: "ruler")
-            }
         }
      /*   ToolbarItem(placement: .navigationBarTrailing) {
             addItemButton()
@@ -134,38 +128,70 @@ private extension ClosetView {
         }
     }
     
+    func editClosetAlertButtons() -> some View {
+        Group {
+            TextField("Wardrobe name", text: $editingName)
+            Button("Save") {
+                if let wardrobe = editingWardrobe {
+                    updateWardrobeName(wardrobe, to: editingName)
+                }
+                editingWardrobe = nil
+                editingName = ""
+            }
+            Button("Cancel", role: .cancel) {
+                editingWardrobe = nil
+                editingName = ""
+            }
+        }
+    }
+    
     @ViewBuilder
     func closetSelectionSheet() -> some View {
         NavigationView {
             List {
                 ForEach(closets, id: \.self) { closet in
-                    Button {
-                        selectedWardrobe = closet
-                        showClosetSheet = false
-                    } label: {
-                        HStack {
-                            Text(closet.name ?? "Untitled")
-                            
-                            // Add "Default" label next to the first closet
-                            if closet == closets.first {
-                                Text("Default")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(
-                                        Capsule()
-                                            .fill(Color(UIColor.secondarySystemBackground))
-                                    )
+                    ZStack(alignment: .trailing) {
+                        Button {
+                            selectedWardrobe = closet
+                            showClosetSheet = false
+                        } label: {
+                            HStack {
+                                Text(closet.name ?? "Untitled")
+                                
+                                if closet == selectedWardrobe {
+                                    Image(systemName: "checkmark")
+                                        .foregroundColor(.blue)
+                                }
+                                
+                                // Add "Default" label next to the first closet
+                                if closet == closets.first {
+                                    Text("Default")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(
+                                            Capsule()
+                                                .fill(Color(UIColor.secondarySystemBackground))
+                                        )
+                                }
+                                
+                                Spacer()
                             }
-                            
-                            Spacer()
-                            
-                            if closet == selectedWardrobe {
-                                Image(systemName: "checkmark")
-                                    .foregroundColor(.blue)
-                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
+                        .buttonStyle(.plain)
+                        
+                        Button {
+                            editingWardrobe = closet
+                            editingName = closet.name ?? ""
+                            showEditAlert = true
+                        } label: {
+                            Image(systemName: "pencil")
+                                .foregroundColor(.blue)
+                                .padding(.horizontal, 8)
+                        }
+                        .buttonStyle(.plain)
                     }
                     // Prevent swipe-to-delete on the first (default) closet
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
@@ -232,6 +258,18 @@ private extension ClosetView {
         // Reset selectedCloset if the deleted one was selected
         if selectedWardrobe == closet {
             selectedWardrobe = closets.first
+        }
+    }
+    
+    private func updateWardrobeName(_ wardrobe: Wardrobe, to newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        
+        wardrobe.name = trimmed
+        do {
+            try viewContext.save()
+        } catch {
+            print("❌ Failed to update wardrobe name: \(error.localizedDescription)")
         }
     }
 

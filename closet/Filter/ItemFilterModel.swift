@@ -16,6 +16,11 @@ class ItemFilterModel: ObservableObject {
     @Published var selectedTags: Set<Tag> = []
     @Published var minPrice: Decimal?
     @Published var maxPrice: Decimal?
+    @Published var selectedWardrobes: Set<Wardrobe> = []
+    @Published var selectedCategoryName: String? = nil
+    @Published var selectedSubcategoryName: String? = nil
+    @Published var selectedSizeValue: String? = nil
+    @Published var selectedLocation: Location? = nil
     
     func clearAll() {
         selectedColors.removeAll()
@@ -24,6 +29,11 @@ class ItemFilterModel: ObservableObject {
         selectedTags.removeAll()
         minPrice = nil
         maxPrice = nil
+        selectedWardrobes.removeAll()
+        selectedCategoryName = nil
+        selectedSubcategoryName = nil
+        selectedSizeValue = nil
+        selectedLocation = nil
     }
 }
 
@@ -62,6 +72,30 @@ func makePredicate(for filterModel: ItemFilterModel) -> NSPredicate? {
         subpredicates.append(tagPredicate)
     }
 
+    // Note: Wardrobe filtering is handled separately in ItemGridView, not here
+    // to avoid conflicts with the view's selectedWardrobe parameter
+
+    // Handle category/subcategory filtering
+    if let subcategoryName = filterModel.selectedSubcategoryName, !subcategoryName.isEmpty,
+       let categoryName = filterModel.selectedCategoryName, !categoryName.isEmpty {
+        // Filter by subcategory (which also implies the category)
+        let subcategoryPredicate = NSPredicate(format: "subcategory.name ==[c] %@ AND category.name ==[c] %@", subcategoryName, categoryName)
+        subpredicates.append(subcategoryPredicate)
+    } else if let categoryName = filterModel.selectedCategoryName, !categoryName.isEmpty {
+        // Filter by category only
+        let categoryPredicate = NSPredicate(format: "category.name ==[c] %@", categoryName)
+        subpredicates.append(categoryPredicate)
+    }
+
+    if let sizeValue = filterModel.selectedSizeValue, !sizeValue.isEmpty {
+        let sizePredicate = NSPredicate(format: "size.value == %@", sizeValue)
+        subpredicates.append(sizePredicate)
+    }
+
+    if let location = filterModel.selectedLocation {
+        let locationPredicate = NSPredicate(format: "location == %@", location)
+        subpredicates.append(locationPredicate)
+    }
 
     if subpredicates.isEmpty {
         return nil

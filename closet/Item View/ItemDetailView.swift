@@ -12,29 +12,10 @@ import CoreData
 
 struct ItemDetailView: View {
     @ObservedObject var item: Item
-    @FetchRequest private var outfits: FetchedResults<Outfit>
+    @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.dismiss) private var dismiss
     
-    init(item: Item) {
-        self._item = ObservedObject(wrappedValue: item)
-        
-        // Only create a predicate if the object has been saved and has an ID
-        if let objectID = item.objectID.uriRepresentation().absoluteString as String?,
-           !item.objectID.isTemporaryID {
-            let predicate = NSPredicate(format: "ANY items == %@", item)
-            _outfits = FetchRequest(
-                entity: Outfit.entity(),
-                sortDescriptors: [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: false)],
-                predicate: predicate
-            )
-        } else {
-            // Create a harmless "empty" fetch request to avoid crashes
-            _outfits = FetchRequest(
-                entity: Outfit.entity(),
-                sortDescriptors: [],
-                predicate: NSPredicate(value: false)
-            )
-        }
-    }
+    @State private var outfits: [Outfit] = []
     @State private var isEditingAttributes = false
     @State private var attributesSheet: AttributesSectionView.Sheet?
     @State private var isImageFullScreen = false
@@ -46,10 +27,6 @@ struct ItemDetailView: View {
     @State private var selectedUIImage: UIImage?
     
     @State private var isCropperPresented = false
-   
-   
-    @Environment(\.managedObjectContext) private var viewContext
-    @Environment(\.dismiss) private var dismiss
 
     
     var body: some View {
@@ -138,7 +115,7 @@ struct ItemDetailView: View {
                     // Show outfits section only if there are results
                     if !outfits.isEmpty {
                         Section {
-                            FeaturedOutfitsSection(outfits: Array(outfits))
+                            FeaturedOutfitsSection(outfits: outfits)
                         } header: {
                             HStack {
                                 Text("FEATURED OUTFITS")
@@ -158,6 +135,9 @@ struct ItemDetailView: View {
             }
         }
         .sheet(item: $attributesSheet) { $0.destination(for: item) }
+        .onAppear {
+            fetchOutfits()
+        }
 
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -332,6 +312,25 @@ struct ItemDetailView: View {
         let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
         request.predicate = NSPredicate(format: "type == %@", type)
         return try? viewContext.fetch(request).first
+    }
+    
+    private func fetchOutfits() {
+        // Only fetch if the object has been saved and has an ID
+        guard !item.objectID.isTemporaryID else {
+            outfits = []
+            return
+        }
+        
+        let request: NSFetchRequest<Outfit> = Outfit.fetchRequest()
+        request.predicate = NSPredicate(format: "ANY items == %@", item)
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: false)]
+        
+        do {
+            outfits = try viewContext.fetch(request)
+        } catch {
+            print("❌ Failed to fetch outfits: \(error.localizedDescription)")
+            outfits = []
+        }
     }
     
     

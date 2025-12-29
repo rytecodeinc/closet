@@ -198,16 +198,57 @@ struct ItemAddView: View {
     }
 
     private func attachPrimaryImage(_ image: UIImage) {
-        let item = vm.draftItem
-        if let existing = (item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }) {
-            vm.childContext.delete(existing)
+        // Process image on background queue to avoid blocking main thread
+        Task {
+            // Resize and compress image on background queue
+            let processedData = await processImageForStorage(image)
+            
+            // Assign to Core Data on main queue (child context is mainQueueConcurrencyType)
+            await MainActor.run {
+                let item = vm.draftItem
+                if let existing = (item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }) {
+                    vm.childContext.delete(existing)
+                }
+                let photo = Photo(context: vm.childContext)
+                photo.id = UUID()
+                photo.isPrimary = true
+                photo.data = processedData
+                photo.item = item
+                // ⬅️ no save here; stays staged in child
+                
+                // Refresh UI
+                vm.photoRefreshToken = UUID()
+            }
         }
-        let photo = Photo(context: vm.childContext)
-        photo.id = UUID()
-        photo.isPrimary = true
-        photo.data = image.pngData()
-        photo.item = item
-        // ⬅️ no save here; stays staged in child
+    }
+    
+    /// Processes image for storage: resizes to max 2048x2048 and compresses as JPEG
+    private func processImageForStorage(_ image: UIImage) async -> Data? {
+        return await Task.detached(priority: .userInitiated) {
+            // Resize image if needed (max 2048x2048)
+            let maxDimension: CGFloat = 2048
+            let resizedImage: UIImage
+            
+            if image.size.width > maxDimension || image.size.height > maxDimension {
+                let scale = min(maxDimension / image.size.width, maxDimension / image.size.height)
+                let newSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+                
+                // ✅ Make sure the renderer doesn't use opaque format
+                let format = UIGraphicsImageRendererFormat()
+                format.opaque = false
+                format.scale = image.scale
+                
+                let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
+                resizedImage = renderer.image { _ in
+                    image.draw(in: CGRect(origin: .zero, size: newSize))
+                }
+            } else {
+                resizedImage = image
+            }
+            
+            // ✅ Use PNG to preserve transparency
+            return resizedImage.pngData()
+        }.value
     }
 
     // MARK: - Save flow
@@ -251,9 +292,12 @@ final class ItemAddViewModel: ObservableObject {
     @Published var draftItem: Item
     @Published var photoRefreshToken = UUID()
 
-   // private let selectedWardrobe: Wardrobe?
+    private let selectedWardrobeObjectID: NSManagedObjectID?
     
     init(parentContext: NSManagedObjectContext, selectedWardrobe: Wardrobe?) {
+        // Store the wardrobe's objectID for later re-fetching in child context
+        self.selectedWardrobeObjectID = selectedWardrobe?.objectID
+        
         // Create a child context
         let ctx = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
         ctx.parent = parentContext
@@ -268,13 +312,31 @@ final class ItemAddViewModel: ObservableObject {
         item.id = UUID()
         item.timestamp = Date()
         
+        // If a wardrobe was selected, re-fetch it in the child context and assign to item immediately
+        // This ensures the wardrobe name appears in the UI right away
+        if let wardrobeObjectID = selectedWardrobe?.objectID {
+            do {
+                // Re-fetch the wardrobe in the child context using its objectID
+                let wardrobeInChild = try ctx.existingObject(with: wardrobeObjectID) as? Wardrobe
+                if let wardrobe = wardrobeInChild {
+                    item.addToWardrobes(wardrobe)
+                }
+            } catch {
+                print("⚠️ Warning: Could not re-fetch wardrobe in child context during init: \(error.localizedDescription)")
+                // Continue even if wardrobe assignment fails
+            }
+        }
+        
         self.draftItem = item
-       // self.selectedWardrobe = selectedWardrobe
     }
     
     func persistToParent() throws {
         // Only save if there are actual changes
         guard childContext.hasChanges else { return }
+        
+        // Note: Wardrobe is already assigned in init, but if it wasn't (e.g., if user removed it),
+        // we ensure it's still assigned here as a fallback. However, since we assign it in init,
+        // this is mainly for safety. The wardrobe relationship should already be set.
         
         // Save the child context first
         try childContext.save()

@@ -26,7 +26,11 @@ struct LocationListView: View {
                 ForEach(locations, id: \.self) { location in
                     let name = location.name ?? ""
                     Button {
-                        selectedLocation = location
+                        if selectedLocation == location {
+                            selectedLocation = nil // deselect
+                        } else {
+                            selectedLocation = location // select
+                        }
                     } label: {
                         HStack {
                             Text(name)
@@ -52,12 +56,11 @@ struct LocationListView: View {
 
     private func fetchLocations() {
         let request: NSFetchRequest<Location> = Location.fetchRequest()
-        request.predicate = NSPredicate(format: "isVisible == YES")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Location.name, ascending: true)]
         do {
             locations = try viewContext.fetch(request)
         } catch {
-            print("❌ Failed to fetch brands: \(error.localizedDescription)")
+            print("❌ Failed to fetch locations: \(error.localizedDescription)")
             locations = []
         }
     }
