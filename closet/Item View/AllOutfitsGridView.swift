@@ -15,11 +15,11 @@ struct AllOutfitsGridView: View {
     
     init(item: Item) {
         self.item = item
-        // Fetch outfits that contain this item
+        // Fetch outfits that contain this item (excluding drafts)
         _outfits = FetchRequest(
             entity: Outfit.entity(),
             sortDescriptors: [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: false)],
-            predicate: NSPredicate(format: "items CONTAINS %@", item)
+            predicate: NSPredicate(format: "items CONTAINS %@ AND isDraft != YES", item)
         )
     }
     
