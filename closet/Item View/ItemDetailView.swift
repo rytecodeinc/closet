@@ -322,7 +322,8 @@ struct ItemDetailView: View {
         }
         
         let request: NSFetchRequest<Outfit> = Outfit.fetchRequest()
-        request.predicate = NSPredicate(format: "ANY items == %@", item)
+        // Exclude drafts from outfit listings
+        request.predicate = NSPredicate(format: "ANY items == %@ AND isDraft != YES", item)
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: false)]
         
         do {
