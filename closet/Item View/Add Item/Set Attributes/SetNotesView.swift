@@ -23,7 +23,7 @@ struct SetNotesView: View {
             VStack(alignment: .leading, spacing: 12) {
                 TextEditor(text: $notesText)
                     .frame(minHeight: 200)
-                    .padding(8)
+                    .padding(4)
                     .background(Color(.systemGray6))
                     .cornerRadius(8)
                     .focused($isTextFieldFocused)
@@ -36,6 +36,7 @@ struct SetNotesView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .padding(.horizontal)
+                    Spacer()
                 }
             }
             
