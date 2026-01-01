@@ -14,7 +14,7 @@ struct EventIndividualItemSelection: View {
 
     @ObservedObject var event: Event
 
-    @State private var selectedItemIDs: Set<UUID> = []
+    @State private var selectedItemIDs: [UUID] = [] // Use array to preserve selection order
 
     private let gridColumns = [
         GridItem(.flexible(), spacing: 2),
@@ -66,7 +66,7 @@ struct EventIndividualItemSelection: View {
                                 }
                                 .buttonStyle(PlainButtonStyle())
                                 
-                                if selectedItemIDs.contains(item.id ?? UUID()) {
+                                if let itemId = item.id, selectedItemIDs.contains(itemId) {
                                     Image(systemName: "checkmark.circle.fill")
                                         .foregroundColor(.blue)
                                         .font(.system(size: 20))
@@ -95,32 +95,48 @@ struct EventIndividualItemSelection: View {
 
     // MARK: - Preselect items already linked to event
     private func preselectExistingItems() {
-        if let existingItems = event.items as? Set<Item> {
-            selectedItemIDs = Set(existingItems.compactMap { $0.id })
+        if let existingItems = event.items as? NSOrderedSet {
+            selectedItemIDs = existingItems.compactMap { ($0 as? Item)?.id }
         }
     }
 
     // MARK: - Selection
     private func toggleSelection(for item: Item) {
         guard let id = item.id else { return }
-        if selectedItemIDs.contains(id) {
-            selectedItemIDs.remove(id)
-            event.removeFromItems(item)
+        if let index = selectedItemIDs.firstIndex(of: id) {
+            selectedItemIDs.remove(at: index)
         } else {
-            selectedItemIDs.insert(id)
+            selectedItemIDs.append(id) // Append to preserve selection order
         }
     }
 
     // MARK: - Save selection
     private func saveSelectedItems() {
-        let selected = items.filter { selectedItemIDs.contains($0.id ?? UUID()) }
-        for item in selected {
-            event.addToItems(item)
+        // Create a dictionary for quick lookup
+        let itemsById: [UUID: Item] = Dictionary(uniqueKeysWithValues: items.compactMap { item in
+            guard let id = item.id else { return nil }
+            return (id, item)
+        })
+        
+        // Clear all existing items to ensure correct order
+        if let existingItems = event.items as? NSOrderedSet {
+            event.removeFromItems(existingItems)
         }
-        do {
-            try viewContext.save()
-        } catch {
-            print("Failed to save items to event: \(error)")
+        
+        // Add items in selection order
+        for id in selectedItemIDs {
+            if let item = itemsById[id] {
+                event.addToItems(item)
+            }
+        }
+        
+        // Only save context if event is already persisted (not a temporary/new event)
+        if !event.objectID.isTemporaryID {
+            do {
+                try viewContext.save()
+            } catch {
+                print("Failed to save items to event: \(error)")
+            }
         }
     }
 }
