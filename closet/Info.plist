@@ -5,6 +5,7 @@
         <key>LSApplicationQueriesSchemes</key>
         <array>
             <string>googleapp</string>
+            <string>comgooglemaps</string>
         </array>
     </dict>
 </plist>
