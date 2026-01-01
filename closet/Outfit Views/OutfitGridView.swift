@@ -99,7 +99,7 @@ struct OutfitGridView: View {
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    NavigationLink(destination: OutfitCanvasView()) {
+                    NavigationLink(destination: OutfitAddView()) {
                         Image(systemName: "plus")
                     }
                 }
@@ -120,6 +120,8 @@ struct OutfitGridView: View {
      func fetchOutfits() {
         let request = NSFetchRequest<Outfit>(entityName: "Outfit")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: false)]
+        // Exclude drafts from regular outfit listings
+        request.predicate = NSPredicate(format: "isDraft != YES")
         
         do {
             let results = try viewContext.fetch(request)
