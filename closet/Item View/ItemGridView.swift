@@ -25,6 +25,7 @@ struct ItemGridView: View {
     @State private var selectedTab: String = "Items"
     
     @State private var outfits: [Outfit] = []
+    @State private var sortAscending: Bool = false // false = descending (newest first), true = ascending (oldest first)
 
     let gridColumns = [
         GridItem(.flexible(), spacing: 2),
@@ -89,21 +90,49 @@ struct ItemGridView: View {
             }
         }
         .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
+            ToolbarItemGroup(placement: .navigationBarLeading) {
                 NavigationLink(destination: ItemFilterView(filterModel: filterModel)) {
                     Image(systemName: "line.3.horizontal.decrease.circle")
+                }
+                Menu {
+                    Button {
+                        sortAscending = false
+                        fetchItems()
+                        fetchOutfits()
+                    } label: {
+                        Label("Newest First", systemImage: !sortAscending ? "checkmark" : "")
+                    }
+                    Button {
+                        sortAscending = true
+                        fetchItems()
+                        fetchOutfits()
+                    } label: {
+                        Label("Oldest First", systemImage: sortAscending ? "checkmark" : "")
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down")
                 }
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 if selectedTab == "Items" {
-                    NavigationLink(
-                        destination: ItemAddView(parentContext: viewContext, selectedWardrobe: selectedWardrobe)
-                    ) {
-                        Image(systemName: "plus")
+                    HStack(spacing: 16) {
+                        NavigationLink(destination: ItemDraftsView()) {
+                            Image(systemName: "folder")
+                        }
+                        NavigationLink(
+                            destination: ItemAddView(parentContext: viewContext, selectedWardrobe: selectedWardrobe)
+                        ) {
+                            Image(systemName: "plus")
+                        }
                     }
                 } else if selectedTab == "Outfits" {
-                    NavigationLink(destination: OutfitCanvasView(wardrobeType: wardrobeType, initialWardrobe: selectedWardrobe)) {
-                        Image(systemName: "plus")
+                    HStack(spacing: 16) {
+                        NavigationLink(destination: OutfitDraftsView(wardrobeType: wardrobeType, selectedWardrobe: selectedWardrobe)) {
+                            Image(systemName: "folder")
+                        }
+                        NavigationLink(destination: OutfitAddView(wardrobeType: wardrobeType, initialWardrobe: selectedWardrobe)) {
+                            Image(systemName: "plus")
+                        }
                     }
                 }
             }
@@ -147,7 +176,7 @@ struct ItemGridView: View {
     // MARK: - Core Data fetch
     func fetchItems() {
         let request = NSFetchRequest<Item>(entityName: "Item")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.timestamp, ascending: false)]
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.timestamp, ascending: sortAscending)]
         
         // Build predicate from filterModel, but exclude wardrobe filter since we handle it separately below
         var subpredicates: [NSPredicate] = []
@@ -209,6 +238,10 @@ struct ItemGridView: View {
         }
         subpredicates.append(wardrobePredicate)
         
+        // Exclude drafts from item listings
+        let draftPredicate = NSPredicate(format: "isDraft != YES")
+        subpredicates.append(draftPredicate)
+        
         // Combine all predicates
         let finalPredicate: NSPredicate
         if subpredicates.count == 1 {
@@ -233,7 +266,9 @@ struct ItemGridView: View {
     
     func fetchOutfits() {
         let request = NSFetchRequest<Outfit>(entityName: "Outfit")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: false)]
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: sortAscending)]
+        // Exclude drafts from outfit listings
+        request.predicate = NSPredicate(format: "isDraft != YES")
 
         do {
             let allOutfits = try viewContext.fetch(request)
