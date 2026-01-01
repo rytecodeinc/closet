@@ -112,6 +112,8 @@ struct EventOutfitSelectionView: View {
     private func fetchOutfits() {
         let request = NSFetchRequest<Outfit>(entityName: "Outfit")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: false)]
+        // Exclude drafts from outfit selections
+        request.predicate = NSPredicate(format: "isDraft != YES")
         do {
             let results = try viewContext.fetch(request)
             DispatchQueue.main.async { self.outfits = results }
@@ -140,10 +142,13 @@ struct EventOutfitSelectionView: View {
             event.addToOutfits(outfit)
         }
         
-        do {
-            try viewContext.save()
-        } catch {
-            print("Failed to save outfits to event: \(error)")
+        // Only save context if event is already persisted (not a temporary/new event)
+        if !event.objectID.isTemporaryID {
+            do {
+                try viewContext.save()
+            } catch {
+                print("Failed to save outfits to event: \(error)")
+            }
         }
     }
 }
