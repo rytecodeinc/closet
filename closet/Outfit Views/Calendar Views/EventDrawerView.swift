@@ -53,7 +53,7 @@ struct EventDrawerView: View {
                 Button(action: { showingCreateEvent = true }) {
                     HStack {
                         Image(systemName: "plus")
-                        Text("Add Event").font(.body)
+                        Text("New Event").font(.body)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -67,8 +67,8 @@ struct EventDrawerView: View {
                     }
                     Spacer()
                     Text(dateFormatter.string(from: selectedDate))
-                        .font(.headline)
-                        .fontWeight(.semibold)
+                        .font(.body)
+                     //   .fontWeight(.semibold)
                     Spacer()
                     Button(action: { navigateDate(1) }) {
                         Image(systemName: "chevron.right").foregroundColor(.primary)
@@ -166,17 +166,24 @@ struct EventRowView: View {
         f.timeStyle = .short
         return f
     }()
+    
+    // Helper function to format time, hiding :00 when minutes are zero (e.g., "3:00 PM" -> "3 PM")
+    private func formatTime(_ date: Date) -> String {
+        let formatted = timeFormatter.string(from: date)
+        // Remove ":00" if present (handles both "3:00 PM" and "15:00" formats)
+        return formatted.replacingOccurrences(of: ":00", with: "")
+    }
 
     private let imageSize: CGFloat = 120
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             // time column
-            Text(timeFormatter.string(from: event.startDate ?? Date()))
+            Text(formatTime(event.startDate ?? Date()))
              //   .font(.caption)
              //   .fontWeight(.medium)
                 .foregroundColor(.secondary)
-                .frame(width: 70)
+             //   .frame(width: 50)
 
             // main content (title + horizontally scrollable media)
             VStack(alignment: .leading, spacing: 8) {
@@ -185,7 +192,7 @@ struct EventRowView: View {
                     Text(event.name ?? "Untitled Event")
                         .font(.headline)
                         .foregroundColor(.primary)
-
+/*
                     if let location = event.location, !location.isEmpty {
                         HStack(spacing: 0) {
                           //  Text(" at ")
@@ -194,7 +201,7 @@ struct EventRowView: View {
                                 .foregroundColor(.secondary)
                         }
                         
-                    }
+                    }*/
                 }
 
                 // horizontally scrollable images area
@@ -216,8 +223,8 @@ struct EventRowView: View {
                             }
 
                             // Then individual items
-                            if let itemsSet = event.items as? Set<Item>, !itemsSet.isEmpty {
-                                ForEach(Array(itemsSet), id: \.objectID) { item in
+                            if let itemsOrderedSet = event.items as? NSOrderedSet, itemsOrderedSet.count > 0 {
+                                ForEach(itemsOrderedSet.array as? [Item] ?? [], id: \.objectID) { item in
                                     if let primaryPhoto = (item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }),
                                        let data = primaryPhoto.data,
                                        let uiImage = UIImage(data: data) {
@@ -240,13 +247,13 @@ struct EventRowView: View {
             Spacer()
         }
         .padding(.vertical, 8)
-        .padding(.horizontal, 12)
+      //  .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var hasImages: Bool {
         let hasOutfits = (event.outfits as? Set<Outfit>)?.isEmpty == false
-        let hasItems = (event.items as? Set<Item>)?.isEmpty == false
+        let hasItems = (event.items as? NSOrderedSet)?.count ?? 0 > 0
         return hasOutfits || hasItems
     }
 }
