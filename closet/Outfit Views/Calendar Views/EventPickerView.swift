@@ -14,7 +14,7 @@ enum PickerContentType {
 }
 
 struct EventPickerView: View {
-    let event: Event
+    @ObservedObject var event: Event
     let type: PickerContentType
     let imageSize: CGFloat
     let onAdd: () -> Void  // Reusable handler for the "Add" button
@@ -40,8 +40,8 @@ struct EventPickerView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             } else {
-                if let itemsSet = event.items as? Set<Item>, !itemsSet.isEmpty {
-                    ForEach(Array(itemsSet), id: \.objectID) { item in
+                if let itemsOrderedSet = event.items as? NSOrderedSet, itemsOrderedSet.count > 0 {
+                    ForEach(itemsOrderedSet.array as? [Item] ?? [], id: \.objectID) { item in
                         if let primaryPhoto = (item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }),
                            let data = primaryPhoto.data,
                            let uiImage = UIImage(data: data) {
