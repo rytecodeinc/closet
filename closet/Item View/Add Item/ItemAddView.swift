@@ -26,6 +26,10 @@ struct ItemAddView: View {
     // Save warning
     @State private var showMissingWarning = false
     @State private var missingFieldsDescription = ""
+    
+    // Draft confirmation
+    @State private var showingSaveDraftConfirmation = false
+    @State private var showingDraftSaveAlert = false
 
     init(parentContext: NSManagedObjectContext, selectedWardrobe: Wardrobe?) {
         _vm = StateObject(wrappedValue: ItemAddViewModel(parentContext: parentContext, selectedWardrobe: selectedWardrobe))
@@ -47,12 +51,17 @@ struct ItemAddView: View {
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
-                Button(role: .destructive) {
-                    vm.discard()
-                    dismiss()
+                Button {
+                    if hasItemChanges() {
+                        showingSaveDraftConfirmation = true
+                    } else {
+                        dismiss()
+                    }
                 } label: {
-                    Text("Cancel")
-                        .foregroundColor(.red)
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text("Back")
+                    }
                 }
             }
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -102,6 +111,22 @@ struct ItemAddView: View {
             Button("Keep Editing", role: .cancel) { }
         } message: {
             Text("You are saving with the following empty fields: \(missingFieldsDescription). You can fill them later in Item Details.")
+        }
+        .alert("Draft Saved", isPresented: $showingDraftSaveAlert) {
+            Button("OK") {
+                dismiss()
+            }
+        } message: {
+            Text("Your item has been saved as a draft.")
+        }
+        .alert("Save as draft?", isPresented: $showingSaveDraftConfirmation) {
+            Button("Yes") {
+                saveDraft()
+            }
+            Button("No", role: .cancel) {
+                vm.discard()
+                dismiss()
+            }
         }
     }
 
@@ -270,6 +295,39 @@ struct ItemAddView: View {
             print("❌ Save failed: \(error.localizedDescription)")
         }
     }
+    
+    // MARK: - Draft flow
+    private func hasItemChanges() -> Bool {
+        let item = vm.draftItem
+        
+        // Check if image is set
+        if (selectedUIImage ?? currentPrimaryUIImage()) != nil {
+            return true
+        }
+        
+        // Check attributes (excluding wardrobe since it's set on navigation)
+        if item.category != nil { return true }
+        if let colors = item.colors as? Set<AppColor>, !colors.isEmpty { return true }
+        if let seasons = item.seasons as? Set<Season>, !seasons.isEmpty { return true }
+        if item.brand != nil { return true }
+        if item.price != nil { return true }
+        if let links = item.links as? Set<Link>, !links.isEmpty { return true }
+        if item.location != nil { return true }
+        if let tags = item.tags as? Set<Tag>, !tags.isEmpty { return true }
+        if item.size != nil { return true }
+        if !(item.notes?.isEmpty ?? true) { return true }
+        
+        return false
+    }
+    
+    private func saveDraft() {
+        do {
+            try vm.persistDraftToParent()
+            showingDraftSaveAlert = true
+        } catch {
+            print("❌ Draft save failed: \(error.localizedDescription)")
+        }
+    }
 
     private func missingAttributes(of item: Item) -> [String] {
         var blanks: [String] = []
@@ -334,9 +392,28 @@ final class ItemAddViewModel: ObservableObject {
         // Only save if there are actual changes
         guard childContext.hasChanges else { return }
         
+        // Mark as not draft (explicitly set to false for regular items)
+        draftItem.isDraft = false
+        
         // Note: Wardrobe is already assigned in init, but if it wasn't (e.g., if user removed it),
         // we ensure it's still assigned here as a fallback. However, since we assign it in init,
         // this is mainly for safety. The wardrobe relationship should already be set.
+        
+        // Save the child context first
+        try childContext.save()
+        
+        // Then save the parent context to persist to disk
+        if let parent = childContext.parent, parent.hasChanges {
+            try parent.save()
+        }
+    }
+    
+    func persistDraftToParent() throws {
+        // Only save if there are actual changes
+        guard childContext.hasChanges else { return }
+        
+        // Mark as draft
+        draftItem.isDraft = true
         
         // Save the child context first
         try childContext.save()
