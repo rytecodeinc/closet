@@ -83,7 +83,16 @@ struct SetLinkView: View {
                     if linkToEdit == nil {
                         item.addToLinks(newLink)
                     }
-                    // Don't save - let parent view decide
+                    
+                    // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
+                    if viewContext.parent == nil {
+                        do {
+                            try viewContext.save()
+                        } catch {
+                            print("❌ Failed to save link: \(error.localizedDescription)")
+                        }
+                    }
+                    
                     fetchLinks()
                 }
             )
@@ -124,7 +133,16 @@ struct SetLinkView: View {
             let linkToDelete = links[index]
             viewContext.delete(linkToDelete)
         }
-        // Don't save - changes stay in child context
+        
+        // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
+        if viewContext.parent == nil {
+            do {
+                try viewContext.save()
+            } catch {
+                print("❌ Failed to save link deletion: \(error.localizedDescription)")
+            }
+        }
+        
         fetchLinks()
     }
 }

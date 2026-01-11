@@ -113,8 +113,16 @@ struct SetTagDisplayView: View {
         } else {
             item.addToTags(tag)
         }
-        // Don't save - let parent view decide
-        // The change stays in the child context
+        
+        // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
+        if viewContext.parent == nil {
+            do {
+                try viewContext.save()
+            } catch {
+                print("❌ Failed to save tag: \(error.localizedDescription)")
+            }
+        }
+        // Otherwise, we're in a child context (ItemAddView), don't save - let parent handle it
     }
 
     // MARK: - Add New Tag
@@ -134,7 +142,16 @@ struct SetTagDisplayView: View {
         newTag.id = UUID()
 
         item.addToTags(newTag)
-        // Don't save - the new tag and assignment stay in child context
+        
+        // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
+        if viewContext.parent == nil {
+            do {
+                try viewContext.save()
+            } catch {
+                print("❌ Failed to save tag: \(error.localizedDescription)")
+            }
+        }
+        // Otherwise, we're in a child context (ItemAddView), don't save - let parent handle it
 
         newTagName = ""
         fetchTags()

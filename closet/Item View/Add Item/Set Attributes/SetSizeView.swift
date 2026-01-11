@@ -66,7 +66,7 @@ struct SetSizeView: View {
         .presentationDetents([.medium, .large])
     }
 
-    // MARK: - Apply Selection (without saving)
+    // MARK: - Apply Selection
     
     private func applySizeSelectionToItem() {
         if let sid = selectedSizeID, let chosen = fetchSize(by: sid) {
@@ -76,9 +76,17 @@ struct SetSizeView: View {
             item.size = nil
         }
         
-        // CRITICAL: Do NOT save here
-        // The changes stay in the child context
-        // ItemAddView will save when user taps "Save" or rollback when user taps "Cancel"
+        // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
+        // If viewContext has a parent, we're in a child context and shouldn't save
+        if viewContext.parent == nil {
+            // We're in a parent context (ItemDetailView), save immediately
+            do {
+                try viewContext.save()
+            } catch {
+                print("❌ Failed to save size: \(error.localizedDescription)")
+            }
+        }
+        // Otherwise, we're in a child context (ItemAddView), don't save - let parent handle it
     }
 
     // MARK: - Row

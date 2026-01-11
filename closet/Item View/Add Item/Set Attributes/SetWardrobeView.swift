@@ -41,8 +41,16 @@ struct SetWardrobeView: View {
             }
             
             // Preselect wardrobes the item currently belongs to
-            if let wardrobes = item.wardrobes as? Set<Wardrobe> {
+            if let wardrobes = item.wardrobes as? Set<Wardrobe>, !wardrobes.isEmpty {
                 selectedWardrobes = wardrobes
+            } else {
+                // If no wardrobes are selected, ensure at least one is selected
+                // Fetch all wardrobes and select the first one
+                let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
+                request.sortDescriptors = [NSSortDescriptor(keyPath: \Wardrobe.name, ascending: true)]
+                if let firstWardrobe = try? viewContext.fetch(request).first {
+                    selectedWardrobes = [firstWardrobe]
+                }
             }
         }
         .onDisappear {
@@ -52,9 +60,22 @@ struct SetWardrobeView: View {
         .presentationDetents([.medium, .large])
     }
     
-    // MARK: - Apply Selection (without saving)
+    // MARK: - Apply Selection
     
     private func applyWardrobeSelectionToItem() {
+        // Ensure at least one wardrobe is selected
+        if selectedWardrobes.isEmpty {
+            // If somehow no wardrobes are selected, fetch and select the first one
+            let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \Wardrobe.name, ascending: true)]
+            if let firstWardrobe = try? viewContext.fetch(request).first {
+                selectedWardrobes = [firstWardrobe]
+            } else {
+                // No wardrobes exist, cannot proceed
+                return
+            }
+        }
+        
         // Remove all existing wardrobes
         if let existingWardrobes = item.wardrobes as? Set<Wardrobe> {
             for wardrobe in existingWardrobes {
@@ -67,8 +88,16 @@ struct SetWardrobeView: View {
             item.addToWardrobes(wardrobe)
         }
         
-        // CRITICAL: Do NOT save here
-        // The changes stay in the child context
-        // ItemAddView will save when user taps "Save" or rollback when user taps "Cancel"
+        // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
+        // If viewContext has a parent, we're in a child context and shouldn't save
+        if viewContext.parent == nil {
+            // We're in a parent context (ItemDetailView), save immediately
+            do {
+                try viewContext.save()
+            } catch {
+                print("❌ Failed to save wardrobes: \(error.localizedDescription)")
+            }
+        }
+        // Otherwise, we're in a child context (ItemAddView), don't save - let parent handle it
     }
 }

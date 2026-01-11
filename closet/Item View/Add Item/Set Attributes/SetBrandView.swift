@@ -53,7 +53,16 @@ struct SetBrandView: View {
                             } else {
                                 item.brand = brand
                             }
-                            // Don't save - let parent view decide
+                            
+                            // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
+                            if viewContext.parent == nil {
+                                do {
+                                    try viewContext.save()
+                                } catch {
+                                    print("❌ Failed to save brand: \(error.localizedDescription)")
+                                }
+                            }
+                            
                             dismiss()
                         }) {
                             HStack {
@@ -123,7 +132,16 @@ struct SetBrandView: View {
             print("✅ Brand already exists — assigning it without duplication.")
             if let existing = brands.first(where: { ($0.name ?? "").localizedCaseInsensitiveCompare(trimmed) == .orderedSame }) {
                 item.brand = existing
-                // Don't save - let parent view decide
+                
+                // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
+                if viewContext.parent == nil {
+                    do {
+                        try viewContext.save()
+                    } catch {
+                        print("❌ Failed to save brand: \(error.localizedDescription)")
+                    }
+                }
+                
                 dismiss()
             }
             return
@@ -136,7 +154,15 @@ struct SetBrandView: View {
         newBrand.isVisible = true
 
         item.brand = newBrand
-        // Don't save - the new brand and assignment stay in child context
+        
+        // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
+        if viewContext.parent == nil {
+            do {
+                try viewContext.save()
+            } catch {
+                print("❌ Failed to save brand: \(error.localizedDescription)")
+            }
+        }
         
         newBrandName = ""
         fetchBrands()

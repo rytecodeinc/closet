@@ -97,13 +97,24 @@ struct SetPriceView: View {
             viewContext.delete(existingPrice)
         }
 
-        // Create a new Price object in the child context
+        // Create a new Price object
         let newPrice = Price(context: viewContext)
         newPrice.amount = NSDecimalNumber(decimal: decimalValue)
         newPrice.currency = selectedCurrency
         item.price = newPrice
 
-        // Don't save - let parent view decide
+        // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
+        // If viewContext has a parent, we're in a child context and shouldn't save
+        if viewContext.parent == nil {
+            // We're in a parent context (ItemDetailView), save immediately
+            do {
+                try viewContext.save()
+            } catch {
+                print("❌ Failed to save price: \(error.localizedDescription)")
+            }
+        }
+        // Otherwise, we're in a child context (ItemAddView), don't save - let parent handle it
+        
         dismiss()
     }
 

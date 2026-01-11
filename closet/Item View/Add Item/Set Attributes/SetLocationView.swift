@@ -48,7 +48,16 @@ struct SetLocationView: View {
                     ForEach(filteredLocations, id: \.self) { location in
                         Button(action: {
                             item.location = location
-                            // Don't save - let parent view decide
+                            
+                            // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
+                            if viewContext.parent == nil {
+                                do {
+                                    try viewContext.save()
+                                } catch {
+                                    print("❌ Failed to save location: \(error.localizedDescription)")
+                                }
+                            }
+                            
                             dismiss()
                         }) {
                             HStack {
@@ -120,7 +129,16 @@ struct SetLocationView: View {
                 ($0.name ?? "").localizedCaseInsensitiveCompare(trimmed) == .orderedSame
             }) {
                 item.location = existing
-                // Don't save - let parent view decide
+                
+                // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
+                if viewContext.parent == nil {
+                    do {
+                        try viewContext.save()
+                    } catch {
+                        print("❌ Failed to save location: \(error.localizedDescription)")
+                    }
+                }
+                
                 dismiss()
             }
             return
@@ -132,7 +150,15 @@ struct SetLocationView: View {
         newLocation.name = trimmed
 
         item.location = newLocation
-        // Don't save - the new location and assignment stay in child context
+        
+        // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
+        if viewContext.parent == nil {
+            do {
+                try viewContext.save()
+            } catch {
+                print("❌ Failed to save location: \(error.localizedDescription)")
+            }
+        }
 
         newLocationName = ""
         fetchLocations()

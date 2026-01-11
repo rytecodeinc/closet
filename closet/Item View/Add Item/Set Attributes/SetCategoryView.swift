@@ -129,12 +129,21 @@ struct SetCategoryView: View {
         .presentationDetents([.medium, .large])
     }
 
-    // MARK: - Apply Selection (without saving)
+    // MARK: - Apply Selection
     
     private func applySelectionToItem() {
         guard let catName = selectedCategoryName, !catName.isEmpty else {
             item.category = nil
             item.subcategory = nil
+            
+            // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
+            if viewContext.parent == nil {
+                do {
+                    try viewContext.save()
+                } catch {
+                    print("❌ Failed to save category: \(error.localizedDescription)")
+                }
+            }
             return
         }
 
@@ -148,9 +157,17 @@ struct SetCategoryView: View {
             item.subcategory = nil
         }
         
-        // CRITICAL: Do NOT save here
-        // The changes stay in the child context
-        // ItemAddView will save when user taps "Save" or rollback when user taps "Cancel"
+        // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
+        // If viewContext has a parent, we're in a child context and shouldn't save
+        if viewContext.parent == nil {
+            // We're in a parent context (ItemDetailView), save immediately
+            do {
+                try viewContext.save()
+            } catch {
+                print("❌ Failed to save category: \(error.localizedDescription)")
+            }
+        }
+        // Otherwise, we're in a child context (ItemAddView), don't save - let parent handle it
     }
 
     // MARK: - Fetchers
