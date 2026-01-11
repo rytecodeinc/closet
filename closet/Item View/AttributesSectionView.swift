@@ -25,6 +25,7 @@ struct AttributesSectionView: View {
     var body: some View {
         Section {
             wardrobeRow()
+            nameRow()
             categoryRow()
             brandRow()
             sizeRow()
@@ -32,6 +33,7 @@ struct AttributesSectionView: View {
             seasonRow()
             locationRow()
             priceRow()
+            weatherRow()
             linkRow()
             tagRow()
             notesRow()
@@ -42,7 +44,7 @@ struct AttributesSectionView: View {
 // MARK: - Sheet enum
 extension AttributesSectionView {
     enum Sheet: String, Identifiable {
-        case wardrobe, category, size, color, season, brand, price, link, location, tag, notes
+        case wardrobe, name, category, size, color, season, brand, price, link, location, tag, notes, weather
         var id: String { rawValue }
     }
 }
@@ -68,6 +70,23 @@ extension AttributesSectionView {
                     }
                 }
                 
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.gray)
+                    .font(.caption)
+            }
+        }
+    }
+    
+    // Name
+    func nameRow() -> some View {
+        Button { activeSheet = .name } label: {
+            HStack {
+                Text("Name").foregroundColor(.primary)
+                Spacer()
+                if let name = item.name, !name.isEmpty {
+                    let displayText = name.count > 27 ? String(name.prefix(27)) + "…" : name
+                    Text(displayText).foregroundColor(.gray)
+                }
                 Image(systemName: "chevron.right")
                     .foregroundColor(.gray)
                     .font(.caption)
@@ -168,8 +187,8 @@ extension AttributesSectionView {
                 Spacer()
                 if let seasons = item.seasons as? Set<Season>, !seasons.isEmpty {
                     let names = seasons.compactMap { $0.name }.sorted()
-                    Text(names.prefix(2).joined(separator: ", ")).foregroundColor(.gray)
-                    if names.count > 2 { Text("…").foregroundColor(.gray).font(.headline) }
+                    let displayText = names.count > 2 ? names.prefix(2).joined(separator: ", ") + "…" : names.joined(separator: ", ")
+                    Text(displayText).foregroundColor(.gray)
                 }
                 Image(systemName: "chevron.right")
                     .foregroundColor(.gray)
@@ -218,6 +237,29 @@ extension AttributesSectionView {
                     .foregroundColor(.gray)
                     .font(.caption)
                     .padding(.leading, 4)
+            }
+        }
+    }
+
+    // Weather Row
+    func weatherRow() -> some View {
+        Button { activeSheet = .weather } label: {
+            HStack {
+                Text("Weather").foregroundColor(.primary)
+                Spacer()
+                // Use primitiveValue to properly handle optional scalar types
+                if let minC = item.primitiveValue(forKey: "minTemperature") as? Double,
+                   let maxC = item.primitiveValue(forKey: "maxTemperature") as? Double {
+                    let unit = item.temperatureUnit ?? "C"
+                    let symbol = unit == "C" ? "°C" : "°F"
+                    let displayMin = unit == "C" ? Int(minC) : Int((minC * 9/5) + 32)
+                    let displayMax = unit == "C" ? Int(maxC) : Int((maxC * 9/5) + 32)
+                    Text("\(displayMin)\(symbol) - \(displayMax)\(symbol)")
+                        .foregroundColor(.gray)
+                }
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.gray)
+                    .font(.caption)
             }
         }
     }
@@ -289,10 +331,8 @@ extension AttributesSectionView {
                 Text("Notes").foregroundColor(.primary)
                 Spacer()
                 if let notes = item.notes, !notes.isEmpty {
-                    Text(notes.prefix(30))
-                        .foregroundColor(.gray)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    let displayText = notes.count > 27 ? String(notes.prefix(27)) + "…" : notes
+                    Text(displayText).foregroundColor(.gray)
                 }
                 Image(systemName: "chevron.right")
                     .foregroundColor(.gray)
@@ -342,12 +382,14 @@ extension AttributesSectionView.Sheet {
     func destination(for item: Item) -> some View {
         switch self {
         case .wardrobe:  SetWardrobeView(item: item)
+        case .name:      SetNameView(item: item)
         case .category:  SetCategoryView(item: item)
         case .size:      SetSizeView(item: item)
         case .color:     SetColorView(item: item)
         case .season:    SetSeasonView(item: item)
         case .brand:     SetBrandView(item: item)
         case .price:     SetPriceView(item: item)
+        case .weather:   SetWeatherView(item: item)
         case .link:      SetLinkView(item: item)
         case .location:  SetLocationView(item: item)
         case .tag:       SetTagView(item: item)
