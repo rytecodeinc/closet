@@ -8,7 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		6C0D2AEE2E98C1D800849F4C /* AppShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 6C0D2AE42E98C1D800849F4C /* AppShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
-		6C0D2AFE2E9B747000849F4C /* SwipeActions in Frameworks */ = {isa = PBXBuildFile; productRef = 6C0D2AFD2E9B747000849F4C /* SwipeActions */; };
+		6C18C8D62F148FAF00F076FD /* StableDiffusion in Frameworks */ = {isa = PBXBuildFile; productRef = 6C18C8D52F148FAF00F076FD /* StableDiffusion */; };
+		6C18C8D92F148FC800F076FD /* SwiftSoup in Frameworks */ = {isa = PBXBuildFile; productRef = 6C18C8D82F148FC800F076FD /* SwiftSoup */; };
+		6CF5734F2F149B5800C2E4AC /* Models in Resources */ = {isa = PBXBuildFile; fileRef = 6CF5734E2F149B5800C2E4AC /* Models */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -51,9 +53,18 @@
 
 /* Begin PBXFileReference section */
 		6C0D2AE42E98C1D800849F4C /* AppShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AppShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		6C18C87A2F148A2800F076FD /* Diffusion.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = Diffusion.xcodeproj; sourceTree = "<group>"; };
+		6C6E21502F149DC2009AB47E /* merges.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = merges.txt; sourceTree = "<group>"; };
+		6C6E21512F149DC2009AB47E /* TextEncoder.mlmodelc */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = TextEncoder.mlmodelc; sourceTree = "<group>"; };
+		6C6E21522F149DC2009AB47E /* Unet.mlmodelc */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = Unet.mlmodelc; sourceTree = "<group>"; };
+		6C6E21532F149DC2009AB47E /* VAEDecoder.mlmodelc */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = VAEDecoder.mlmodelc; sourceTree = "<group>"; };
+		6C6E21542F149DC2009AB47E /* VAEEncoder.mlmodelc */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = VAEEncoder.mlmodelc; sourceTree = "<group>"; };
+		6C6E21552F149DC2009AB47E /* vocab.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = vocab.json; sourceTree = "<group>"; };
+		6C8961492F148FFE0042BD96 /* Diffusion.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = Diffusion.xcodeproj; sourceTree = "<group>"; };
 		6CD1D4752DAAF40C00913D5D /* closet.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = closet.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6CD1D48B2DAAF40E00913D5D /* closetTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = closetTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		6CD1D4952DAAF40E00913D5D /* closetUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = closetUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		6CF5734E2F149B5800C2E4AC /* Models */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Models; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -114,7 +125,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				6C0D2AFE2E9B747000849F4C /* SwipeActions in Frameworks */,
+				6C18C8D62F148FAF00F076FD /* StableDiffusion in Frameworks */,
+				6C18C8D92F148FC800F076FD /* SwiftSoup in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -135,13 +147,43 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		6C18C87C2F148A2800F076FD /* Products */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		6C6E21562F149DC2009AB47E /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				6C6E21502F149DC2009AB47E /* merges.txt */,
+				6C6E21512F149DC2009AB47E /* TextEncoder.mlmodelc */,
+				6C6E21522F149DC2009AB47E /* Unet.mlmodelc */,
+				6C6E21532F149DC2009AB47E /* VAEDecoder.mlmodelc */,
+				6C6E21542F149DC2009AB47E /* VAEEncoder.mlmodelc */,
+				6C6E21552F149DC2009AB47E /* vocab.json */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		6C8961572F148FFE0042BD96 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
 		6CD1D46C2DAAF40C00913D5D = {
 			isa = PBXGroup;
 			children = (
+				6CF5734E2F149B5800C2E4AC /* Models */,
+				6C6E21562F149DC2009AB47E /* Models */,
 				6CD1D4772DAAF40C00913D5D /* closet */,
 				6CD1D48E2DAAF40E00913D5D /* closetTests */,
 				6CD1D4982DAAF40E00913D5D /* closetUITests */,
 				6C0D2AE52E98C1D800849F4C /* AppShareExtension */,
+				6CF5733F2F149AD900C2E4AC /* Frameworks */,
 				6CD1D4762DAAF40C00913D5D /* Products */,
 			);
 			sourceTree = "<group>";
@@ -155,6 +197,13 @@
 				6C0D2AE42E98C1D800849F4C /* AppShareExtension.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		6CF5733F2F149AD900C2E4AC /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -194,6 +243,8 @@
 			buildRules = (
 			);
 			dependencies = (
+				6CF573312F1499A200C2E4AC /* PBXTargetDependency */,
+				6CF5732F2F14999E00C2E4AC /* PBXTargetDependency */,
 				6C0D2AED2E98C1D800849F4C /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
@@ -201,7 +252,8 @@
 			);
 			name = closet;
 			packageProductDependencies = (
-				6C0D2AFD2E9B747000849F4C /* SwipeActions */,
+				6C18C8D52F148FAF00F076FD /* StableDiffusion */,
+				6C18C8D82F148FC800F076FD /* SwiftSoup */,
 			);
 			productName = closet;
 			productReference = 6CD1D4752DAAF40C00913D5D /* closet.app */;
@@ -289,11 +341,22 @@
 			mainGroup = 6CD1D46C2DAAF40C00913D5D;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				6C0D2AFC2E9B747000849F4C /* XCRemoteSwiftPackageReference "SwipeActions" */,
+				6C18C8D42F148FAF00F076FD /* XCRemoteSwiftPackageReference "ml-stable-diffusion" */,
+				6C18C8D72F148FC800F076FD /* XCRemoteSwiftPackageReference "SwiftSoup" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 6CD1D4762DAAF40C00913D5D /* Products */;
 			projectDirPath = "";
+			projectReferences = (
+				{
+					ProductGroup = 6C18C87C2F148A2800F076FD /* Products */;
+					ProjectRef = 6C18C87A2F148A2800F076FD /* Diffusion.xcodeproj */;
+				},
+				{
+					ProductGroup = 6C8961572F148FFE0042BD96 /* Products */;
+					ProjectRef = 6C8961492F148FFE0042BD96 /* Diffusion.xcodeproj */;
+				},
+			);
 			projectRoot = "";
 			targets = (
 				6CD1D4742DAAF40C00913D5D /* closet */,
@@ -316,6 +379,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6CF5734F2F149B5800C2E4AC /* Models in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -382,6 +446,14 @@
 			target = 6CD1D4742DAAF40C00913D5D /* closet */;
 			targetProxy = 6CD1D4962DAAF40E00913D5D /* PBXContainerItemProxy */;
 		};
+		6CF5732F2F14999E00C2E4AC /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			productRef = 6CF5732E2F14999E00C2E4AC /* StableDiffusion */;
+		};
+		6CF573312F1499A200C2E4AC /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			productRef = 6CF573302F1499A200C2E4AC /* SwiftSoup */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
@@ -393,9 +465,9 @@
 				DEVELOPMENT_TEAM = 98S75SX3J9;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = AppShareExtension/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = AppShareExtension;
+				INFOPLIST_KEY_CFBundleDisplayName = Closet;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -420,9 +492,9 @@
 				DEVELOPMENT_TEAM = 98S75SX3J9;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = AppShareExtension/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = AppShareExtension;
+				INFOPLIST_KEY_CFBundleDisplayName = Closet;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -779,21 +851,44 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		6C0D2AFC2E9B747000849F4C /* XCRemoteSwiftPackageReference "SwipeActions" */ = {
+		6C18C8D42F148FAF00F076FD /* XCRemoteSwiftPackageReference "ml-stable-diffusion" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/c-villain/SwipeActions";
+			repositoryURL = "https://github.com/apple/ml-stable-diffusion.git";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 0.4.1;
+				minimumVersion = 1.1.1;
+			};
+		};
+		6C18C8D72F148FC800F076FD /* XCRemoteSwiftPackageReference "SwiftSoup" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/scinfu/SwiftSoup.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.11.3;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		6C0D2AFD2E9B747000849F4C /* SwipeActions */ = {
+		6C18C8D52F148FAF00F076FD /* StableDiffusion */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 6C0D2AFC2E9B747000849F4C /* XCRemoteSwiftPackageReference "SwipeActions" */;
-			productName = SwipeActions;
+			package = 6C18C8D42F148FAF00F076FD /* XCRemoteSwiftPackageReference "ml-stable-diffusion" */;
+			productName = StableDiffusion;
+		};
+		6C18C8D82F148FC800F076FD /* SwiftSoup */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 6C18C8D72F148FC800F076FD /* XCRemoteSwiftPackageReference "SwiftSoup" */;
+			productName = SwiftSoup;
+		};
+		6CF5732E2F14999E00C2E4AC /* StableDiffusion */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 6C18C8D42F148FAF00F076FD /* XCRemoteSwiftPackageReference "ml-stable-diffusion" */;
+			productName = StableDiffusion;
+		};
+		6CF573302F1499A200C2E4AC /* SwiftSoup */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 6C18C8D72F148FC800F076FD /* XCRemoteSwiftPackageReference "SwiftSoup" */;
+			productName = SwiftSoup;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
