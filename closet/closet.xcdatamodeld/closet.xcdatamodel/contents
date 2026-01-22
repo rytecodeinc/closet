@@ -47,9 +47,15 @@
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="image" optional="YES" attributeType="Binary"/>
         <attribute name="isDraft" optional="YES" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="isFavorite" optional="YES" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
         <attribute name="isWishlist" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
+        <attribute name="maxTemperature" optional="YES" attributeType="Double" usesScalarValueType="YES"/>
+        <attribute name="minTemperature" optional="YES" attributeType="Double" usesScalarValueType="YES"/>
         <attribute name="name" optional="YES" attributeType="String"/>
         <attribute name="notes" optional="YES" attributeType="String"/>
+        <attribute name="temperatureUnit" optional="YES" attributeType="String"/>
+        <attribute name="weight" optional="YES" attributeType="Double" usesScalarValueType="YES"/>
+        <attribute name="weightUnit" optional="YES" attributeType="String"/>
         <attribute name="timestamp" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <relationship name="brand" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Brand" inverseName="items" inverseEntity="Brand"/>
         <relationship name="category" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Category" inverseName="items" inverseEntity="Category"/>
