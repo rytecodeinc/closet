@@ -156,6 +156,13 @@ struct ItemDetailView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
+                    // Add to or Remove from Wardrobe button
+                    Button {
+                        attributesSheet = .wardrobe
+                    } label: {
+                        Label("Manage Wardrobes", systemImage: "hanger")
+                    }
+                    
                     // Favorite button - first option
                     Button {
                         toggleFavorite()
@@ -285,7 +292,7 @@ struct ItemDetailView: View {
                 deleteItem()
             }
         } message: {
-            Text("Are you sure you want to delete this item? This action cannot be undone.")
+            Text("Delete this item from all wardrobes? This action cannot be undone.")
         }
     }
     

@@ -14,10 +14,53 @@ struct SetWardrobeView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var selectedWardrobes: Set<Wardrobe> = []
+    
+    // Determine default wardrobe type and exclusion based on item's current wardrobes
+    private var defaultWardrobeType: String? {
+        let currentWardrobes = item.wardrobes as? Set<Wardrobe> ?? []
+        
+        // If item has a closet wardrobe, use "closet" as default
+        if currentWardrobes.contains(where: { $0.type?.lowercased() == "closet" }) {
+            return "closet"
+        }
+        
+        // If item has a wishlist wardrobe, use "wishlist" as default
+        if currentWardrobes.contains(where: { $0.type?.lowercased() == "wishlist" }) {
+            return "wishlist"
+        }
+        
+        // If no wardrobes, default to "closet"
+        if currentWardrobes.isEmpty {
+            return "closet"
+        }
+        
+        return nil
+    }
+    
+    // Exclude opposite wardrobe type based on context
+    private var excludeWardrobeType: String? {
+        let currentWardrobes = item.wardrobes as? Set<Wardrobe> ?? []
+        
+        // If item has a closet wardrobe, exclude wishlist
+        if currentWardrobes.contains(where: { $0.type?.lowercased() == "closet" }) {
+            return "wishlist"
+        }
+        
+        // If item has a wishlist wardrobe, exclude closet
+        if currentWardrobes.contains(where: { $0.type?.lowercased() == "wishlist" }) {
+            return "closet"
+        }
+        
+        return nil
+    }
 
     var body: some View {
         Section(header: SelectionHeader(title: "Select Wardrobes")) {
-            WardrobeListView(selectedWardrobes: $selectedWardrobes)
+            WardrobeListView(
+                selectedWardrobes: $selectedWardrobes,
+                defaultWardrobeType: defaultWardrobeType,
+                excludeWardrobeType: excludeWardrobeType
+            )
         }
         .onAppear {
             // Run deduplication on the parent context to ensure no duplicates
@@ -44,16 +87,39 @@ struct SetWardrobeView: View {
             if let wardrobes = item.wardrobes as? Set<Wardrobe>, !wardrobes.isEmpty {
                 selectedWardrobes = wardrobes
             } else {
-                // If no wardrobes are selected, ensure at least one is selected
-                // Fetch all wardrobes and select the first one
+                // If no wardrobes are selected, select the default wardrobe
+                // Fetch wardrobes filtered by default type
                 let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
+                
+                // Apply exclusion filter if needed
+                if let excludeType = excludeWardrobeType {
+                    request.predicate = NSPredicate(format: "type != %@", excludeType)
+                }
+                
+                // If we have a default type, prefer that
+                if let defaultType = defaultWardrobeType {
+                    request.predicate = NSPredicate(format: "type == %@", defaultType)
+                }
+                
                 request.sortDescriptors = [NSSortDescriptor(keyPath: \Wardrobe.name, ascending: true)]
-                if let firstWardrobe = try? viewContext.fetch(request).first {
-                    selectedWardrobes = [firstWardrobe]
+                if let defaultWardrobe = try? viewContext.fetch(request).first {
+                    selectedWardrobes = [defaultWardrobe]
+                } else {
+                    // Fallback: fetch any wardrobe if default not found
+                    let fallbackRequest: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
+                    if let excludeType = excludeWardrobeType {
+                        fallbackRequest.predicate = NSPredicate(format: "type != %@", excludeType)
+                    }
+                    fallbackRequest.sortDescriptors = [NSSortDescriptor(keyPath: \Wardrobe.name, ascending: true)]
+                    if let firstWardrobe = try? viewContext.fetch(fallbackRequest).first {
+                        selectedWardrobes = [firstWardrobe]
+                    }
                 }
             }
         }
         .onDisappear {
+            // Ensure default wardrobe is always selected before applying
+            ensureDefaultWardrobeIsSelected()
             // Apply wardrobe selection to item (but DON'T save context)
             applyWardrobeSelectionToItem()
         }
@@ -62,17 +128,58 @@ struct SetWardrobeView: View {
     
     // MARK: - Apply Selection
     
+    private func ensureDefaultWardrobeIsSelected() {
+        guard let defaultType = defaultWardrobeType else { return }
+        
+        // Check if default wardrobe is already selected
+        let hasDefaultWardrobe = selectedWardrobes.contains { $0.type?.lowercased() == defaultType.lowercased() }
+        
+        if !hasDefaultWardrobe {
+            // Fetch the default wardrobe
+            let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
+            request.predicate = NSPredicate(format: "type == %@", defaultType)
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)]
+            
+            if let defaultWardrobe = try? viewContext.fetch(request).first {
+                selectedWardrobes.insert(defaultWardrobe)
+            }
+        }
+    }
+    
     private func applyWardrobeSelectionToItem() {
+        // Ensure default wardrobe is always selected
+        ensureDefaultWardrobeIsSelected()
         // Ensure at least one wardrobe is selected
         if selectedWardrobes.isEmpty {
-            // If somehow no wardrobes are selected, fetch and select the first one
+            // If somehow no wardrobes are selected, fetch and select the default one
             let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
+            
+            // Apply exclusion filter if needed
+            if let excludeType = excludeWardrobeType {
+                request.predicate = NSPredicate(format: "type != %@", excludeType)
+            }
+            
+            // If we have a default type, prefer that
+            if let defaultType = defaultWardrobeType {
+                request.predicate = NSPredicate(format: "type == %@", defaultType)
+            }
+            
             request.sortDescriptors = [NSSortDescriptor(keyPath: \Wardrobe.name, ascending: true)]
-            if let firstWardrobe = try? viewContext.fetch(request).first {
-                selectedWardrobes = [firstWardrobe]
+            if let defaultWardrobe = try? viewContext.fetch(request).first {
+                selectedWardrobes = [defaultWardrobe]
             } else {
-                // No wardrobes exist, cannot proceed
-                return
+                // Fallback: fetch any wardrobe if default not found
+                let fallbackRequest: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
+                if let excludeType = excludeWardrobeType {
+                    fallbackRequest.predicate = NSPredicate(format: "type != %@", excludeType)
+                }
+                fallbackRequest.sortDescriptors = [NSSortDescriptor(keyPath: \Wardrobe.name, ascending: true)]
+                if let firstWardrobe = try? viewContext.fetch(fallbackRequest).first {
+                    selectedWardrobes = [firstWardrobe]
+                } else {
+                    // No wardrobes exist, cannot proceed
+                    return
+                }
             }
         }
         
