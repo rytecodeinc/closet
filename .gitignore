@@ -1,0 +1,15 @@
+.DS_Store
+
+# Xcode user-specific files
+*.xcuserstate
+*.xcuserdata/
+xcuserdata/
+
+# SwiftPM (keep Package.resolved tracked if you want reproducible builds)
+.swiftpm/
+
+# Build products
+DerivedData/
+build/
+
+
