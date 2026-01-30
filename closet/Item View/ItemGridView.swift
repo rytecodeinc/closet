@@ -26,6 +26,11 @@ struct ItemGridView: View {
     
     @State private var outfits: [Outfit] = []
     @State private var sortAscending: Bool = false // false = descending (newest first), true = ascending (oldest first)
+    
+    // Selection mode state
+    @State private var selectedItemForNavigation: Item?
+    @State private var isInSelectionMode = false
+    @State private var selectedItems: Set<Item> = []
 
     let gridColumns = [
         GridItem(.flexible(), spacing: 2),
@@ -128,13 +133,22 @@ struct ItemGridView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 if selectedTab == "Items" {
                     HStack(spacing: 16) {
-                        NavigationLink(destination: ItemDraftsView()) {
-                            Image(systemName: "folder")
-                        }
-                        NavigationLink(
-                            destination: ItemAddView(parentContext: viewContext, selectedWardrobe: selectedWardrobe)
-                        ) {
-                            Image(systemName: "plus")
+                        if isInSelectionMode {
+                            Button("Done") {
+                                print("📱 Selection mode: Done button tapped")
+                                isInSelectionMode = false
+                                selectedItems.removeAll()
+                                print("📱 Selection mode: Exited, cleared \(selectedItems.count) selected items")
+                            }
+                        } else {
+                            NavigationLink(destination: ItemDraftsView()) {
+                                Image(systemName: "folder")
+                            }
+                            NavigationLink(
+                                destination: ItemAddView(parentContext: viewContext, selectedWardrobe: selectedWardrobe)
+                            ) {
+                                Image(systemName: "plus")
+                            }
                         }
                     }
                 } else if selectedTab == "Outfits" {
@@ -160,6 +174,9 @@ struct ItemGridView: View {
                 }
                 isImagePickerPresented = false
             }
+        }
+        .navigationDestination(item: $selectedItemForNavigation) { item in
+            ItemDetailView(item: item)
         }
     }
 
@@ -379,34 +396,98 @@ struct ItemGridView: View {
     private var itemsTab: some View {
         Group {
             if closetItems.isEmpty {
-                EmptyItemStateView()
+                EmptyItemStateView(wardrobe: selectedWardrobe)
             } else {
                 ScrollView(showsIndicators: false) {
                     LazyVGrid(columns: gridColumns, spacing: 2) {
                         ForEach(closetItems, id: \.objectID) { item in
-                            NavigationLink(destination: ItemDetailView(item: item)) {
-                                ItemView(item: item)
-                                  /*  .background(
-                                        GeometryReader { geo in
-                                            Color.clear
-                                                .preference(
-                                                    key: ScrollOffsetPreferenceKey.self,
-                                                    value: geo.frame(in: .named("scroll")).minY < 100 ? index : nil
-                                                )
+                            ItemView(item: item)
+                                .overlay(
+                                    // Transparent white overlay when in selection mode
+                                    Group {
+                                        if isInSelectionMode && selectedItems.contains(item) {
+                                            Rectangle()
+                                                .fill(Color.white.opacity(0.35))
                                         }
-                                    )*/
-                            }
+                                    }
+                                )
+                                .overlay(
+                                    // Show selection checkmark when in selection mode (on top of white overlay)
+                                    Group {
+                                        if isInSelectionMode {
+                                            VStack {
+                                                Spacer()
+                                                HStack {
+                                                    Spacer()
+                                                    Image(systemName: selectedItems.contains(item) ? "checkmark.circle" : "circle")
+                                                        .foregroundColor(.white)
+                                                        .background(
+                                                            Circle()
+                                                                .fill(selectedItems.contains(item) ? Color.blue : Color.clear)
+                                                                .padding(2)
+                                                        )
+                                                        .font(.system(size: 22))
+                                                        .shadow(radius: 1)
+                                                        .padding(8)
+                                                }
+                                            }
+                                        }
+                                    }
+                                )
+                                .contentShape(Rectangle()) // Make entire area tappable
+                                .onTapGesture {
+                                    print("📱 Tap gesture detected on item: \(item.id?.uuidString ?? "no-id")")
+                                    handleTap(for: item)
+                                }
+                                .onLongPressGesture(minimumDuration: 0.5) {
+                                    handleLongPress(for: item)
+                                }
                         }
                     }
                     .padding(.top, 2)
                 }
-            /*    .coordinateSpace(name: "scroll")
-                .onPreferenceChange(ScrollOffsetPreferenceKey.self) { topIndex in
-                    guard let topIndex = topIndex else { return }
-                    handleScroll(topIndex)
-                }*/
             }
         }
+    }
+    
+    // MARK: - Gesture Handlers
+    
+    private func handleTap(for item: Item) {
+        print("📱 handleTap called for item: \(item.id?.uuidString ?? "no-id"), isInSelectionMode: \(isInSelectionMode)")
+        
+        if isInSelectionMode {
+            // Toggle selection
+            if selectedItems.contains(item) {
+                selectedItems.remove(item)
+                print("📱 Item deselected. Total selected: \(selectedItems.count)")
+            } else {
+                selectedItems.insert(item)
+                print("📱 Item selected. Total selected: \(selectedItems.count)")
+            }
+            
+            // Exit selection mode if no items selected
+            if selectedItems.isEmpty {
+                print("📱 No items selected, exiting selection mode")
+                isInSelectionMode = false
+            }
+        } else {
+            // Navigate to detail view
+            print("📱 Navigating to ItemDetailView for item: \(item.id?.uuidString ?? "no-id")")
+            selectedItemForNavigation = item
+        }
+    }
+    
+    private func handleLongPress(for item: Item) {
+        // Haptic feedback
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.impactOccurred()
+        
+        // Enter selection mode and select this item
+        if !isInSelectionMode {
+            isInSelectionMode = true
+        }
+        
+        selectedItems.insert(item)
     }
 
     private var outfitsTab: some View {
