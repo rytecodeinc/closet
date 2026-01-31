@@ -16,6 +16,9 @@ struct ItemGridView: View {
     var wardrobeType: String
     var selectedWardrobe: Wardrobe
     
+    // Binding to communicate selection state to parent
+    @Binding var isInSelectionMode: Bool
+    
     @Environment(\.managedObjectContext) private var viewContext
     @State private var closetItems: [Item] = []
     @State private var isImagePickerPresented = false
@@ -29,8 +32,8 @@ struct ItemGridView: View {
     
     // Selection mode state
     @State private var selectedItemForNavigation: Item?
-    @State private var isInSelectionMode = false
     @State private var selectedItems: Set<Item> = []
+    @State private var showWardrobeSelectionSheet = false
 
     let gridColumns = [
         GridItem(.flexible(), spacing: 2),
@@ -66,6 +69,7 @@ struct ItemGridView: View {
                 selectedTab: $selectedTab,
                 tabs: ["Items (\(closetItems.count))", "Outfits (\(outfits.count))"]
             )
+            .disabled(isInSelectionMode)
             
          /*   if !isControlsHidden {
                 ControlsBar
@@ -83,8 +87,17 @@ struct ItemGridView: View {
                 outfitsTab.tag("Outfits")
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
+            
         }
         .navigationBarTitleDisplayMode(.inline)
+        // Exit selection mode when switching tabs
+        .onChange(of: selectedTab) { oldValue, newValue in
+            if oldValue != newValue && isInSelectionMode {
+                // User switched tabs while in selection mode - cancel it
+                isInSelectionMode = false
+                selectedItems.removeAll()
+            }
+        }
         .onAppear {
             fetchItems()
             fetchOutfits()
@@ -108,37 +121,51 @@ struct ItemGridView: View {
         }
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarLeading) {
-                NavigationLink(destination: ItemFilterView(filterModel: filterModel)) {
-                    Image(systemName: "line.3.horizontal.decrease.circle")
-                }
-                Menu {
+                if selectedTab == "Items" && isInSelectionMode {
+                    let allSelected = !closetItems.isEmpty && selectedItems.count == closetItems.count
                     Button {
-                        sortAscending = false
-                        fetchItems()
-                        fetchOutfits()
+                        if allSelected {
+                            selectedItems.removeAll()
+                        } else {
+                            selectedItems = Set(closetItems)
+                        }
                     } label: {
-                        Label("Newest First", systemImage: !sortAscending ? "checkmark" : "")
+                        HStack(spacing: 4) {
+                            Image(systemName: allSelected ? "checkmark.circle.fill" : "circle")
+                            Text("All")
+                        }
                     }
-                    Button {
-                        sortAscending = true
-                        fetchItems()
-                        fetchOutfits()
+                } else {
+                    NavigationLink(destination: ItemFilterView(filterModel: filterModel)) {
+                        Image(systemName: "line.3.horizontal.decrease.circle")
+                    }
+                    Menu {
+                        Button {
+                            sortAscending = false
+                            fetchItems()
+                            fetchOutfits()
+                        } label: {
+                            Label("Newest First", systemImage: !sortAscending ? "checkmark" : "")
+                        }
+                        Button {
+                            sortAscending = true
+                            fetchItems()
+                            fetchOutfits()
+                        } label: {
+                            Label("Oldest First", systemImage: sortAscending ? "checkmark" : "")
+                        }
                     } label: {
-                        Label("Oldest First", systemImage: sortAscending ? "checkmark" : "")
+                        Image(systemName: "arrow.up.arrow.down")
                     }
-                } label: {
-                    Image(systemName: "arrow.up.arrow.down")
                 }
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 if selectedTab == "Items" {
                     HStack(spacing: 16) {
                         if isInSelectionMode {
-                            Button("Done") {
-                                print("📱 Selection mode: Done button tapped")
+                            Button("Cancel") {
                                 isInSelectionMode = false
                                 selectedItems.removeAll()
-                                print("📱 Selection mode: Exited, cleared \(selectedItems.count) selected items")
                             }
                         } else {
                             NavigationLink(destination: ItemDraftsView()) {
@@ -162,6 +189,20 @@ struct ItemGridView: View {
                     }
                 }
             }
+            ToolbarItem(placement: .principal) {
+                if selectedTab == "Items" && isInSelectionMode {
+                    Button {
+                        showWardrobeSelectionSheet = true
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("\(selectedItems.count) Selected")
+                                .font(.headline)
+                            Image(systemName: "plus.rectangle.on.folder")
+                                .font(.caption)
+                        }
+                    }
+                }
+            }
         }
         .sheet(isPresented: $isImagePickerPresented) {
             ImagePicker(
@@ -174,6 +215,9 @@ struct ItemGridView: View {
                 }
                 isImagePickerPresented = false
             }
+        }
+        .sheet(isPresented: $showWardrobeSelectionSheet) {
+            wardrobeSelectionSheet()
         }
         .navigationDestination(item: $selectedItemForNavigation) { item in
             ItemDetailView(item: item)
@@ -488,6 +532,108 @@ struct ItemGridView: View {
         }
         
         selectedItems.insert(item)
+    }
+    
+    // MARK: - Wardrobe Selection Sheet
+    
+    @ViewBuilder
+    private func wardrobeSelectionSheet() -> some View {
+        let wardrobes = fetchAllWardrobes()
+        
+        return NavigationView {
+            List {
+                ForEach(wardrobes, id: \.self) { wardrobe in
+                    let allItemsInWardrobe = areAllSelectedItemsInWardrobe(wardrobe)
+                    let isDefault = wardrobe == wardrobes.first
+                    
+                    Button {
+                        addSelectedItemsToWardrobe(wardrobe)
+                        showWardrobeSelectionSheet = false
+                    } label: {
+                        HStack {
+                            Text(wardrobe.name ?? "Untitled")
+                            
+                            // Add "Default" label next to the first wardrobe
+                            if isDefault {
+                                Text("Default")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(
+                                        Capsule()
+                                            .fill(Color(UIColor.secondarySystemBackground))
+                                    )
+                            }
+                            
+                            Spacer()
+                            
+                            Image(systemName: allItemsInWardrobe ? "checkmark" : "plus")
+                                .foregroundColor(allItemsInWardrobe ? .green : .blue)
+                                .font(.system(size: 16, weight: .medium))
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .listStyle(.plain)
+            .navigationTitle("Add to Wardrobe")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Color(UIColor.secondarySystemBackground), for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+        }
+        .presentationDetents([.medium, .large])
+    }
+    
+    private func areAllSelectedItemsInWardrobe(_ wardrobe: Wardrobe) -> Bool {
+        guard !selectedItems.isEmpty else { return false }
+        
+        let itemsInWardrobe = (wardrobe.items as? Set<Item>) ?? []
+        
+        // Check if all selected items are already in this wardrobe
+        return selectedItems.allSatisfy { itemsInWardrobe.contains($0) }
+    }
+    
+    private func fetchAllWardrobes() -> [Wardrobe] {
+        let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
+        // Filter by wardrobeType (closet or wishlist)
+        request.predicate = NSPredicate(format: "type == %@", wardrobeType)
+        request.sortDescriptors = [
+            NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)
+        ]
+        
+        do {
+            return try viewContext.fetch(request)
+        } catch {
+            print("❌ Failed to fetch wardrobes: \(error.localizedDescription)")
+            return []
+        }
+    }
+    
+    private func addSelectedItemsToWardrobe(_ wardrobe: Wardrobe) {
+        guard !selectedItems.isEmpty else { return }
+        
+        // Get items already in this wardrobe
+        let itemsInWardrobe = (wardrobe.items as? Set<Item>) ?? []
+        
+        // Add selected items to the wardrobe (Core Data will handle duplicates)
+        for item in selectedItems {
+            if !itemsInWardrobe.contains(item) {
+                wardrobe.addToItems(item)
+            }
+        }
+        
+        do {
+            try viewContext.save()
+            print("✅ Added \(selectedItems.count) items to wardrobe '\(wardrobe.name ?? "unknown")'")
+            
+            // Exit selection mode after successful addition
+            isInSelectionMode = false
+            selectedItems.removeAll()
+        } catch {
+            print("❌ Failed to add items to wardrobe: \(error.localizedDescription)")
+        }
     }
 
     private var outfitsTab: some View {

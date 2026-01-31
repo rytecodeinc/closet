@@ -25,6 +25,7 @@ struct WishlistView: View {
     @State private var editingWardrobe: Wardrobe?
     @State private var editingName: String = ""
     @State private var showEditAlert = false
+    @State private var isItemGridInSelectionMode = false
     
     var body: some View {
         NavigationView {
@@ -58,7 +59,8 @@ private extension WishlistView {
             ItemGridView(
                 filterModel: filterModel,
                 wardrobeType: "wishlist",
-                selectedWardrobe: selected
+                selectedWardrobe: selected,
+                isInSelectionMode: $isItemGridInSelectionMode
             )
         } else {
             Text("No Wishlist Selected")
@@ -69,7 +71,10 @@ private extension WishlistView {
     @ToolbarContentBuilder
     func navigationBarToolbar() -> some ToolbarContent {
         ToolbarItem(placement: .principal) {
-            wishlistSelectionButton()
+            // Only show wishlistSelectionButton when NOT in item selection mode
+            if !isItemGridInSelectionMode {
+                wishlistSelectionButton()
+            }
         }
       /*  ToolbarItem(placement: .navigationBarTrailing) {
             addItemButton()

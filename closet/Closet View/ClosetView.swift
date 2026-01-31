@@ -25,6 +25,7 @@ struct ClosetView: View {
     @State private var editingWardrobe: Wardrobe?
     @State private var editingName: String = ""
     @State private var showEditAlert = false
+    @State private var isItemGridInSelectionMode = false
     
     var body: some View {
         NavigationView {
@@ -58,7 +59,8 @@ private extension ClosetView {
             ItemGridView(
                 filterModel: filterModel,
                 wardrobeType: "closet",
-                selectedWardrobe: selected
+                selectedWardrobe: selected,
+                isInSelectionMode: $isItemGridInSelectionMode
             )
             .id(selected.objectID)
         } else {
@@ -70,7 +72,10 @@ private extension ClosetView {
     @ToolbarContentBuilder
     func navigationBarToolbar() -> some ToolbarContent {
         ToolbarItem(placement: .principal) {
-            closetSelectionButton()
+            // Only show closetSelectionButton when NOT in item selection mode
+            if !isItemGridInSelectionMode {
+                closetSelectionButton()
+            }
         }
      /*   ToolbarItem(placement: .navigationBarTrailing) {
             addItemButton()
