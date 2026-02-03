@@ -1,0 +1,67 @@
+//
+//  SetsSection.swift
+//  closet
+//
+//  Created by Dan Warner on 12/19/25.
+//
+
+import SwiftUI
+
+struct SetsSection: View {
+    let pairedItems: [Item]
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 2) {
+                ForEach(pairedItems, id: \.objectID) { item in
+                    SetItemCell(item: item)
+                }
+            }
+        }
+    }
+}
+
+struct SetItemCell: View {
+    @ObservedObject var item: Item
+    let size: CGFloat = (UIScreen.main.bounds.width - 6) / 3
+
+    var body: some View {
+        NavigationLink(destination: ItemDetailView(item: item)) {
+            VStack {
+                ItemImageView(item: item)
+                    .frame(width: size, height: size)
+            }
+        }
+    }
+}
+
+struct ItemImageView: View {
+    @ObservedObject var item: Item
+
+    var displayImage: UIImage? {
+        if let primaryImageData = item.photos?.first(where: { ($0 as? Photo)?.isPrimary == true }) as? Photo {
+            return UIImage(data: primaryImageData.data ?? Data())
+        } else if let fallbackImage = item.image {
+            return UIImage(data: fallbackImage)
+        } else {
+            return nil
+        }
+    }
+
+    var body: some View {
+        if let uiImage = displayImage {
+            Image(uiImage: uiImage)
+                .resizable()
+                .aspectRatio(1, contentMode: .fill)
+                .clipped()
+        } else {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(.systemGray5))
+                .overlay(
+                    Image(systemName: "photo")
+                        .foregroundColor(.gray)
+                )
+        }
+    }
+}
+
