@@ -19,6 +19,8 @@ struct ItemDetailView: View {
     @State private var isEditingAttributes = false
     @State private var attributesSheet: AttributesSectionView.Sheet?
     @State private var isImageFullScreen = false
+    @State private var isAttributesExpanded = true
+    @State private var isSetsExpanded = true
     
     private let currencySymbol = Locale.current.currencySymbol ?? "$"
 
@@ -39,7 +41,16 @@ struct ItemDetailView: View {
     @State private var showThumbnailActionSheet: Bool = false
     @State private var thumbnailActionSheetType: ImageType?
     @State private var showDeleteConfirmation = false
-
+    @State private var showPairItemSelection = false
+    
+    // Computed property to get paired items
+    private var pairedItems: [Item] {
+        if let pairedItemsSet = item.pairedItems as? Set<Item> {
+            return Array(pairedItemsSet)
+        }
+        return []
+    }
+    
     enum ImageType {
         case front
         case back
@@ -66,64 +77,68 @@ struct ItemDetailView: View {
                 List {
                     // Image Gallery Section
                     Section {
-                        VStack(spacing: 0) {
-                            // Large primary image display
-                            itemImageDisplay()
-                        }
+                        // Large primary image display
+                        itemImageDisplay()
+                        
                         // Row of 3 square images
                         imageThumbnailRow()
                     }
-                        .listRowInsets(EdgeInsets(.zero))
-                        .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(.zero))
+                    .listRowSeparator(.hidden)
+                    .listSectionSpacing(0)
                     
-                    /* Share button icon
-                    if let primaryPhoto = (item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }),
-                       let imageData = primaryPhoto.data,
-                       let image = UIImage(data: imageData) {
-                        
-                        HStack {
-                               // Text("Search with Google Lens")
-                                Spacer()
-                                ShareLink(item: Image(uiImage: image), preview: SharePreview("Share Item", image: Image(uiImage: image))) {
-                                    Image(systemName: "square.and.arrow.up")
-                                }
-                            }
-                        .listRowSeparator(.hidden)
-                    }*/
                     
                     // ATTRIBUTES Section
-                //    if isEditingAttributes {
-                        Section {
+                    Section {
+                        if isAttributesExpanded {
                             AttributesSectionView(item: item, activeSheet: $attributesSheet)
                                 .transition(.opacity.combined(with: .slide))
                                 .listRowInsets(EdgeInsets(top: 05, leading: 20, bottom: 05, trailing: 20))
                         }
-                    
-                      //  .listRowInsets(EdgeInsets(.zero))
-                            
-                /*    } else {
-                        Section {
-                            AttributesDisplayView(item: item)
-                                .transition(.opacity.combined(with: .slide))
-                               // .listRowInsets(EdgeInsets(top: 05, leading: 20, bottom: 05, trailing: 20))
-                        } header: {
-                            HStack {
-                                Text("ATTRIBUTES")
-                                    .fontWeight(.semibold)
-                                Spacer()
-                                Button(isEditingAttributes ? "Done" : "Edit") {
-                                    withAnimation {
-                                        isEditingAttributes.toggle()
-                                        attributesSheet = nil // reset binding when switching
-                                    }
-                                }
-                                .font(.subheadline)
-                                .foregroundColor(.blue)
+                    } header: {
+                        HStack {
+                            Text("ATTRIBUTES")
+                                .fontWeight(.semibold)
+                            Spacer()
+                            Image(systemName: isAttributesExpanded ? "chevron.down" : "chevron.right")
+                                .foregroundColor(.gray)
+                                .font(.caption)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation {
+                                isAttributesExpanded.toggle()
                             }
                         }
-                       // .listRowInsets(EdgeInsets(.zero))
-                    }*/
+                    }
+                    //  .listRowInsets(EdgeInsets(.zero))
                     
+                    // Show Sets section only if there are paired items
+                    if !pairedItems.isEmpty {
+                        Section {
+                            if isSetsExpanded {
+                                SetsSection(pairedItems: pairedItems)
+                            }
+                        } header: {
+                            HStack {
+                                Text("SETS")
+                                    .fontWeight(.semibold)
+                                Spacer()
+                                Image(systemName: isSetsExpanded ? "chevron.down" : "chevron.right")
+                                    .foregroundColor(.gray)
+                                    .font(.caption)
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                withAnimation {
+                                    isSetsExpanded.toggle()
+                                }
+                            }
+                        }
+                        .listRowInsets(EdgeInsets(.zero))
+                        .listSectionSpacing(0)
+                        .padding(.horizontal)
+                    }
                     
                     // Show outfits section only if there are results
                     if !outfits.isEmpty {
@@ -135,12 +150,15 @@ struct ItemDetailView: View {
                                     .fontWeight(.semibold)
                                 Spacer()
                                 NavigationLink(destination: AllOutfitsGridView(item: item)) {
-                                    Text("View All")
+                                    Image(systemName: "arrow.right")
                                         .font(.subheadline)
-                                        .foregroundColor(.blue)
                                 }
                             }
                         }
+                        .listRowInsets(EdgeInsets(.zero))
+                     //   .listRowSeparator(.hidden)
+                        .listSectionSpacing(0)
+                        .padding(.horizontal)
                     }
                 }
                 .listStyle(.plain)
@@ -184,6 +202,13 @@ struct ItemDetailView: View {
                         } label: {
                             Label("Share Item", systemImage: "square.and.arrow.up")
                         }
+                    }
+                    
+                    // Pair Item button
+                    Button {
+                        showPairItemSelection = true
+                    } label: {
+                        Label("Pair Item", systemImage: "link")
                     }
                     
                     Button(role: .destructive) {
@@ -293,6 +318,9 @@ struct ItemDetailView: View {
             }
         } message: {
             Text("Delete this item from all wardrobes? This action cannot be undone.")
+        }
+        .sheet(isPresented: $showPairItemSelection) {
+            PairItemSelectionView(item: item)
         }
     }
     
