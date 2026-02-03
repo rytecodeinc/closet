@@ -34,9 +34,11 @@ struct AttributesSectionView: View {
             locationRow()
             priceRow()
             weatherRow()
+            weightRow()
             linkRow()
             tagRow()
             notesRow()
+            dateAddedRow()
         }
     }
 }
@@ -44,7 +46,7 @@ struct AttributesSectionView: View {
 // MARK: - Sheet enum
 extension AttributesSectionView {
     enum Sheet: String, Identifiable {
-        case wardrobe, name, category, size, color, season, brand, price, link, location, tag, notes, weather
+        case wardrobe, name, category, size, color, season, brand, price, link, location, tag, notes, weather, weight
         var id: String { rawValue }
     }
 }
@@ -135,8 +137,7 @@ extension AttributesSectionView {
     // Size (NEW unified row)
     var selectedSizeText: String? {
         guard let size = item.size, let value = size.value, !value.isEmpty else { return nil }
-        if let cat = item.category, size.category == cat { return value }
-        return nil
+        return value
     }
 
     func sizeRow() -> some View {
@@ -250,11 +251,32 @@ extension AttributesSectionView {
                 // Use primitiveValue to properly handle optional scalar types
                 if let minC = item.primitiveValue(forKey: "minTemperature") as? Double,
                    let maxC = item.primitiveValue(forKey: "maxTemperature") as? Double {
-                    let unit = item.temperatureUnit ?? "C"
+                    let unit = (item.primitiveValue(forKey: "temperatureUnit") as? String) ?? "C"
                     let symbol = unit == "C" ? "°C" : "°F"
                     let displayMin = unit == "C" ? Int(minC) : Int((minC * 9/5) + 32)
                     let displayMax = unit == "C" ? Int(maxC) : Int((maxC * 9/5) + 32)
-                    Text("\(displayMin)\(symbol) - \(displayMax)\(symbol)")
+                    Text("\(displayMin)° to \(displayMax)\(symbol)")
+                        .foregroundColor(.gray)
+                }
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.gray)
+                    .font(.caption)
+            }
+        }
+    }
+
+    // Weight Row
+    func weightRow() -> some View {
+        Button { activeSheet = .weight } label: {
+            HStack {
+                Text("Weight").foregroundColor(.primary)
+                Spacer()
+                // Use primitiveValue to properly handle optional scalar types
+                if let weightKg = item.primitiveValue(forKey: "weight") as? Double {
+                    let unit = (item.primitiveValue(forKey: "weightUnit") as? String) ?? "kg"
+                    let symbol = unit == "kg" ? "kg" : "lbs"
+                    let displayWeight = unit == "kg" ? weightKg : weightKg * 2.20462
+                    Text("\(String(format: "%.1f", displayWeight)) \(symbol)")
                         .foregroundColor(.gray)
                 }
                 Image(systemName: "chevron.right")
@@ -340,6 +362,19 @@ extension AttributesSectionView {
             }
         }
     }
+    
+    // Date Added (non-tappable, informational only)
+    func dateAddedRow() -> some View {
+        HStack {
+            Text("Date Added")
+                .foregroundColor(.gray)
+            Spacer()
+            if let timestamp = item.timestamp {
+                Text(timestamp, style: .date)
+                    .foregroundColor(.gray)
+            }
+        }
+    }
 }
 
 // MARK: - Optional local formatter if you do not already have one elsewhere
@@ -390,6 +425,7 @@ extension AttributesSectionView.Sheet {
         case .brand:     SetBrandView(item: item)
         case .price:     SetPriceView(item: item)
         case .weather:   SetWeatherView(item: item)
+        case .weight:    SetWeightView(item: item)
         case .link:      SetLinkView(item: item)
         case .location:  SetLocationView(item: item)
         case .tag:       SetTagView(item: item)
