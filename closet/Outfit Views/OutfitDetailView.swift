@@ -14,10 +14,35 @@ struct OutfitDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var viewContext
     
-    @State private var isNotesSheetPresented = false
+    @State private var attributesSheet: OutfitAttributesSectionView.Sheet?
     @State private var isFeaturedItemsExpanded = true
     
     private var screenWidth: CGFloat { UIScreen.main.bounds.width }
+    
+    // Computed property to get ordered items array (preserves insertion order from canvas)
+    private var orderedItems: [Item] {
+        // Try to use transformationData first (preserves order from canvas)
+        if let transformationData = outfit.transformationData {
+            let decoder = JSONDecoder()
+            if let savedItems = try? decoder.decode([SavedOutfitItem].self, from: transformationData) {
+                let itemsSet = outfit.items as? Set<Item> ?? []
+                var itemsDict: [String: Item] = [:]
+                for item in itemsSet {
+                    let itemID = item.objectID.uriRepresentation().absoluteString
+                    itemsDict[itemID] = item
+                }
+                // Return items in the order they appear in transformationData
+                return savedItems.compactMap { savedItem in
+                    itemsDict[savedItem.itemID]
+                }
+            }
+        }
+        // Fallback: if no transformationData, use Set (unordered, but better than nothing)
+        if let itemsSet = outfit.items as? Set<Item> {
+            return Array(itemsSet)
+        }
+        return []
+    }
     
     var body: some View {
         ScrollView {
@@ -35,33 +60,37 @@ struct OutfitDetailView: View {
                 
                 // Featured Items Toggle Row
                 featuredItemsToggleRow()
-                    .padding(.horizontal, 6)
-                
+                  //  .padding(.horizontal, 6)
+                // Divider before Featured Items
+                Divider()
+                    .padding(.leading, 12)
                 // Featured Items Grid (shown when expanded)
                 if isFeaturedItemsExpanded {
-                    if let itemsSet = outfit.items as? Set<Item>, !itemsSet.isEmpty {
+                    if !orderedItems.isEmpty {
                         let gridItems = [
+                            GridItem(.flexible(), spacing: 4),
                             GridItem(.flexible(), spacing: 4),
                             GridItem(.flexible(), spacing: 4)
                         ]
                         LazyVGrid(columns: gridItems, spacing: 4) {
-                            ForEach(Array(itemsSet), id: \.objectID) { item in
+                            ForEach(orderedItems, id: \.objectID) { item in
                                 NavigationLink(destination: ItemDetailView(item: item)) {
                                     ItemView(item: item)
                                 }
                             }
                         }
-                        .padding(.horizontal, 10)
-                        .padding(.top, 4)
+                      //  .padding(.horizontal, 10)
+                      //  .padding(.top, 4)
                     }
                 }
                 
-                // Divider before Notes
-                Divider()
                 
-                // Notes Row
-                notesRow()
-                    .padding(.horizontal, 6)
+                
+                // Attributes Section
+                OutfitAttributesSectionView(outfit: outfit, activeSheet: $attributesSheet)
+                   // .padding(.horizontal, 6)
+                
+                
             }
         }
         .navigationTitle("Outfit Details")
@@ -71,10 +100,11 @@ struct OutfitDetailView: View {
                 Image(systemName: "paintbrush.pointed")
             }
         }
-        .sheet(isPresented: $isNotesSheetPresented) {
+        .sheet(item: $attributesSheet) { sheet in
             NavigationView {
-                SetOutfitNotesView(outfit: outfit)
+                sheet.destination(for: outfit)
             }
+            .presentationDetents([.medium, .large])
         }
     }
     
@@ -96,31 +126,8 @@ struct OutfitDetailView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .background(Color(.systemBackground))
-            .cornerRadius(8)
+          //  .cornerRadius(8)
         }
     }
     
-    // MARK: - Notes Row
-    private func notesRow() -> some View {
-        Button { isNotesSheetPresented = true } label: {
-            HStack {
-                Text("Notes")
-                    .foregroundColor(.primary)
-                Spacer()
-                if let notes = outfit.notes, !notes.isEmpty {
-                    Text(notes.prefix(30))
-                        .foregroundColor(.gray)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                Image(systemName: "chevron.right")
-                    .foregroundColor(.gray)
-                    .font(.caption)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(Color(.systemBackground))
-            .cornerRadius(8)
-        }
-    }
 }
