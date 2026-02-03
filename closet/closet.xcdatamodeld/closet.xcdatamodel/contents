@@ -72,6 +72,7 @@
         <relationship name="subcategory" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Subcategory" inverseName="items" inverseEntity="Subcategory"/>
         <relationship name="tags" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Tag" inverseName="items" inverseEntity="Tag"/>
         <relationship name="wardrobes" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Wardrobe" inverseName="items" inverseEntity="Wardrobe"/>
+        <relationship name="pairedItems" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Item" inverseName="pairedItems" inverseEntity="Item"/>
     </entity>
     <entity name="Link" representedClassName="Link" syncable="YES" codeGenerationType="class">
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
@@ -92,6 +93,7 @@
         <attribute name="notes" optional="YES" attributeType="String"/>
         <attribute name="timestamp" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="transformationData" optional="YES" attributeType="Binary"/>
+        <attribute name="category" optional="YES" attributeType="String"/>
         <relationship name="events" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Event" inverseName="outfits" inverseEntity="Event"/>
         <relationship name="items" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Item" inverseName="outfits" inverseEntity="Item"/>
     </entity>
