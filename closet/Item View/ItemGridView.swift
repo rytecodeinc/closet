@@ -29,11 +29,14 @@ struct ItemGridView: View {
     
     @State private var outfits: [Outfit] = []
     @State private var sortAscending: Bool = false // false = descending (newest first), true = ascending (oldest first)
+    @StateObject private var outfitFilterModel = OutfitFilterModel()
     
     // Selection mode state
     @State private var selectedItemForNavigation: Item?
     @State private var selectedItems: Set<Item> = []
     @State private var showWardrobeSelectionSheet = false
+    @State private var showDeleteConfirmation = false
+    @State private var showTagSelectionSheet = false
 
     let gridColumns = [
         GridItem(.flexible(), spacing: 2),
@@ -59,6 +62,14 @@ struct ItemGridView: View {
             let userWeightKg = UserDefaults.standard.double(forKey: "userWeightKg")
             key += "weight:\(userWeightKg)"
         }
+        return key
+    }
+    
+    // Computed property to track outfit filter changes
+    private var outfitFilterKey: String {
+        var key = ""
+        key += outfitFilterModel.selectedCategory ?? ""
+        key += outfitFilterModel.selectedTags.map { $0.objectID.uriRepresentation().absoluteString }.sorted().joined(separator: ",")
         return key
     }
 
@@ -108,6 +119,9 @@ struct ItemGridView: View {
         .onChange(of: filterModel.filterByWeight) {
             fetchItems()
         }
+        .onChange(of: outfitFilterKey) {
+            fetchOutfits()
+        }
         .onChange(of: selectedWardrobe.objectID) {
             fetchItems()
             fetchOutfits()
@@ -135,9 +149,22 @@ struct ItemGridView: View {
                             Text("All")
                         }
                     }
+                    
+                    Button {
+                        showDeleteConfirmation = true
+                    } label: {
+                        Image(systemName: "trash")
+                            .foregroundColor(.red)
+                    }
                 } else {
-                    NavigationLink(destination: ItemFilterView(filterModel: filterModel)) {
-                        Image(systemName: "line.3.horizontal.decrease.circle")
+                    if selectedTab == "Items" {
+                        NavigationLink(destination: ItemFilterView(filterModel: filterModel)) {
+                            Image(systemName: "line.3.horizontal.decrease.circle")
+                        }
+                    } else {
+                        NavigationLink(destination: OutfitFilterView(filterModel: outfitFilterModel)) {
+                            Image(systemName: "line.3.horizontal.decrease.circle")
+                        }
                     }
                     Menu {
                         Button {
@@ -163,6 +190,12 @@ struct ItemGridView: View {
                 if selectedTab == "Items" {
                     HStack(spacing: 16) {
                         if isInSelectionMode {
+                            Button {
+                                showTagSelectionSheet = true
+                            } label: {
+                                Image(systemName: "tag")
+                            }
+                            
                             Button("Cancel") {
                                 isInSelectionMode = false
                                 selectedItems.removeAll()
@@ -218,6 +251,17 @@ struct ItemGridView: View {
         }
         .sheet(isPresented: $showWardrobeSelectionSheet) {
             wardrobeSelectionSheet()
+        }
+        .sheet(isPresented: $showTagSelectionSheet) {
+            tagSelectionSheet()
+        }
+        .alert("Delete Items", isPresented: $showDeleteConfirmation) {
+            Button("Delete", role: .destructive) {
+                deleteSelectedItems()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Are you sure you want to delete \(selectedItems.count) item\(selectedItems.count == 1 ? "" : "s")? This action cannot be undone.")
         }
         .navigationDestination(item: $selectedItemForNavigation) { item in
             ItemDetailView(item: item)
@@ -390,11 +434,26 @@ struct ItemGridView: View {
     func fetchOutfits() {
         let request = NSFetchRequest<Outfit>(entityName: "Outfit")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: sortAscending)]
-        // Exclude drafts from outfit listings
-        request.predicate = NSPredicate(format: "isDraft != YES")
+        
+        // Build predicate from outfit filter model
+        let filterPredicate = makeOutfitPredicate(for: outfitFilterModel)
+        
+        // Base predicate: exclude drafts
+        let draftPredicate = NSPredicate(format: "isDraft != YES")
+        
+        // Combine predicates
+        let finalPredicate: NSPredicate
+        if let filter = filterPredicate {
+            finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [draftPredicate, filter])
+        } else {
+            finalPredicate = draftPredicate
+        }
+        
+        request.predicate = finalPredicate
 
         do {
             let allOutfits = try viewContext.fetch(request)
+            // Filter by wardrobe (items must belong to selected wardrobe)
             let filtered = allOutfits.filter { outfit in
                 (outfit.items as? Set<Item>)?.contains(where: { $0.wardrobes?.contains(selectedWardrobe) ?? false }) ?? false
             }
@@ -633,6 +692,135 @@ struct ItemGridView: View {
             selectedItems.removeAll()
         } catch {
             print("❌ Failed to add items to wardrobe: \(error.localizedDescription)")
+        }
+    }
+    
+    private func deleteSelectedItems() {
+        guard !selectedItems.isEmpty else { return }
+        
+        // Store brands before deletion to check if cleanup is needed
+        var brandsToCheck: Set<Brand> = []
+        for item in selectedItems {
+            if let brand = item.brand {
+                brandsToCheck.insert(brand)
+            }
+        }
+        
+        // Delete all selected items
+        for item in selectedItems {
+            viewContext.delete(item)
+        }
+        
+        do {
+            try viewContext.save()
+            print("✅ Deleted \(selectedItems.count) items")
+            
+            // Cleanup orphaned brands
+            for brand in brandsToCheck {
+                cleanupBrandIfOrphaned(brand)
+            }
+            
+            // Exit selection mode and refresh items after deletion
+            isInSelectionMode = false
+            selectedItems.removeAll()
+            fetchItems()
+        } catch {
+            print("❌ Failed to delete items: \(error.localizedDescription)")
+        }
+    }
+    
+    // MARK: - Cleanup Orphaned Brand
+    private func cleanupBrandIfOrphaned(_ brand: Brand) {
+        // Refresh the brand to get current item count
+        viewContext.refresh(brand, mergeChanges: true)
+        
+        // Check if brand has any items
+        if let items = brand.items as? Set<Item>, items.isEmpty {
+            viewContext.delete(brand)
+            do {
+                try viewContext.save()
+                print("✅ Cleaned up orphaned brand: \(brand.name ?? "unknown")")
+            } catch {
+                print("❌ Failed to cleanup orphaned brand: \(error)")
+            }
+        }
+    }
+    
+    // MARK: - Tag Selection Sheet
+    
+    @ViewBuilder
+    private func tagSelectionSheet() -> some View {
+        NavigationView {
+            List {
+                ForEach(fetchAllTags(), id: \.self) { tag in
+                    let allItemsHaveTag = doAllSelectedItemsHaveTag(tag)
+                    
+                    Button {
+                        addTagToSelectedItems(tag)
+                        showTagSelectionSheet = false
+                    } label: {
+                        HStack {
+                            Text(tag.name ?? "Untitled")
+                            
+                            Spacer()
+                            
+                            Image(systemName: allItemsHaveTag ? "checkmark" : "plus")
+                                .foregroundColor(allItemsHaveTag ? .green : .blue)
+                                .font(.system(size: 16, weight: .medium))
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .listStyle(.plain)
+            .navigationTitle("Add Tag")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Color(UIColor.secondarySystemBackground), for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+        }
+        .presentationDetents([.medium, .large])
+    }
+    
+    private func doAllSelectedItemsHaveTag(_ tag: Tag) -> Bool {
+        guard !selectedItems.isEmpty else { return false }
+        
+        // Check if all selected items already have this tag
+        return selectedItems.allSatisfy { item in
+            if let tags = item.tags as? Set<Tag> {
+                return tags.contains(tag)
+            }
+            return false
+        }
+    }
+    
+    private func fetchAllTags() -> [Tag] {
+        let request: NSFetchRequest<Tag> = Tag.fetchRequest()
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Tag.name, ascending: true)]
+        
+        do {
+            return try viewContext.fetch(request)
+        } catch {
+            print("❌ Failed to fetch tags: \(error.localizedDescription)")
+            return []
+        }
+    }
+    
+    private func addTagToSelectedItems(_ tag: Tag) {
+        guard !selectedItems.isEmpty else { return }
+        
+        // Add tag to all selected items (Core Data will handle duplicates)
+        for item in selectedItems {
+            if let tags = item.tags as? Set<Tag>, !tags.contains(tag) {
+                item.addToTags(tag)
+            }
+        }
+        
+        do {
+            try viewContext.save()
+            print("✅ Added tag '\(tag.name ?? "unknown")' to \(selectedItems.count) items")
+        } catch {
+            print("❌ Failed to add tag to items: \(error.localizedDescription)")
         }
     }
 
