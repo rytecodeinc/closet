@@ -7,6 +7,7 @@
 
 import SwiftUI
 import CoreData
+import SQLite3
 
 struct ItemView: View {
     @ObservedObject var item: Item
@@ -14,13 +15,18 @@ struct ItemView: View {
     @Environment(\.managedObjectContext) private var viewContext
 
     var displayImage: UIImage? {
-        if let primaryImageData = item.photos?.first(where: { ($0 as? Photo)?.isPrimary == true }) as? Photo {
-            return UIImage(data: primaryImageData.data ?? Data())
+        // For grid views, prefer thumbnail for performance
+        if let primaryPhoto = item.photos?.first(where: { ($0 as? Photo)?.isPrimary == true }) as? Photo {
+            // Use thumbnail if available, fallback to full image
+            if let thumbnailData = primaryPhoto.thumbnailData, !thumbnailData.isEmpty {
+                return UIImage(data: thumbnailData)
+            } else if let fullData = primaryPhoto.data {
+                return UIImage(data: fullData)
+            }
         } else if let fallbackImage = item.image {
             return UIImage(data: fallbackImage)
-        } else {
-            return nil
         }
+        return nil
     }
 
     var body: some View {
@@ -146,6 +152,318 @@ func migrateItemImages(context: NSManagedObjectContext) {
 
     } catch {
         print("❌ Item images migration failed: \(error)")
+    }
+}
+
+// MARK: - Compress Existing Photos
+func compressExistingPhotos(context: NSManagedObjectContext) {
+    // Check if compression has already been completed
+    let migrationKey = "hasCompressedExistingPhotos"
+    if UserDefaults.standard.bool(forKey: migrationKey) {
+        return
+    }
+    
+    let fetchRequest: NSFetchRequest<Photo> = Photo.fetchRequest()
+    
+    do {
+        let photos = try context.fetch(fetchRequest)
+        var hasChanges = false
+        var compressedCount = 0
+        var totalOriginalSize: Int64 = 0
+        var totalCompressedSize: Int64 = 0
+        
+        for photo in photos {
+            guard let data = photo.data,
+                  let image = UIImage(data: data) else {
+                continue
+            }
+            
+            let originalSize = Int64(data.count)
+            totalOriginalSize += originalSize
+            
+            // Process and compress the image
+            if let compressedData = image.processForStorage() {
+                photo.data = compressedData
+                totalCompressedSize += Int64(compressedData.count)
+                
+                // Generate thumbnail if not already present
+                if photo.thumbnailData == nil {
+                    photo.thumbnailData = image.generateThumbnail()
+                }
+                
+                hasChanges = true
+                compressedCount += 1
+            }
+        }
+        
+        // Also compress outfit images
+        let outfitFetchRequest: NSFetchRequest<Outfit> = Outfit.fetchRequest()
+        let outfits = try context.fetch(outfitFetchRequest)
+        
+        for outfit in outfits {
+            guard let imageData = outfit.image,
+                  let image = UIImage(data: imageData) else {
+                continue
+            }
+            
+            let originalSize = Int64(imageData.count)
+            totalOriginalSize += originalSize
+            
+            if let compressedData = image.processForStorage() {
+                outfit.image = compressedData
+                totalCompressedSize += Int64(compressedData.count)
+                hasChanges = true
+                compressedCount += 1
+            }
+        }
+        
+        if hasChanges {
+            try context.save()
+            let savedMB = Double(totalOriginalSize - totalCompressedSize) / (1024 * 1024)
+            print("✅ Compressed \(compressedCount) images. Saved \(String(format: "%.2f", savedMB)) MB")
+            
+            // Mark migration as completed
+            UserDefaults.standard.set(true, forKey: migrationKey)
+        } else {
+            // Mark as completed even if no photos to compress
+            UserDefaults.standard.set(true, forKey: migrationKey)
+        }
+        
+        // Verify compression worked
+        checkPhotoSizes(context: context)
+        
+    } catch {
+        print("❌ Photo compression migration failed: \(error)")
+    }
+}
+
+// MARK: - Verify Photo Compression
+func checkPhotoSizes(context: NSManagedObjectContext) {
+    let fetchRequest: NSFetchRequest<Photo> = Photo.fetchRequest()
+    
+    do {
+        let photos = try context.fetch(fetchRequest)
+        var totalSize: Int64 = 0
+        var photoCount = 0
+        var thumbnailSize: Int64 = 0
+        
+        print("\n📊 Photo Size Verification:")
+        print(String(repeating: "=", count: 50))
+        
+        for photo in photos {
+            if let data = photo.data {
+                totalSize += Int64(data.count)
+                photoCount += 1
+                let sizeMB = Double(data.count) / 1_000_000
+                if sizeMB > 1.0 {
+                    print("⚠️ Large photo: \(String(format: "%.2f", sizeMB)) MB (ID: \(photo.id?.uuidString.prefix(8) ?? "unknown"))")
+                }
+            }
+            if let thumbnailData = photo.thumbnailData {
+                thumbnailSize += Int64(thumbnailData.count)
+            }
+        }
+        
+        // Check outfit images too
+        let outfitFetchRequest: NSFetchRequest<Outfit> = Outfit.fetchRequest()
+        let outfits = try context.fetch(outfitFetchRequest)
+        var outfitImageSize: Int64 = 0
+        
+        for outfit in outfits {
+            if let imageData = outfit.image {
+                outfitImageSize += Int64(imageData.count)
+            }
+        }
+        
+        let totalPhotoMB = Double(totalSize) / 1_000_000
+        let totalThumbnailMB = Double(thumbnailSize) / 1_000_000
+        let totalOutfitMB = Double(outfitImageSize) / 1_000_000
+        let totalAllMB = totalPhotoMB + totalOutfitMB
+        let totalAllGB = totalAllMB / 1000
+        
+        print("\n📸 Photo Statistics:")
+        print("   Photos: \(photoCount)")
+        print("   Total photo data: \(String(format: "%.2f", totalPhotoMB)) MB")
+        print("   Total thumbnail data: \(String(format: "%.2f", totalThumbnailMB)) MB")
+        print("   Total outfit images: \(String(format: "%.2f", totalOutfitMB)) MB")
+        print("   Total all images: \(String(format: "%.2f", totalAllMB)) MB (\(String(format: "%.3f", totalAllGB)) GB)")
+        
+        if totalAllGB > 1.0 {
+            print("\n⚠️ WARNING: Total image size is still large (\(String(format: "%.2f", totalAllGB)) GB)")
+            print("   Expected: < 0.1 GB for ~80 items")
+        } else {
+            print("\n✅ Image sizes look good!")
+        }
+        
+        print(String(repeating: "=", count: 50) + "\n")
+        
+    } catch {
+        print("❌ Photo size check failed: \(error)")
+    }
+}
+
+// MARK: - Vacuum Core Data Database
+func vacuumCoreData(context: NSManagedObjectContext) {
+    // Save and reset context
+    do {
+        try context.save()
+        context.reset()
+    } catch {
+        print("❌ Failed to save context before vacuum: \(error)")
+        return
+    }
+    
+    // Get persistent container
+    let persistentContainer = PersistenceController.shared.container
+    
+    // Get store URL
+    guard let storeURL = persistentContainer.persistentStoreCoordinator.persistentStores.first?.url else {
+        print("❌ No store URL found")
+        return
+    }
+    
+    // Perform VACUUM operation
+    let coordinator = persistentContainer.persistentStoreCoordinator
+    
+    do {
+        // Remove store
+        if let store = coordinator.persistentStores.first {
+            try coordinator.remove(store)
+        }
+        
+        // Re-add store with vacuum options
+        try coordinator.addPersistentStore(
+            ofType: NSSQLiteStoreType,
+            configurationName: nil,
+            at: storeURL,
+            options: [
+                NSMigratePersistentStoresAutomaticallyOption: true,
+                NSInferMappingModelAutomaticallyOption: true,
+                NSSQLitePragmasOption: ["journal_mode": "DELETE"] // Force cleanup
+            ]
+        )
+        
+        // Execute VACUUM SQL command directly on the database file
+        let dbPath = storeURL.path
+        var db: OpaquePointer?
+        
+        // Open database
+        let openResult = sqlite3_open(dbPath, &db)
+        guard openResult == SQLITE_OK, let database = db else {
+            print("❌ Failed to open database for vacuum: \(openResult)")
+            return
+        }
+        
+        // Execute VACUUM
+        let vacuumResult = sqlite3_exec(database, "VACUUM", nil, nil, nil)
+        guard vacuumResult == SQLITE_OK else {
+            let errorMsg = String(cString: sqlite3_errmsg(database))
+            print("❌ VACUUM failed: \(errorMsg)")
+            sqlite3_close(database)
+            return
+        }
+        
+        // Close database
+        sqlite3_close(database)
+        
+        print("✅ Database vacuumed successfully - space reclaimed")
+        
+    } catch {
+        print("❌ Vacuum failed: \(error)")
+    }
+}
+
+// MARK: - Resolve Size Constraint Conflicts
+func resolveSizeConstraintConflicts(context: NSManagedObjectContext) {
+    // Check if this migration has already been completed
+    let migrationKey = "hasResolvedSizeConstraintConflicts"
+    if UserDefaults.standard.bool(forKey: migrationKey) {
+        return
+    }
+    
+    let fetchRequest: NSFetchRequest<Size> = Size.fetchRequest()
+    fetchRequest.predicate = NSPredicate(format: "category == nil")
+    
+    do {
+        let sizes = try context.fetch(fetchRequest)
+        
+        // Group sizes by value (since category is nil, we need to deduplicate by value+scale)
+        var sizeGroups: [String: [Size]] = [:]
+        
+        for size in sizes {
+            let key = "\(size.value ?? "nil")|\(size.scale ?? "nil")"
+            sizeGroups[key, default: []].append(size)
+        }
+        
+        var hasChanges = false
+        var resolvedCount = 0
+        
+        // For each group, if there are duplicates with same value but different scales and nil category,
+        // we need to ensure they're unique by scale
+        for (key, group) in sizeGroups {
+            if group.count > 1 {
+                // Multiple sizes with same value+scale - this shouldn't happen, but handle it
+                let first = group[0]
+                for duplicate in group.dropFirst() {
+                    // Transfer items to first
+                    if let items = duplicate.items as? Set<Item> {
+                        for item in items {
+                            item.size = first
+                        }
+                    }
+                    context.delete(duplicate)
+                    hasChanges = true
+                    resolvedCount += 1
+                }
+            }
+        }
+        
+        // Also check for sizes with same value but different scales (these should be allowed now)
+        // But if they have nil category and same value, they might conflict
+        var valueGroups: [String: [Size]] = [:]
+        for size in sizes {
+            guard size.category == nil, let value = size.value else { continue }
+            valueGroups[value, default: []].append(size)
+        }
+        
+        // If we have sizes with same value but different scales, that's now allowed with the new constraint
+        // But we should verify they have different scales
+        for (value, group) in valueGroups {
+            if group.count > 1 {
+                let scales = Set(group.compactMap { $0.scale })
+                if scales.count < group.count {
+                    // Some have same scale - these are true duplicates
+                    let groupedByScale = Dictionary(grouping: group) { $0.scale ?? "" }
+                    for (scale, sizesWithScale) in groupedByScale {
+                        if sizesWithScale.count > 1 {
+                            let first = sizesWithScale[0]
+                            for duplicate in sizesWithScale.dropFirst() {
+                                if let items = duplicate.items as? Set<Item> {
+                                    for item in items {
+                                        item.size = first
+                                    }
+                                }
+                                context.delete(duplicate)
+                                hasChanges = true
+                                resolvedCount += 1
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        if hasChanges {
+            try context.save()
+            print("✅ Resolved \(resolvedCount) Size constraint conflicts")
+            UserDefaults.standard.set(true, forKey: migrationKey)
+        } else {
+            // Mark as completed even if no conflicts found
+            UserDefaults.standard.set(true, forKey: migrationKey)
+        }
+        
+    } catch {
+        print("❌ Failed to resolve Size constraint conflicts: \(error)")
     }
 }
 

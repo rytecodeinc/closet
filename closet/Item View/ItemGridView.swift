@@ -34,9 +34,18 @@ struct ItemGridView: View {
     // Selection mode state
     @State private var selectedItemForNavigation: Item?
     @State private var selectedItems: Set<Item> = []
+    @State private var selectedOutfitForNavigation: Outfit?
+    @State private var selectedOutfits: Set<Outfit> = []
     @State private var showWardrobeSelectionSheet = false
     @State private var showDeleteConfirmation = false
+    @State private var showOutfitDeleteConfirmation = false
     @State private var showTagSelectionSheet = false
+    
+    // Multi-image picker state
+    @StateObject private var queueCoordinator = ImageQueueCoordinator()
+    @State private var showMultiImagePicker = false
+    @State private var shouldNavigateToItemAdd = false
+    @State private var queuedImages: [UIImage] = []
 
     let gridColumns = [
         GridItem(.flexible(), spacing: 2),
@@ -107,6 +116,7 @@ struct ItemGridView: View {
                 // User switched tabs while in selection mode - cancel it
                 isInSelectionMode = false
                 selectedItems.removeAll()
+                selectedOutfits.removeAll()
             }
         }
         .onAppear {
@@ -136,6 +146,7 @@ struct ItemGridView: View {
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarLeading) {
                 if selectedTab == "Items" && isInSelectionMode {
+                    // Select all button
                     let allSelected = !closetItems.isEmpty && selectedItems.count == closetItems.count
                     Button {
                         if allSelected {
@@ -150,15 +161,16 @@ struct ItemGridView: View {
                         }
                     }
                     
+                    // Tag button
                     Button {
-                        showDeleteConfirmation = true
+                        showTagSelectionSheet = true
                     } label: {
-                        Image(systemName: "trash")
-                            .foregroundColor(.red)
+                        Image(systemName: "tag")
                     }
+                    
                 } else {
                     if selectedTab == "Items" {
-                        NavigationLink(destination: ItemFilterView(filterModel: filterModel)) {
+                        NavigationLink(destination: ItemFilterView(filterModel: filterModel, wardrobeType: wardrobeType)) {
                             Image(systemName: "line.3.horizontal.decrease.circle")
                         }
                     } else {
@@ -190,10 +202,12 @@ struct ItemGridView: View {
                 if selectedTab == "Items" {
                     HStack(spacing: 16) {
                         if isInSelectionMode {
+                            // Delete button
                             Button {
-                                showTagSelectionSheet = true
+                                showDeleteConfirmation = true
                             } label: {
-                                Image(systemName: "tag")
+                                Image(systemName: "trash")
+                                    .foregroundColor(.red)
                             }
                             
                             Button("Cancel") {
@@ -204,20 +218,36 @@ struct ItemGridView: View {
                             NavigationLink(destination: ItemDraftsView()) {
                                 Image(systemName: "folder")
                             }
-                            NavigationLink(
-                                destination: ItemAddView(parentContext: viewContext, selectedWardrobe: selectedWardrobe)
-                            ) {
+                            Button {
+                                showMultiImagePicker = true
+                            } label: {
                                 Image(systemName: "plus")
                             }
                         }
                     }
                 } else if selectedTab == "Outfits" {
                     HStack(spacing: 16) {
-                        NavigationLink(destination: OutfitDraftsView(wardrobeType: wardrobeType, selectedWardrobe: selectedWardrobe)) {
-                            Image(systemName: "folder")
-                        }
-                        NavigationLink(destination: OutfitAddView(wardrobeType: wardrobeType, initialWardrobe: selectedWardrobe)) {
-                            Image(systemName: "plus")
+                        if isInSelectionMode {
+                            // Delete button
+                            Button {
+                                showOutfitDeleteConfirmation = true
+                            } label: {
+                                Image(systemName: "trash")
+                                    .foregroundColor(.red)
+                            }
+                            .disabled(selectedOutfits.isEmpty)
+                            
+                            Button("Cancel") {
+                                isInSelectionMode = false
+                                selectedOutfits.removeAll()
+                            }
+                        } else {
+                            NavigationLink(destination: OutfitDraftsView(wardrobeType: wardrobeType, selectedWardrobe: selectedWardrobe)) {
+                                Image(systemName: "folder")
+                            }
+                            NavigationLink(destination: OutfitAddView(wardrobeType: wardrobeType, initialWardrobe: selectedWardrobe)) {
+                                Image(systemName: "plus")
+                            }
                         }
                     }
                 }
@@ -234,6 +264,9 @@ struct ItemGridView: View {
                                 .font(.caption)
                         }
                     }
+                } else if selectedTab == "Outfits" && isInSelectionMode {
+                    Text("\(selectedOutfits.count) Selected")
+                        .font(.headline)
                 }
             }
         }
@@ -249,6 +282,36 @@ struct ItemGridView: View {
                 isImagePickerPresented = false
             }
         }
+        .sheet(isPresented: $showMultiImagePicker) {
+            MultiImagePicker(selectedImages: $queuedImages) {
+                if !queuedImages.isEmpty {
+                    queueCoordinator.loadQueue(queuedImages)
+                    // Delay navigation to ensure sheet is fully dismissed
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        shouldNavigateToItemAdd = true
+                    }
+                }
+                showMultiImagePicker = false
+            }
+        }
+        .background {
+            // Hidden NavigationLink that is programmatically triggered
+            NavigationLink(
+                destination: ItemAddView(
+                    parentContext: viewContext,
+                    selectedWardrobe: selectedWardrobe,
+                    queueCoordinator: queueCoordinator
+                )
+                .onDisappear {
+                    // Reset navigation state when view disappears
+                    shouldNavigateToItemAdd = false
+                },
+                isActive: $shouldNavigateToItemAdd
+            ) {
+                EmptyView()
+            }
+            .hidden()
+        }
         .sheet(isPresented: $showWardrobeSelectionSheet) {
             wardrobeSelectionSheet()
         }
@@ -263,8 +326,19 @@ struct ItemGridView: View {
         } message: {
             Text("Are you sure you want to delete \(selectedItems.count) item\(selectedItems.count == 1 ? "" : "s")? This action cannot be undone.")
         }
+        .alert("Delete Outfits", isPresented: $showOutfitDeleteConfirmation) {
+            Button("Delete", role: .destructive) {
+                deleteSelectedOutfits()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Are you sure you want to delete \(selectedOutfits.count) outfit\(selectedOutfits.count == 1 ? "" : "s")? This action cannot be undone.")
+        }
         .navigationDestination(item: $selectedItemForNavigation) { item in
             ItemDetailView(item: item)
+        }
+        .navigationDestination(item: $selectedOutfitForNavigation) { outfit in
+            OutfitDetailView(outfit: outfit)
         }
     }
 
@@ -372,10 +446,12 @@ struct ItemGridView: View {
         }
         
         // Handle wardrobe filtering: use filterModel.selectedWardrobes if set, otherwise use selectedWardrobe
+        // Filter out wardrobes of the wrong type as a safeguard
+        let filteredWardrobes = filterModel.selectedWardrobes.filter { $0.type == wardrobeType }
         let wardrobePredicate: NSPredicate
-        if !filterModel.selectedWardrobes.isEmpty {
-            // If user selected specific wardrobes in filter, use those
-            wardrobePredicate = NSPredicate(format: "ANY wardrobes IN %@", Array(filterModel.selectedWardrobes))
+        if !filteredWardrobes.isEmpty {
+            // If user selected specific wardrobes in filter, use those (only of the correct type)
+            wardrobePredicate = NSPredicate(format: "ANY wardrobes IN %@", Array(filteredWardrobes))
         } else {
             // Otherwise, use the view's selected wardrobe
             wardrobePredicate = NSPredicate(format: "ANY wardrobes == %@", selectedWardrobe)
@@ -475,15 +551,17 @@ struct ItemGridView: View {
         item.id = UUID()
         item.timestamp = Date()
         
-        if let imageData = image.pngData() {
+        // Process and compress image
+        if let imageData = image.processForStorage() {
             let photo = Photo(context: viewContext)
             photo.data = imageData
+            photo.thumbnailData = image.generateThumbnail()
             photo.isPrimary = true
             photo.id = UUID()
             photo.item = item
         }
 
-                wardrobe.addToItems(item)   // <-- attach to the correct wardrobe
+        wardrobe.addToItems(item)   // <-- attach to the correct wardrobe
 
         do {
             try viewContext.save()
@@ -591,6 +669,40 @@ struct ItemGridView: View {
         }
         
         selectedItems.insert(item)
+    }
+    
+    // MARK: - Outfit Gesture Handlers
+    
+    private func handleOutfitTap(for outfit: Outfit) {
+        if isInSelectionMode {
+            // Toggle selection
+            if selectedOutfits.contains(outfit) {
+                selectedOutfits.remove(outfit)
+            } else {
+                selectedOutfits.insert(outfit)
+            }
+            
+            // Exit selection mode if no outfits selected
+            if selectedOutfits.isEmpty {
+                isInSelectionMode = false
+            }
+        } else {
+            // Navigate to detail view
+            selectedOutfitForNavigation = outfit
+        }
+    }
+    
+    private func handleOutfitLongPress(for outfit: Outfit) {
+        // Haptic feedback
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.impactOccurred()
+        
+        // Enter selection mode and select this outfit
+        if !isInSelectionMode {
+            isInSelectionMode = true
+        }
+        
+        selectedOutfits.insert(outfit)
     }
     
     // MARK: - Wardrobe Selection Sheet
@@ -729,6 +841,27 @@ struct ItemGridView: View {
         }
     }
     
+    private func deleteSelectedOutfits() {
+        guard !selectedOutfits.isEmpty else { return }
+        
+        // Delete all selected outfits
+        for outfit in selectedOutfits {
+            viewContext.delete(outfit)
+        }
+        
+        do {
+            try viewContext.save()
+            print("✅ Deleted \(selectedOutfits.count) outfits")
+            
+            // Exit selection mode and refresh outfits after deletion
+            isInSelectionMode = false
+            selectedOutfits.removeAll()
+            fetchOutfits()
+        } catch {
+            print("❌ Failed to delete outfits: \(error.localizedDescription)")
+        }
+    }
+    
     // MARK: - Cleanup Orphaned Brand
     private func cleanupBrandIfOrphaned(_ brand: Brand) {
         // Refresh the brand to get current item count
@@ -832,10 +965,46 @@ struct ItemGridView: View {
                 ScrollView(showsIndicators: false) {
                     LazyVGrid(columns: gridColumns, spacing: 2) {
                         ForEach(outfits, id: \.objectID) { outfit in
-                            NavigationLink(destination: OutfitDetailView(outfit: outfit)) {
-                                OutfitView(outfit: outfit)
-                            }
-                            .buttonStyle(.plain)
+                            OutfitView(outfit: outfit)
+                                .overlay(
+                                    // Transparent white overlay when in selection mode
+                                    Group {
+                                        if isInSelectionMode && selectedOutfits.contains(outfit) {
+                                            Rectangle()
+                                                .fill(Color.white.opacity(0.35))
+                                        }
+                                    }
+                                )
+                                .overlay(
+                                    // Show selection checkmark when in selection mode (on top of white overlay)
+                                    Group {
+                                        if isInSelectionMode {
+                                            VStack {
+                                                Spacer()
+                                                HStack {
+                                                    Spacer()
+                                                    Image(systemName: selectedOutfits.contains(outfit) ? "checkmark.circle" : "circle")
+                                                        .foregroundColor(.white)
+                                                        .background(
+                                                            Circle()
+                                                                .fill(selectedOutfits.contains(outfit) ? Color.blue : Color.clear)
+                                                                .padding(2)
+                                                        )
+                                                        .font(.system(size: 22))
+                                                        .shadow(radius: 1)
+                                                        .padding(8)
+                                                }
+                                            }
+                                        }
+                                    }
+                                )
+                                .contentShape(Rectangle()) // Make entire area tappable
+                                .onTapGesture {
+                                    handleOutfitTap(for: outfit)
+                                }
+                                .onLongPressGesture(minimumDuration: 0.5) {
+                                    handleOutfitLongPress(for: outfit)
+                                }
                         }
                     }
                     .padding(.top, 2)

@@ -208,7 +208,7 @@ struct ItemDetailView: View {
                     Button {
                         showPairItemSelection = true
                     } label: {
-                        Label("Pair Item", systemImage: "link")
+                        Label(pairedItems.isEmpty ? "Pair Item" : "Manage Pairs", systemImage: "link")
                     }
                     
                     Button(role: .destructive) {
@@ -335,10 +335,14 @@ struct ItemDetailView: View {
             viewContext.delete(existingFront)
         }
 
+        // Process and compress image
+        let processedData = image.processForStorage()
+        
         // Create and assign new photo
         let newPhoto = Photo(context: viewContext)
         newPhoto.id = UUID()
-        newPhoto.data = image.pngData()
+        newPhoto.data = processedData
+        newPhoto.thumbnailData = image.generateThumbnail()
         newPhoto.type = "front"
         newPhoto.isPrimary = true // Front images are primary by default
         newPhoto.item = item
@@ -358,10 +362,14 @@ struct ItemDetailView: View {
             viewContext.delete(existingBack)
         }
 
+        // Process and compress image
+        let processedData = image.processForStorage()
+        
         // Create and assign new photo
         let newPhoto = Photo(context: viewContext)
         newPhoto.id = UUID()
-        newPhoto.data = image.pngData()
+        newPhoto.data = processedData
+        newPhoto.thumbnailData = image.generateThumbnail()
         newPhoto.type = "back"
         newPhoto.isPrimary = false
         newPhoto.item = item
@@ -381,10 +389,14 @@ struct ItemDetailView: View {
             viewContext.delete(existingWorn)
         }
 
+        // Process and compress image
+        let processedData = image.processForStorage()
+        
         // Create and assign new photo
         let newPhoto = Photo(context: viewContext)
         newPhoto.id = UUID()
-        newPhoto.data = image.pngData()
+        newPhoto.data = processedData
+        newPhoto.thumbnailData = image.generateThumbnail()
         newPhoto.type = "worn"
         newPhoto.isPrimary = false
         newPhoto.item = item

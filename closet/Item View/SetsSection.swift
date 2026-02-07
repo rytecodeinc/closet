@@ -39,13 +39,18 @@ struct ItemImageView: View {
     @ObservedObject var item: Item
 
     var displayImage: UIImage? {
-        if let primaryImageData = item.photos?.first(where: { ($0 as? Photo)?.isPrimary == true }) as? Photo {
-            return UIImage(data: primaryImageData.data ?? Data())
+        // For grid views, prefer thumbnail for performance
+        if let primaryPhoto = item.photos?.first(where: { ($0 as? Photo)?.isPrimary == true }) as? Photo {
+            // Use thumbnail if available, fallback to full image
+            if let thumbnailData = primaryPhoto.thumbnailData, !thumbnailData.isEmpty {
+                return UIImage(data: thumbnailData)
+            } else if let fullData = primaryPhoto.data {
+                return UIImage(data: fullData)
+            }
         } else if let fallbackImage = item.image {
             return UIImage(data: fallbackImage)
-        } else {
-            return nil
         }
+        return nil
     }
 
     var body: some View {

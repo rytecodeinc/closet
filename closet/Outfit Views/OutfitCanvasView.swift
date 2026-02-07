@@ -9,44 +9,7 @@ import SwiftUI
 import CoreData
 import Foundation
 import UIKit
-
-// MARK: - Smart Positioning System
-
-enum ClothingZone {
-    case headwear      // top center
-    case jewelry       // top right
-    case outerwear     // center right
-    case top           // top left
-    case bottom        // center left
-    case shoes         // bottom center
-    case accessories   // bottom right
-    case bag           // middle right
-    
-    func basePosition(canvasSize: CGFloat) -> CGPoint {
-        let third = canvasSize / 3
-        let half = canvasSize / 2
-        
-        switch self {
-        case .headwear:
-            return CGPoint(x: half, y: third * 0.5)
-        case .jewelry:
-            return CGPoint(x: third * 2.5, y: third * 0.7)
-        case .outerwear:
-            return CGPoint(x: third * 2.3, y: half)
-        case .top:
-            return CGPoint(x: third * 0.7, y: third * 0.8)
-        case .bottom:
-            return CGPoint(x: third * 0.7, y: third * 1.8)
-        case .shoes:
-            return CGPoint(x: half, y: third * 2.5)
-        case .accessories:
-            return CGPoint(x: third * 2.3, y: third * 2.3)
-        case .bag:
-            return CGPoint(x: third * 2.5, y: third * 1.5)
-        }
-    }
-}
-
+/*
 struct OutfitAddView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
@@ -662,98 +625,6 @@ struct OutfitAddView: View {
         }
     }
     
-    // MARK: - Smart Positioning System
-    
-    private func determineZone(for item: Item) -> ClothingZone {
-        let categoryName = item.category?.name?.lowercased() ?? ""
-        let subcategoryName = item.subcategory?.name?.lowercased() ?? ""
-        
-        // Check subcategory first for more specific mapping (matching seeded subcategories)
-        switch subcategoryName {
-        case "hats":
-            return .headwear
-        case "bags":
-            return .bag
-        case "belts", "scarves":
-            return .accessories
-        case "jewelry":
-            return .jewelry
-        case "heels", "flats", "sneakers", "boots", "sandals":
-            return .shoes
-        case "jackets", "coats", "blazers":
-            return .outerwear
-        case "t-shirts", "blouses", "sweaters", "tanks":
-            return .top
-        case "jeans", "trousers", "skirts", "shorts":
-            return .bottom
-        case "mini", "midi", "maxi":
-            return .top // Dresses occupy top zone, extend downward
-        case "skirt suits", "pant suits":
-            return .top // Suits start at top
-        case "one-piece", "bikini", "cover-ups":
-            return .top // Swimwear
-        case "leggings":
-            return .bottom
-        case "sports bras", "tops": // Activewear tops
-            return .top
-        default:
-            break
-        }
-        
-        // Fallback to category if subcategory didn't match
-        switch categoryName {
-        case "tops":
-            return .top
-        case "bottoms":
-            return .bottom
-        case "outerwear":
-            return .outerwear
-        case "shoes":
-            return .shoes
-        case "dresses":
-            return .top // Dresses occupy top zone, extend downward
-        case "suits":
-            return .top // Suits start at top
-        case "swimwear":
-            return .top // Swimwear
-        case "activewear":
-            // Activewear can be tops or bottoms, default to top
-            return .top
-        case "accessories":
-            // Accessories category includes multiple types, check subcategory
-            if subcategoryName == "bags" {
-                return .bag
-            } else if subcategoryName == "jewelry" {
-                return .jewelry
-            } else if subcategoryName == "hats" {
-                return .headwear
-            } else {
-                return .accessories
-            }
-        default:
-            // Fallback to accessories zone
-            return .accessories
-        }
-    }
-    
-    private func intelligentPosition(for item: Item) -> CGPoint {
-        let zone = determineZone(for: item)
-        let basePos = zone.basePosition(canvasSize: squareSize)
-        
-        // Check if zone already has items
-        let itemsInZone = outfitItems.filter { 
-            determineZone(for: $0.item) == zone 
-        }
-        
-        if itemsInZone.isEmpty {
-            return basePos
-        } else {
-            // Stack items vertically with slight offset
-            let offset = CGFloat(itemsInZone.count) * 25
-            return CGPoint(x: basePos.x + offset, y: basePos.y + offset)
-        }
-    }
-    
     // MARK: - Helper Functions
     private func addItemToOutfit(_ item: Item) {
         // Check if item is already in outfit
@@ -763,18 +634,16 @@ struct OutfitAddView: View {
         
         saveState()
         
-        // Use intelligent positioning instead of random
-        let smartPosition = intelligentPosition(for: item)
-        
-        // Ensure position is within bounds (account for item size)
+        // Account for item size (120pts) - items are positioned by center, so need half size from edges
         let itemSize: CGFloat = 120
         let halfItemSize = itemSize / 2
-        let boundedX = max(halfItemSize, min(squareSize - halfItemSize, smartPosition.x))
-        let boundedY = max(halfItemSize, min(squareSize - halfItemSize, smartPosition.y))
+        
+        let randomX = CGFloat.random(in: halfItemSize...(squareSize - halfItemSize))
+        let randomY = CGFloat.random(in: halfItemSize...(squareSize - halfItemSize))
         
         let outfitItem = OutfitItem(
             item: item,
-            position: CGPoint(x: boundedX, y: boundedY),
+            position: CGPoint(x: randomX, y: randomY),
             scale: 1.0,
             rotation: 0.0,
             zIndex: outfitItems.count
@@ -1278,3 +1147,4 @@ struct ClosetItemView: View {
 }
 
 
+*/

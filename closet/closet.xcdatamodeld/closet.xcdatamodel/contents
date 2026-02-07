@@ -96,11 +96,13 @@
         <attribute name="category" optional="YES" attributeType="String"/>
         <relationship name="events" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Event" inverseName="outfits" inverseEntity="Event"/>
         <relationship name="items" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Item" inverseName="outfits" inverseEntity="Item"/>
+        <relationship name="tags" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Tag" inverseName="outfits" inverseEntity="Tag"/>
     </entity>
     <entity name="Photo" representedClassName="Photo" syncable="YES" codeGenerationType="class">
         <attribute name="data" optional="YES" attributeType="Binary"/>
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="isPrimary" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
+        <attribute name="thumbnailData" optional="YES" attributeType="Binary"/>
         <attribute name="timestamp" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="type" optional="YES" attributeType="String"/>
         <relationship name="item" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Item" inverseName="photos" inverseEntity="Item"/>
@@ -127,6 +129,7 @@
             <uniquenessConstraint>
                 <constraint value="category"/>
                 <constraint value="value"/>
+                <constraint value="scale"/>
             </uniquenessConstraint>
         </uniquenessConstraints>
     </entity>
@@ -141,6 +144,7 @@
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="name" optional="YES" attributeType="String"/>
         <relationship name="items" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Item" inverseName="tags" inverseEntity="Item"/>
+        <relationship name="outfits" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Outfit" inverseName="tags" inverseEntity="Outfit"/>
     </entity>
     <entity name="Wardrobe" representedClassName="Wardrobe" syncable="YES" codeGenerationType="class">
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
