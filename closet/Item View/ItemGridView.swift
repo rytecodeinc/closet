@@ -40,12 +40,17 @@ struct ItemGridView: View {
     @State private var showDeleteConfirmation = false
     @State private var showOutfitDeleteConfirmation = false
     @State private var showTagSelectionSheet = false
+    @State private var showTagAddedConfirmation = false
+    @State private var addedTagName: String = ""
+    @State private var addedTagItemCount: Int = 0
     
     // Multi-image picker state
     @StateObject private var queueCoordinator = ImageQueueCoordinator()
     @State private var showMultiImagePicker = false
+    @State private var showCropperForQueue = false
     @State private var shouldNavigateToItemAdd = false
     @State private var queuedImages: [UIImage] = []
+    @State private var showCropperCancelConfirmation = false
 
     let gridColumns = [
         GridItem(.flexible(), spacing: 2),
@@ -145,112 +150,10 @@ struct ItemGridView: View {
         }
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarLeading) {
-                if selectedTab == "Items" && isInSelectionMode {
-                    // Select all button
-                    let allSelected = !closetItems.isEmpty && selectedItems.count == closetItems.count
-                    Button {
-                        if allSelected {
-                            selectedItems.removeAll()
-                        } else {
-                            selectedItems = Set(closetItems)
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: allSelected ? "checkmark.circle.fill" : "circle")
-                            Text("All")
-                        }
-                    }
-                    
-                    // Tag button
-                    Button {
-                        showTagSelectionSheet = true
-                    } label: {
-                        Image(systemName: "tag")
-                    }
-                    
-                } else {
-                    if selectedTab == "Items" {
-                        NavigationLink(destination: ItemFilterView(filterModel: filterModel, wardrobeType: wardrobeType)) {
-                            Image(systemName: "line.3.horizontal.decrease.circle")
-                        }
-                    } else {
-                        NavigationLink(destination: OutfitFilterView(filterModel: outfitFilterModel)) {
-                            Image(systemName: "line.3.horizontal.decrease.circle")
-                        }
-                    }
-                    Menu {
-                        Button {
-                            sortAscending = false
-                            fetchItems()
-                            fetchOutfits()
-                        } label: {
-                            Label("Newest First", systemImage: !sortAscending ? "checkmark" : "")
-                        }
-                        Button {
-                            sortAscending = true
-                            fetchItems()
-                            fetchOutfits()
-                        } label: {
-                            Label("Oldest First", systemImage: sortAscending ? "checkmark" : "")
-                        }
-                    } label: {
-                        Image(systemName: "arrow.up.arrow.down")
-                    }
-                }
+                leadingToolbarContent()
             }
             ToolbarItem(placement: .navigationBarTrailing) {
-                if selectedTab == "Items" {
-                    HStack(spacing: 16) {
-                        if isInSelectionMode {
-                            // Delete button
-                            Button {
-                                showDeleteConfirmation = true
-                            } label: {
-                                Image(systemName: "trash")
-                                    .foregroundColor(.red)
-                            }
-                            
-                            Button("Cancel") {
-                                isInSelectionMode = false
-                                selectedItems.removeAll()
-                            }
-                        } else {
-                            NavigationLink(destination: ItemDraftsView()) {
-                                Image(systemName: "folder")
-                            }
-                            Button {
-                                showMultiImagePicker = true
-                            } label: {
-                                Image(systemName: "plus")
-                            }
-                        }
-                    }
-                } else if selectedTab == "Outfits" {
-                    HStack(spacing: 16) {
-                        if isInSelectionMode {
-                            // Delete button
-                            Button {
-                                showOutfitDeleteConfirmation = true
-                            } label: {
-                                Image(systemName: "trash")
-                                    .foregroundColor(.red)
-                            }
-                            .disabled(selectedOutfits.isEmpty)
-                            
-                            Button("Cancel") {
-                                isInSelectionMode = false
-                                selectedOutfits.removeAll()
-                            }
-                        } else {
-                            NavigationLink(destination: OutfitDraftsView(wardrobeType: wardrobeType, selectedWardrobe: selectedWardrobe)) {
-                                Image(systemName: "folder")
-                            }
-                            NavigationLink(destination: OutfitAddView(wardrobeType: wardrobeType, initialWardrobe: selectedWardrobe)) {
-                                Image(systemName: "plus")
-                            }
-                        }
-                    }
-                }
+                trailingToolbarContent()
             }
             ToolbarItem(placement: .principal) {
                 if selectedTab == "Items" && isInSelectionMode {
@@ -284,14 +187,66 @@ struct ItemGridView: View {
         }
         .sheet(isPresented: $showMultiImagePicker) {
             MultiImagePicker(selectedImages: $queuedImages) {
+                showMultiImagePicker = false
+                
                 if !queuedImages.isEmpty {
+                    // Load images into queue coordinator
                     queueCoordinator.loadQueue(queuedImages)
-                    // Delay navigation to ensure sheet is fully dismissed
+                    
+                    // Small delay to ensure picker sheet is dismissed
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        shouldNavigateToItemAdd = true
+                        // Show cropper for the first image
+                        showCropperForQueue = true
                     }
                 }
-                showMultiImagePicker = false
+            }
+        }
+        .fullScreenCover(isPresented: $showCropperForQueue) {
+            if let imageToCrop = queueCoordinator.currentImage {
+                NavigationView {
+                    ImageCropperView(
+                        originalImage: imageToCrop,
+                        onCrop: { croppedImage in
+                            // Store the cropped image in coordinator
+                            queueCoordinator.storeCroppedImage(croppedImage)
+                            
+                            // Dismiss cropper
+                            showCropperForQueue = false
+                            
+                            // Small delay then show ItemAddView
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                shouldNavigateToItemAdd = true
+                            }
+                        },
+                        isEditing: false
+                    )
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            Button("Cancel") {
+                                // Show confirmation if queue is active (has current image or more images)
+                                if queueCoordinator.isQueueActive {
+                                    showCropperCancelConfirmation = true
+                                } else {
+                                    // Queue not active, just dismiss
+                                    showCropperForQueue = false
+                                }
+                            }
+                        }
+                    }
+                }
+                .alert("Discard this item?", isPresented: $showCropperCancelConfirmation) {
+                    Button("Discard", role: .destructive) {
+                        handleCropperCancel()
+                    }
+                    Button("Keep", role: .cancel) {}
+                } message: {
+                    if queueCoordinator.hasMore {
+                        Text("This image will be skipped and you'll move to the next image in the queue.")
+                    } else {
+                        Text("This image will be discarded.")
+                    }
+                }
             }
         }
         .background {
@@ -303,8 +258,7 @@ struct ItemGridView: View {
                     queueCoordinator: queueCoordinator
                 )
                 .onDisappear {
-                    // Reset navigation state when view disappears
-                    shouldNavigateToItemAdd = false
+                    handleItemAddViewDismiss()
                 },
                 isActive: $shouldNavigateToItemAdd
             ) {
@@ -333,6 +287,15 @@ struct ItemGridView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Are you sure you want to delete \(selectedOutfits.count) outfit\(selectedOutfits.count == 1 ? "" : "s")? This action cannot be undone.")
+        }
+        .alert("Tag Added", isPresented: $showTagAddedConfirmation) {
+            Button("OK") {
+                // Exit selection mode after confirmation
+                isInSelectionMode = false
+                selectedItems.removeAll()
+            }
+        } message: {
+            Text("Tag \"\(addedTagName)\" has been added to \(addedTagItemCount) item\(addedTagItemCount == 1 ? "" : "s").")
         }
         .navigationDestination(item: $selectedItemForNavigation) { item in
             ItemDetailView(item: item)
@@ -577,7 +540,7 @@ struct ItemGridView: View {
     private var itemsTab: some View {
         Group {
             if closetItems.isEmpty {
-                EmptyItemStateView(wardrobe: selectedWardrobe)
+                EmptyItemStateView(wardrobe: selectedWardrobe, wardrobeType: wardrobeType)
             } else {
                 ScrollView(showsIndicators: false) {
                     LazyVGrid(columns: gridColumns, spacing: 2) {
@@ -703,6 +666,229 @@ struct ItemGridView: View {
         }
         
         selectedOutfits.insert(outfit)
+    }
+    
+    // MARK: - Toolbar Content
+    
+    @ViewBuilder
+    private func leadingToolbarContent() -> some View {
+        if isInSelectionMode {
+            if selectedTab == "Items" {
+                itemsSelectionModeLeadingToolbar()
+            } else if selectedTab == "Outfits" {
+                outfitsSelectionModeLeadingToolbar()
+            }
+        } else {
+            nonSelectionModeLeadingToolbar()
+        }
+    }
+    
+    @ViewBuilder
+    private func itemsSelectionModeLeadingToolbar() -> some View {
+        // Select all button
+        let allSelected = !closetItems.isEmpty && selectedItems.count == closetItems.count
+        Button {
+            if allSelected {
+                selectedItems.removeAll()
+            } else {
+                selectedItems = Set(closetItems)
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: allSelected ? "checkmark.circle.fill" : "circle")
+                Text("All")
+            }
+        }
+        
+        // Tag button
+        Button {
+            showTagSelectionSheet = true
+        } label: {
+            Image(systemName: "tag")
+        }
+    }
+    
+    @ViewBuilder
+    private func outfitsSelectionModeLeadingToolbar() -> some View {
+        // Select all button
+        let allSelected = !outfits.isEmpty && selectedOutfits.count == outfits.count
+        Button {
+            if allSelected {
+                selectedOutfits.removeAll()
+            } else {
+                selectedOutfits = Set(outfits)
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: allSelected ? "checkmark.circle.fill" : "circle")
+                Text("All")
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func nonSelectionModeLeadingToolbar() -> some View {
+        if selectedTab == "Items" {
+            NavigationLink(destination: ItemFilterView(filterModel: filterModel, wardrobeType: wardrobeType)) {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+            }
+        } else {
+            NavigationLink(destination: OutfitFilterView(filterModel: outfitFilterModel)) {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+            }
+        }
+        Menu {
+            Button {
+                sortAscending = false
+                fetchItems()
+                fetchOutfits()
+            } label: {
+                Label("Newest First", systemImage: !sortAscending ? "checkmark" : "")
+            }
+            Button {
+                sortAscending = true
+                fetchItems()
+                fetchOutfits()
+            } label: {
+                Label("Oldest First", systemImage: sortAscending ? "checkmark" : "")
+            }
+        } label: {
+            Image(systemName: "arrow.up.arrow.down")
+        }
+    }
+    
+    @ViewBuilder
+    private func trailingToolbarContent() -> some View {
+        if isInSelectionMode {
+            selectionModeTrailingToolbar()
+        } else {
+            nonSelectionModeTrailingToolbar()
+        }
+    }
+    
+    @ViewBuilder
+    private func selectionModeTrailingToolbar() -> some View {
+        HStack(spacing: 16) {
+            // Delete button
+            Button {
+                if selectedTab == "Items" {
+                    showDeleteConfirmation = true
+                } else {
+                    showOutfitDeleteConfirmation = true
+                }
+            } label: {
+                Image(systemName: "trash")
+                    .foregroundColor(.red)
+            }
+            .disabled(selectedTab == "Outfits" && selectedOutfits.isEmpty)
+            
+            // Cancel button
+            Button("Cancel") {
+                isInSelectionMode = false
+                if selectedTab == "Items" {
+                    selectedItems.removeAll()
+                } else {
+                    selectedOutfits.removeAll()
+                }
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func nonSelectionModeTrailingToolbar() -> some View {
+        HStack(spacing: 16) {
+            if selectedTab == "Items" {
+                NavigationLink(destination: ItemDraftsView()) {
+                    Image(systemName: "folder")
+                }
+                NavigationLink(destination: ItemAddView(parentContext: viewContext, selectedWardrobe: selectedWardrobe)) {
+                    Image(systemName: "plus")
+                }
+            } else {
+                NavigationLink(destination: OutfitDraftsView(wardrobeType: wardrobeType, selectedWardrobe: selectedWardrobe)) {
+                    Image(systemName: "folder")
+                }
+                NavigationLink(destination: OutfitAddView(wardrobeType: wardrobeType, initialWardrobe: selectedWardrobe)) {
+                    Image(systemName: "plus")
+                }
+            }
+        }
+    }
+    
+    // MARK: - Cropper Cancel Handler
+    
+    private func handleCropperCancel() {
+        // Skip current image and move to next if available
+        if queueCoordinator.isQueueActive {
+            if queueCoordinator.hasMore {
+                print("📸 Skipping current image, moving to next in queue")
+                queueCoordinator.moveToNext()
+                
+                // Show cropper for next image
+                if let nextImage = queueCoordinator.currentImage {
+                    showCropperForQueue = false
+                    // Small delay to ensure clean transition
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        showCropperForQueue = true
+                    }
+                } else {
+                    // No more images after skipping
+                    print("📸 No more images after skipping, clearing queue")
+                    queueCoordinator.clear()
+                    showCropperForQueue = false
+                }
+            } else {
+                // This was the last image, just clear and dismiss
+                print("📸 Last image discarded, clearing queue")
+                queueCoordinator.clear()
+                showCropperForQueue = false
+            }
+        } else {
+            // Queue not active, just dismiss
+            showCropperForQueue = false
+        }
+    }
+    
+    // MARK: - ItemAddView Dismiss Handler
+    
+    private func handleItemAddViewDismiss() {
+        // Reset navigation state
+        shouldNavigateToItemAdd = false
+        
+        // Check if there's a current image available
+        if queueCoordinator.isQueueActive {
+            // If hasMore is false AND we have a cropped image, we just processed the last image
+            // (currentCroppedImage is set when we crop, and cleared when we moveToNext)
+            if !queueCoordinator.hasMore && queueCoordinator.currentCroppedImage != nil {
+                print("📸 ItemAddView dismissed, last image processed (hasMore=false, croppedImage exists), clearing queue")
+                queuedImages.removeAll()
+                queueCoordinator.clear()
+                return
+            }
+            
+            // If hasMore is true, we moved to the next image, so show cropper for it
+            // OR if hasMore is false but no croppedImage, we're on the last image that hasn't been cropped yet
+            if let currentImage = queueCoordinator.currentImage {
+                print("📸 ItemAddView dismissed, showing cropper for image at index \(queueCoordinator.currentIndex), hasMore: \(queueCoordinator.hasMore)")
+                
+                // Small delay to ensure clean transition
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    // Double-check that we still have a current image (queue might have been cleared)
+                    if queueCoordinator.isQueueActive, let _ = queueCoordinator.currentImage {
+                        showCropperForQueue = true
+                    }
+                }
+            } else {
+                // No current image available - we've processed all images, clean up
+                print("📸 ItemAddView dismissed, no current image available, clearing queue")
+                queuedImages.removeAll()
+                queueCoordinator.clear()
+            }
+        } else {
+            // Queue not active, clean up
+            print("📸 ItemAddView dismissed, queue not active")
+            queuedImages.removeAll()
+        }
     }
     
     // MARK: - Wardrobe Selection Sheet
@@ -942,16 +1128,25 @@ struct ItemGridView: View {
     private func addTagToSelectedItems(_ tag: Tag) {
         guard !selectedItems.isEmpty else { return }
         
+        // Count how many items actually get the tag (excluding items that already have it)
+        var itemsAdded = 0
+        
         // Add tag to all selected items (Core Data will handle duplicates)
         for item in selectedItems {
             if let tags = item.tags as? Set<Tag>, !tags.contains(tag) {
                 item.addToTags(tag)
+                itemsAdded += 1
             }
         }
         
         do {
             try viewContext.save()
-            print("✅ Added tag '\(tag.name ?? "unknown")' to \(selectedItems.count) items")
+            print("✅ Added tag '\(tag.name ?? "unknown")' to \(itemsAdded) items")
+            
+            // Show confirmation alert
+            addedTagName = tag.name ?? "Untitled"
+            addedTagItemCount = itemsAdded
+            showTagAddedConfirmation = true
         } catch {
             print("❌ Failed to add tag to items: \(error.localizedDescription)")
         }
