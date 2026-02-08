@@ -24,8 +24,8 @@ struct ItemAddView: View {
     @State private var imagePickerSource: UIImagePickerController.SourceType = .photoLibrary
     @State private var selectedUIImage: UIImage?
     @State private var pendingImageType: ImageType? // Track which image type is being added/edited
-    @State private var isCropperPresented = false
     @State private var imageToEdit: UIImage? // Store the image to edit directly
+    @State private var shouldNavigateToCropper = false // For navigation to cropper
     @State private var selectedImageType: ImageType = .front
     
     enum ImageType {
@@ -50,8 +50,8 @@ struct ItemAddView: View {
     
     // New init with queue coordinator
     init(parentContext: NSManagedObjectContext, selectedWardrobe: Wardrobe?, queueCoordinator: ImageQueueCoordinator, initialURL: URL? = nil) {
-        // Get initial image from queue if available
-        let initialImage = queueCoordinator.currentImage
+        // Get initial image from cropped image if available
+        let initialImage = queueCoordinator.nextCroppedImage
         _vm = StateObject(wrappedValue: ItemAddViewModel(parentContext: parentContext, selectedWardrobe: selectedWardrobe, initialURL: initialURL, initialImage: initialImage))
         _queueCoordinator = ObservedObject(wrappedValue: queueCoordinator)
     }
@@ -131,29 +131,51 @@ struct ItemAddView: View {
                 isImagePickerPresented = false
             }
         }
-        .sheet(isPresented: $isCropperPresented) {
-            if let imageType = pendingImageType, let image = imageToEdit {
-                NavigationView {
-                    ImageCropperView(
-                        originalImage: image,
-                        onCrop: { croppedImage in
-                            switch imageType {
-                            case .front:
-                                replaceFrontImage(with: croppedImage)
-                            case .back:
-                                replaceBackImage(with: croppedImage)
-                            case .worn:
-                                replaceWornImage(with: croppedImage)
-                            }
-                            pendingImageType = nil
-                            imageToEdit = nil
-                        }, isEditing: true
-                    )
+        .background {
+            // Hidden NavigationLink for cropper (when editing images)
+            NavigationLink(
+                destination: Group {
+                    if let imageType = pendingImageType, let image = imageToEdit {
+                        ImageCropperView(
+                            originalImage: image,
+                            onCrop: { croppedImage in
+                                // Update image - use async to ensure it completes
+                                Task { @MainActor in
+                                    switch imageType {
+                                    case .front:
+                                        await replaceFrontImageSync(with: croppedImage)
+                                    case .back:
+                                        await replaceBackImageSync(with: croppedImage)
+                                    case .worn:
+                                        await replaceWornImageSync(with: croppedImage)
+                                    }
+                                    
+                                    // Reset state and pop navigation after image is updated
+                                    pendingImageType = nil
+                                    imageToEdit = nil
+                                    shouldNavigateToCropper = false
+                                }
+                            },
+                            isEditing: true
+                        )
+                        .navigationBarTitleDisplayMode(.inline)
+                    } else {
+                        Text("No image found to edit.")
+                            .padding()
+                    }
                 }
-            } else {
-                Text("No image found to edit.")
-                    .padding()
+                .onDisappear {
+                    // Only reset navigation state if we're not in the middle of updating an image
+                    // This prevents premature reset while image is being processed
+                    if pendingImageType == nil {
+                        shouldNavigateToCropper = false
+                    }
+                },
+                isActive: $shouldNavigateToCropper
+            ) {
+                EmptyView()
             }
+            .hidden()
         }
         .alert("Add Item?", isPresented: $showMissingWarning) {
             Button("Proceed", role: .none) {
@@ -193,14 +215,17 @@ struct ItemAddView: View {
             
             // Handle initial image if provided (from share sheet or queue)
             if let initialImage = vm.initialImage {
-                print("📸 ItemAddView: Received initial image")
+                print("📸 ItemAddView: Received initial cropped image from queue")
                 replaceFrontImage(with: initialImage)
-            } else if let queueImage = queueCoordinator.currentImage {
-                // Load image from queue if no initial image
-                print("📸 ItemAddView: Loading image from queue")
-                replaceFrontImage(with: queueImage)
             } else {
                 print("📸 ItemAddView: No initial image provided")
+                /* Automatically show camera/library choice when no initial image
+                if getImage(for: .front) == nil && !queueCoordinator.isQueueActive {
+                    // Small delay to ensure view is fully presented
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        presentImagePicker(for: .front)
+                    }
+                }*/
             }
             
             // Handle initial URL if provided (from share sheet)
@@ -259,7 +284,7 @@ struct ItemAddView: View {
                     VStack(spacing: 8) {
                         Image(systemName: "photo.badge.plus")
                             .font(.system(size: 40, weight: .semibold))
-                        Text("Add Photo From Library")
+                        Text("Add Item Image")
                             .font(.callout)
                             .foregroundColor(.secondary)
                     }
@@ -446,12 +471,20 @@ struct ItemAddView: View {
     }
     
     private func presentCropperForImage(type: ImageType) {
-        if let image = getImage(for: type) {
-            // Store both the type and image we're editing
-            pendingImageType = type
-            imageToEdit = image
-            isCropperPresented = true
+        // Fetch the image immediately and store it
+        guard let image = getImage(for: type) else {
+            print("⚠️ No image found for type \(type)")
+            return
         }
+        
+        print("📸 Presenting cropper for \(type) with image size: \(image.size)")
+        
+        // Store both the type and the actual image
+        pendingImageType = type
+        imageToEdit = image
+        
+        // Navigate to cropper (same flow as initial image selection)
+        shouldNavigateToCropper = true
     }
     
     // MARK: - Replace Image Functions
@@ -559,6 +592,126 @@ struct ItemAddView: View {
                 vm.photoRefreshToken = UUID()
                 selectedImageType = .worn
             }
+        }
+    }
+    
+    // Synchronous versions for editing (await the image update)
+    private func replaceFrontImageSync(with image: UIImage) async {
+        await MainActor.run {
+            // Remove ALL existing front photos (there might be multiple if editing was done)
+            let photos = vm.draftItem.photos as? Set<Photo> ?? []
+            let photosToDelete = photos.filter { photo in
+                photo.type == "front" || (photo.isPrimary && (photo.type == nil || photo.type == ""))
+            }
+            
+            for photo in photosToDelete {
+                // Remove from relationship first
+                vm.draftItem.removeFromPhotos(photo)
+                vm.childContext.delete(photo)
+            }
+        }
+
+        // Process image
+        let processedData = await processImageForStorage(image)
+        
+        // Analyze image with Vision for category suggestion (only if category not already set)
+        if vm.draftItem.category == nil {
+            print("🔍 Analyzing edited image with Vision for category classification...")
+            do {
+                let visionResult = try await VisionAnalysisService.shared.analyzeCategory(from: image)
+                if let suggestedCategory = visionResult.suggestedCategory, visionResult.confidence >= 0.3 {
+                    await MainActor.run {
+                        vm.setCategory(name: suggestedCategory)
+                        print("✅ Vision suggested category: \(suggestedCategory) (confidence: \(visionResult.confidence))")
+                    }
+                } else if let suggestedCategory = visionResult.suggestedCategory {
+                    await MainActor.run {
+                        vm.setCategory(name: suggestedCategory)
+                        print("⚠️ Vision suggested category with low confidence: \(suggestedCategory) (confidence: \(visionResult.confidence))")
+                    }
+                }
+            } catch {
+                print("⚠️ Vision analysis failed: \(error.localizedDescription)")
+            }
+        }
+        
+        await MainActor.run {
+            // Create and assign new photo
+            let newPhoto = Photo(context: vm.childContext)
+            newPhoto.id = UUID()
+            newPhoto.data = processedData
+            newPhoto.thumbnailData = image.generateThumbnail()
+            newPhoto.type = "front"
+            newPhoto.isPrimary = true
+            newPhoto.item = vm.draftItem
+            
+            // Refresh UI
+            vm.photoRefreshToken = UUID()
+            selectedImageType = .front
+        }
+    }
+    
+    private func replaceBackImageSync(with image: UIImage) async {
+        await MainActor.run {
+            // Remove ALL existing back photos
+            let photos = vm.draftItem.photos as? Set<Photo> ?? []
+            let photosToDelete = photos.filter { $0.type == "back" }
+            
+            for photo in photosToDelete {
+                // Remove from relationship first
+                vm.draftItem.removeFromPhotos(photo)
+                vm.childContext.delete(photo)
+            }
+        }
+
+        // Process image
+        let processedData = await processImageForStorage(image)
+        
+        await MainActor.run {
+            // Create and assign new photo
+            let newPhoto = Photo(context: vm.childContext)
+            newPhoto.id = UUID()
+            newPhoto.data = processedData
+            newPhoto.thumbnailData = image.generateThumbnail()
+            newPhoto.type = "back"
+            newPhoto.isPrimary = false
+            newPhoto.item = vm.draftItem
+            
+            // Refresh UI
+            vm.photoRefreshToken = UUID()
+            selectedImageType = .back
+        }
+    }
+    
+    private func replaceWornImageSync(with image: UIImage) async {
+        await MainActor.run {
+            // Remove ALL existing worn photos
+            let photos = vm.draftItem.photos as? Set<Photo> ?? []
+            let photosToDelete = photos.filter { $0.type == "worn" }
+            
+            for photo in photosToDelete {
+                // Remove from relationship first
+                vm.draftItem.removeFromPhotos(photo)
+                vm.childContext.delete(photo)
+            }
+        }
+
+        // Process image
+        let processedData = await processImageForStorage(image)
+        
+        await MainActor.run {
+            // Create and assign new photo
+            let newPhoto = Photo(context: vm.childContext)
+            newPhoto.id = UUID()
+            newPhoto.data = processedData
+            newPhoto.thumbnailData = image.generateThumbnail()
+            newPhoto.type = "worn"
+            newPhoto.isPrimary = false
+            newPhoto.item = vm.draftItem
+            
+            // Refresh UI
+            vm.photoRefreshToken = UUID()
+            selectedImageType = .worn
         }
     }
 
@@ -672,55 +825,24 @@ struct ItemAddView: View {
             try vm.persistToParent()
             print("✅ Item saved successfully")
             
-            // Check if we're using a queue (has images loaded)
+            // Move to next in queue if available
+            // Note: We move to next BEFORE dismissing, so handleItemAddViewDismiss can check if there's a current image
             if queueCoordinator.isQueueActive && queueCoordinator.hasMore {
-                print("📸 Queue active with \(queueCoordinator.remainingCount) remaining. Moving to next...")
-                
-                // Move to next image in queue
+                print("📸 Moving to next image in queue")
                 queueCoordinator.moveToNext()
-                
-                // Verify we have a next image
-                guard let nextImage = queueCoordinator.currentImage else {
-                    print("📸 ❌ No image at index \(queueCoordinator.currentIndex), clearing and dismissing")
-                    queueCoordinator.clear()
-                    dismiss()
-                    return
-                }
-                
-                print("📸 ✅ Loading next image (index \(queueCoordinator.currentIndex))")
-                
-                // Get wardrobe for next item (from parent context)
-                var wardrobeForNextItem: Wardrobe? = nil
-                if let wardrobeObjectID = vm.selectedWardrobeObjectID,
-                   let parentContext = vm.childContext.parent {
-                    wardrobeForNextItem = try? parentContext.existingObject(with: wardrobeObjectID) as? Wardrobe
-                }
-                
-                // Reset view model for new item - this creates a fresh item in the child context
-                vm.resetForNewItem(selectedWardrobe: wardrobeForNextItem)
-                
-                // Load next image on main thread to ensure UI updates
-                DispatchQueue.main.async {
-                    self.replaceFrontImage(with: nextImage)
-                    // Reset UI state
-                    self.selectedImageType = .front
-                    self.initializeSelectedImageType()
-                }
-                
-                // Don't dismiss - continue with next item
-                return
-            } else {
-                // No more images in queue
-                print("📸 No more images in queue, clearing and dismissing")
-                if queueCoordinator.isQueueActive {
-                    queueCoordinator.clear()
-                }
             }
+            // If hasMore is false, we're on the last image and it's already been processed in ItemAddView
+            // We don't move, so currentImage will still be the last image
+            // But wait - we already processed it, so we should clear it
+            // Actually, the issue is: when we're on the last image, we show cropper → ItemAddView → save
+            // After save, we should clear because we've processed all images
+            // But handleItemAddViewDismiss checks currentImage, and if it exists, shows cropper again
+            // So we need to track that we've processed the current image
         } catch {
             print("❌ Save failed: \(error.localizedDescription)")
         }
         
-        // Dismiss the view
+        // Always dismiss - ItemGridView's onDisappear will handle showing next cropper or clearing
         DispatchQueue.main.async {
             self.dismiss()
         }
@@ -749,35 +871,19 @@ struct ItemAddView: View {
         // Discard the current item
         vm.discard()
         
-        // Check if there are more items in queue
-        if queueCoordinator.hasMore {
-            // Move to next image in queue
+        // Move to next in queue if available
+        if queueCoordinator.isQueueActive && queueCoordinator.hasMore {
+            print("📸 Discarding current item and moving to next in queue")
             queueCoordinator.moveToNext()
-            
-            // Get wardrobe for next item
-            let wardrobe = vm.selectedWardrobeObjectID.flatMap { 
-                try? vm.childContext.parent?.existingObject(with: $0) as? Wardrobe 
-            }
-            
-            // Reset view model for new item
-            vm.resetForNewItem(selectedWardrobe: wardrobe)
-            
-            // Load next image
-            if let nextImage = queueCoordinator.currentImage {
-                print("📸 Discarded current image, loading next (index \(queueCoordinator.currentIndex))")
-                DispatchQueue.main.async {
-                    self.replaceFrontImage(with: nextImage)
-                    // Reset UI state
-                    self.selectedImageType = .front
-                    self.initializeSelectedImageType()
-                }
-            }
         } else {
-            // No more items, clear queue and dismiss
-            print("📸 No more images in queue after discarding current, clearing and dismissing")
-            queueCoordinator.clear()
-            dismiss()
+            // No more images, clear queue
+            if queueCoordinator.isQueueActive {
+                queueCoordinator.clear()
+            }
         }
+        
+        // Dismiss - ItemGridView's onDisappear will handle showing next cropper
+        dismiss()
     }
     
     // MARK: - Draft flow
@@ -808,32 +914,23 @@ struct ItemAddView: View {
         do {
             try vm.persistDraftToParent()
             
-            // Check if queue has more items - if so, move to next instead of showing alert
+            // Move to next in queue if available
             if queueCoordinator.isQueueActive && queueCoordinator.hasMore {
-                // Move to next image in queue
+                print("📸 Draft saved, moving to next image in queue")
                 queueCoordinator.moveToNext()
-                
-                // Get wardrobe for next item
-                let wardrobe = vm.selectedWardrobeObjectID.flatMap { 
-                    try? vm.childContext.parent?.existingObject(with: $0) as? Wardrobe 
-                }
-                
-                // Reset view model for new item
-                vm.resetForNewItem(selectedWardrobe: wardrobe)
-                
-                // Load next image
-                if let nextImage = queueCoordinator.currentImage {
-                    print("📸 Draft saved, loading next image (index \(queueCoordinator.currentIndex))")
-                    DispatchQueue.main.async {
-                        self.replaceFrontImage(with: nextImage)
-                        // Reset UI state
-                        self.selectedImageType = .front
-                        self.initializeSelectedImageType()
-                    }
-                }
+                dismiss() // ItemGridView will show next cropper
             } else {
-                // No more items, show alert and dismiss
-                showingDraftSaveAlert = true
+                // Check if there's still a current image (last image in queue)
+                if queueCoordinator.isQueueActive, let _ = queueCoordinator.currentImage {
+                    // Still have the last image to process, dismiss and let handleItemAddViewDismiss show cropper
+                    dismiss()
+                } else {
+                    // No more items, show alert and dismiss
+                    if queueCoordinator.isQueueActive {
+                        queueCoordinator.clear()
+                    }
+                    showingDraftSaveAlert = true
+                }
             }
         } catch {
             print("❌ Draft save failed: \(error.localizedDescription)")
@@ -925,6 +1022,12 @@ final class ItemAddViewModel: ObservableObject {
         if let parent = childContext.parent, parent.hasChanges {
             do {
                 try parent.save()
+                
+                // After saving, refresh the item in the parent context to ensure photos relationship is up to date
+                let itemObjectID = draftItem.objectID
+                if !itemObjectID.isTemporaryID {
+                    parent.refresh(try parent.existingObject(with: itemObjectID), mergeChanges: true)
+                }
             } catch let error as NSError {
                 // Handle constraint conflicts specifically (error code 133021)
                 if error.domain == NSCocoaErrorDomain && error.code == 133021 {
@@ -933,6 +1036,12 @@ final class ItemAddViewModel: ObservableObject {
                     try resolveConstraintConflicts(in: parent, error: error)
                     // Retry save after conflict resolution
                     try parent.save()
+                    
+                    // Refresh after conflict resolution too
+                    let itemObjectID = draftItem.objectID
+                    if !itemObjectID.isTemporaryID {
+                        parent.refresh(try parent.existingObject(with: itemObjectID), mergeChanges: true)
+                    }
                 } else {
                     throw error
                 }
