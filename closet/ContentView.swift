@@ -19,12 +19,13 @@ struct ContentView: View {
 
     @FetchRequest(
         sortDescriptors: [NSSortDescriptor(keyPath: \Item.timestamp, ascending: true)],
+        predicate: NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil"),
         animation: .default)
     private var items: FetchedResults<Item>
     
     @FetchRequest(
         sortDescriptors: [NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)],
-        predicate: NSPredicate(format: "type == %@", "closet")
+        predicate: NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", "closet")
     ) private var closets: FetchedResults<Wardrobe>
     
     @State private var navigationPath = NavigationPath()
@@ -67,6 +68,11 @@ struct ContentView: View {
                         Image(systemName: "person")
                         Text("Profile")
                     }
+                LoginView()
+                    .tabItem {
+                        Image(systemName: "lock")
+                        Text("Login")
+                    }
             }
             .onAppear {
                 print("-- ContentView appeared")
@@ -76,6 +82,8 @@ struct ContentView: View {
                 deduplicateWardrobes(context: viewContext)
                 compressExistingPhotos(context: viewContext)
                 resolveSizeConstraintConflicts(context: viewContext)
+                migrateUserWeightFromUserDefaults(context: viewContext)
+                migrateTimestampToCreatedAt(context: viewContext)
                 
                 // Mark as appeared and check for pending navigation intent
                 hasAppeared = true

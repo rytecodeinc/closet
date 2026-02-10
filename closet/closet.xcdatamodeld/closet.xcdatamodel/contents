@@ -4,11 +4,13 @@
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="isVisible" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
         <attribute name="name" optional="YES" attributeType="String"/>
+        <attribute name="userId" optional="YES" attributeType="String"/>
         <relationship name="items" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Item" inverseName="brand" inverseEntity="Item"/>
     </entity>
     <entity name="Category" representedClassName="Category" syncable="YES" codeGenerationType="class">
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="name" optional="YES" attributeType="String"/>
+        <attribute name="userId" optional="YES" attributeType="String"/>
         <relationship name="items" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Item" inverseName="category" inverseEntity="Item"/>
         <relationship name="sizes" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Size" inverseName="category" inverseEntity="Size"/>
         <relationship name="subcategories" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Subcategory" inverseName="category" inverseEntity="Subcategory"/>
@@ -17,7 +19,9 @@
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="name" optional="YES" attributeType="String"/>
         <attribute name="timestamp" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="type" optional="YES" attributeType="String"/>
+        <attribute name="userId" optional="YES" attributeType="String"/>
         <relationship name="items" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Item" inverseName="collections" inverseEntity="Item"/>
     </entity>
     <entity name="Color" representedClassName="AppColor" syncable="YES" codeGenerationType="class">
@@ -25,6 +29,7 @@
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="isVisible" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
         <attribute name="name" optional="YES" attributeType="String"/>
+        <attribute name="userId" optional="YES" attributeType="String"/>
         <relationship name="items" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Item" inverseName="colors" inverseEntity="Item"/>
     </entity>
     <entity name="Event" representedClassName="Event" syncable="YES" codeGenerationType="class">
@@ -39,6 +44,11 @@
         <attribute name="startDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="time" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="timestamp" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="userId" optional="YES" attributeType="String"/>
+        <attribute name="isSoftDeleted" optional="YES" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="syncedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="notes" optional="YES" attributeType="String"/>
         <relationship name="items" optional="YES" toMany="YES" deletionRule="Nullify" ordered="YES" destinationEntity="Item" inverseName="events" inverseEntity="Item"/>
         <relationship name="outfits" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Outfit" inverseName="events" inverseEntity="Outfit"/>
@@ -57,6 +67,11 @@
         <attribute name="weight" optional="YES" attributeType="Double" usesScalarValueType="YES"/>
         <attribute name="weightUnit" optional="YES" attributeType="String"/>
         <attribute name="timestamp" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="userId" optional="YES" attributeType="String"/>
+        <attribute name="isSoftDeleted" optional="YES" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="syncedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <relationship name="brand" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Brand" inverseName="items" inverseEntity="Brand"/>
         <relationship name="category" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Category" inverseName="items" inverseEntity="Category"/>
         <relationship name="collections" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Collection" inverseName="items" inverseEntity="Collection"/>
@@ -83,6 +98,7 @@
     <entity name="Location" representedClassName="Location" syncable="YES" codeGenerationType="class">
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="name" optional="YES" attributeType="String"/>
+        <attribute name="userId" optional="YES" attributeType="String"/>
         <relationship name="item" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Item" inverseName="location" inverseEntity="Item"/>
     </entity>
     <entity name="Outfit" representedClassName=".Outfit" syncable="YES" codeGenerationType="class">
@@ -92,6 +108,11 @@
         <attribute name="name" optional="YES" attributeType="String"/>
         <attribute name="notes" optional="YES" attributeType="String"/>
         <attribute name="timestamp" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="userId" optional="YES" attributeType="String"/>
+        <attribute name="isSoftDeleted" optional="YES" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="syncedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="transformationData" optional="YES" attributeType="Binary"/>
         <attribute name="category" optional="YES" attributeType="String"/>
         <relationship name="events" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Event" inverseName="outfits" inverseEntity="Event"/>
@@ -104,6 +125,7 @@
         <attribute name="isPrimary" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
         <attribute name="thumbnailData" optional="YES" attributeType="Binary"/>
         <attribute name="timestamp" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="type" optional="YES" attributeType="String"/>
         <relationship name="item" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Item" inverseName="photos" inverseEntity="Item"/>
     </entity>
@@ -116,6 +138,7 @@
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="isVisible" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
         <attribute name="name" optional="YES" attributeType="String"/>
+        <attribute name="userId" optional="YES" attributeType="String"/>
         <relationship name="item" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Item" inverseName="seasons" inverseEntity="Item"/>
     </entity>
     <entity name="Size" representedClassName="Size" syncable="YES" codeGenerationType="class">
@@ -123,6 +146,7 @@
         <attribute name="scale" optional="YES" attributeType="String"/>
         <attribute name="sortOrder" optional="YES" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
         <attribute name="value" optional="YES" attributeType="String"/>
+        <attribute name="userId" optional="YES" attributeType="String"/>
         <relationship name="category" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Category" inverseName="sizes" inverseEntity="Category"/>
         <relationship name="items" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Item" inverseName="size" inverseEntity="Item"/>
         <uniquenessConstraints>
@@ -137,19 +161,34 @@
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="name" optional="YES" attributeType="String"/>
         <attribute name="sortOrder" optional="YES" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="userId" optional="YES" attributeType="String"/>
         <relationship name="category" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Category" inverseName="subcategories" inverseEntity="Category"/>
         <relationship name="items" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Item" inverseName="subcategory" inverseEntity="Item"/>
     </entity>
     <entity name="Tag" representedClassName="Tag" syncable="YES" codeGenerationType="class">
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="name" optional="YES" attributeType="String"/>
+        <attribute name="userId" optional="YES" attributeType="String"/>
         <relationship name="items" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Item" inverseName="tags" inverseEntity="Item"/>
         <relationship name="outfits" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Outfit" inverseName="tags" inverseEntity="Outfit"/>
+    </entity>
+    <entity name="UserProfile" representedClassName="UserProfile" syncable="YES" codeGenerationType="class">
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="weightKg" optional="YES" attributeType="Double" usesScalarValueType="YES"/>
+        <attribute name="weightUnit" optional="YES" attributeType="String"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="userId" optional="YES" attributeType="String"/>
     </entity>
     <entity name="Wardrobe" representedClassName="Wardrobe" syncable="YES" codeGenerationType="class">
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="name" optional="YES" attributeType="String"/>
         <attribute name="timestamp" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="userId" optional="YES" attributeType="String"/>
+        <attribute name="isSoftDeleted" optional="YES" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="syncedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="type" optional="YES" attributeType="String"/>
         <relationship name="items" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Item" inverseName="wardrobes" inverseEntity="Item"/>
     </entity>

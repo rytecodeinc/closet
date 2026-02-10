@@ -16,6 +16,11 @@ struct closetApp: App {
         }()
     
     let persistenceController = PersistenceController.shared
+    // Use @StateObject to ensure SwiftUI observes changes to the singleton
+    @StateObject private var deepLinkRouter = DeepLinkRouter.shared
+    @StateObject private var userService = UserService.shared
+    // Supabase service - initializes client and loads existing session on app startup
+    @StateObject private var supabaseService = SupabaseService.shared
 
     init() {
         _ = Self.didPrint
@@ -28,6 +33,12 @@ struct closetApp: App {
         WindowGroup {
             ContentView()
                 .environment(\.managedObjectContext, persistenceController.container.viewContext)
+                .environmentObject(deepLinkRouter)
+                .environmentObject(userService)
+                .environmentObject(supabaseService)
+                .onOpenURL { url in
+                    deepLinkRouter.handleURL(url)
+                }
         }
     }
 }
