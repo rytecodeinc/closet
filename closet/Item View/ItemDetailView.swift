@@ -43,10 +43,35 @@ struct ItemDetailView: View {
     @State private var showDeleteConfirmation = false
     @State private var showPairItemSelection = false
     
-    // Computed property to get paired items
+    // Computed property to get paired items, sorted by date/time added (oldest first)
+    // Note: We use updatedAt as a proxy for when pairs were added, since Core Data doesn't
+    // track relationship creation timestamps. When a pair is added, both items get updatedAt set.
+    // We use createdAt as a tiebreaker to ensure stable sorting.
     private var pairedItems: [Item] {
         if let pairedItemsSet = item.pairedItems as? Set<Item> {
-            return Array(pairedItemsSet)
+            return Array(pairedItemsSet).sorted { item1, item2 in
+                // Primary sort: updatedAt ascending (oldest first)
+                // If updatedAt is nil, treat as oldest (put at beginning)
+                let date1 = item1.updatedAt ?? Date.distantPast
+                let date2 = item2.updatedAt ?? Date.distantPast
+                
+                if date1 != date2 {
+                    return date1 < date2
+                }
+                
+                // Tiebreaker: createdAt ascending (older items first if updatedAt is the same)
+                let created1 = item1.createdAt ?? Date.distantPast
+                let created2 = item2.createdAt ?? Date.distantPast
+                
+                if created1 != created2 {
+                    return created1 < created2
+                }
+                
+                // Final tiebreaker: Use item ID for stable sorting
+                let id1 = item1.id?.uuidString ?? ""
+                let id2 = item2.id?.uuidString ?? ""
+                return id1 < id2
+            }
         }
         return []
     }
@@ -100,7 +125,7 @@ struct ItemDetailView: View {
                             Text("ATTRIBUTES")
                                 .fontWeight(.semibold)
                             Spacer()
-                            Image(systemName: isAttributesExpanded ? "chevron.down" : "chevron.right")
+                            Image(systemName: isAttributesExpanded ? "minus" : "plus")
                                 .foregroundColor(.gray)
                                 .font(.caption)
                         }
@@ -121,10 +146,10 @@ struct ItemDetailView: View {
                             }
                         } header: {
                             HStack {
-                                Text("SETS")
+                                Text("PAIRS")
                                     .fontWeight(.semibold)
                                 Spacer()
-                                Image(systemName: isSetsExpanded ? "chevron.down" : "chevron.right")
+                                Image(systemName: isSetsExpanded ? "minus" : "plus")
                                     .foregroundColor(.gray)
                                     .font(.caption)
                             }
@@ -346,11 +371,17 @@ struct ItemDetailView: View {
         newPhoto.type = "front"
         newPhoto.isPrimary = true // Front images are primary by default
         newPhoto.item = item
+        
+        // Set updatedAt on item since we're modifying it
+        setUpdatedAt(item)
 
         do {
             try viewContext.save()
             print("✅ Replaced front photo.")
             selectedImageType = .front
+            
+            // Trigger automatic sync for the modified item
+            SyncService.shared.syncItemIfNeeded(item)
         } catch {
             print("❌ Failed to save new photo: \(error.localizedDescription)")
         }
@@ -373,11 +404,17 @@ struct ItemDetailView: View {
         newPhoto.type = "back"
         newPhoto.isPrimary = false
         newPhoto.item = item
+        
+        // Set updatedAt on item since we're modifying it
+        setUpdatedAt(item)
 
         do {
             try viewContext.save()
             print("✅ Replaced back photo.")
             selectedImageType = .back
+            
+            // Trigger automatic sync for the modified item
+            SyncService.shared.syncItemIfNeeded(item)
         } catch {
             print("❌ Failed to save new photo: \(error.localizedDescription)")
         }
@@ -400,11 +437,17 @@ struct ItemDetailView: View {
         newPhoto.type = "worn"
         newPhoto.isPrimary = false
         newPhoto.item = item
+        
+        // Set updatedAt on item since we're modifying it
+        setUpdatedAt(item)
 
         do {
             try viewContext.save()
             print("✅ Replaced worn photo.")
             selectedImageType = .worn
+            
+            // Trigger automatic sync for the modified item
+            SyncService.shared.syncItemIfNeeded(item)
         } catch {
             print("❌ Failed to save new photo: \(error.localizedDescription)")
         }
@@ -425,6 +468,10 @@ struct ItemDetailView: View {
         
         if let photo = photoToDelete {
             viewContext.delete(photo)
+            
+            // Set updatedAt on item since we're modifying it
+            setUpdatedAt(item)
+            
             do {
                 try viewContext.save()
                 print("✅ Deleted \(placeholderText(for: type)) photo.")
@@ -432,6 +479,9 @@ struct ItemDetailView: View {
                 if selectedImageType == type {
                     selectedImageType = .front
                 }
+                
+                // Trigger automatic sync for the modified item
+                SyncService.shared.syncItemIfNeeded(item)
             } catch {
                 print("❌ Failed to delete photo: \(error.localizedDescription)")
             }
@@ -805,7 +855,9 @@ struct ItemDetailView: View {
                 currentWardrobes.insert(closetWardrobe)
                 item.wardrobes = currentWardrobes as NSSet
                 
-                item.timestamp = Date()
+                let now = Date()
+                item.timestamp = now
+                item.createdAt = now
                 
                 do {
                     try viewContext.save()
@@ -821,7 +873,7 @@ struct ItemDetailView: View {
     
     private func fetchWardrobe(type: String) -> Wardrobe? {
         let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
-        request.predicate = NSPredicate(format: "type == %@", type)
+        request.predicate = NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", type)
         return try? viewContext.fetch(request).first
     }
     
@@ -833,8 +885,10 @@ struct ItemDetailView: View {
         }
         
         let request: NSFetchRequest<Outfit> = Outfit.fetchRequest()
-        // Exclude drafts from outfit listings
-        request.predicate = NSPredicate(format: "ANY items == %@ AND isDraft != YES", item)
+        // Exclude drafts and soft-deleted outfits from outfit listings
+        let basePredicate = NSPredicate(format: "ANY items == %@ AND isDraft != YES", item)
+        let softDeleteFilter = NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [basePredicate, softDeleteFilter])
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: false)]
         
         do {
@@ -919,6 +973,9 @@ struct ItemDetailView: View {
     func toggleFavorite() {
         item.isFavorite.toggle()
         
+        // Set updatedAt on item since we're modifying it
+        setUpdatedAt(item)
+        
         do {
             try viewContext.save()
         } catch {
@@ -930,7 +987,8 @@ struct ItemDetailView: View {
         // Store the brand before deletion to check if cleanup is needed
         let itemBrand = item.brand
         
-        viewContext.delete(item)
+        // Soft delete the item (for sync)
+        softDelete(item)
 
         do {
             try viewContext.save()
