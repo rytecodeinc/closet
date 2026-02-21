@@ -12,11 +12,31 @@ import CoreData
 
 struct ProfileView: View {
     @Environment(\.managedObjectContext) private var viewContext
+    @EnvironmentObject var supabaseService: SupabaseService
     
     @FetchRequest(
         entity: Item.entity(),
         sortDescriptors: []
     ) private var allItems: FetchedResults<Item>
+    
+    // Fetch user profile to observe changes
+    @FetchRequest(
+        entity: UserProfile.entity(),
+        sortDescriptors: []
+    ) private var allUserProfiles: FetchedResults<UserProfile>
+    
+    // Filter user profiles by current user (if authenticated)
+    private var userProfiles: [UserProfile] {
+        guard let userId = supabaseService.currentUser?.id.uuidString else {
+            return []
+        }
+        return allUserProfiles.filter { $0.userId == userId }
+    }
+    
+    // Get profile from fetched results (observes Core Data changes)
+    private var userProfile: UserProfile? {
+        userProfiles.first
+    }
     
     // MARK: - Helper Functions
     
@@ -83,6 +103,20 @@ struct ProfileView: View {
     private var formattedWishlistValue: String {
         formattedValueForWardrobeType("wishlist")
     }
+    
+    // MARK: - User Profile Data from Core Data
+    
+    private var profileRepository: UserProfileRepository {
+        UserProfileRepository(context: viewContext)
+    }
+    
+    private var username: String? {
+        userProfile?.username
+    }
+    
+    private var displayName: String? {
+        userProfile?.displayName
+    }
 
     var body: some View {
         NavigationView {
@@ -99,8 +133,9 @@ struct ProfileView: View {
                     
                     // Name Info
                     VStack(alignment: .leading, spacing: 4) {
-                        // Name
-                        Text("Name")
+                        // Display Name (show displayName if available, otherwise show placeholder)
+                        // Don't fallback to username here to avoid showing username twice
+                        Text(displayName ?? "Name")
                             .font(.title2)
                             .fontWeight(.semibold)
                         
@@ -163,8 +198,49 @@ struct ProfileView: View {
                 }
             }
             .listStyle(.plain)
-            .navigationTitle("@username")
+            .navigationTitle(username ?? supabaseService.cachedUsername ?? "@username")
             .navigationBarTitleDisplayMode(.inline)
+            .task {
+                // Load username and displayName from Supabase if not in Core Data and authenticated
+                if supabaseService.isAuthenticated {
+                    // Load username if needed
+                    if username == nil && supabaseService.cachedUsername == nil {
+                        do {
+                            _ = try await supabaseService.getUsername()
+                            // Refresh after loading
+                            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                            viewContext.refreshAllObjects()
+                        } catch {
+                            print("⚠️ Error loading username in ProfileView: \(error.localizedDescription)")
+                        }
+                    }
+                    
+                    // Load displayName if not in Core Data
+                    if displayName == nil {
+                        do {
+                            // getUsername() also loads displayName and syncs it to Core Data
+                            _ = try await supabaseService.getUsername()
+                            // Refresh after loading
+                            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                            viewContext.refreshAllObjects()
+                        } catch {
+                            print("⚠️ Error loading display name in ProfileView: \(error.localizedDescription)")
+                        }
+                    }
+                }
+            }
+            .onChange(of: userProfiles.count) { _ in
+                // Refresh when user profile changes
+                viewContext.refreshAllObjects()
+            }
+            .onChange(of: userProfile?.displayName) { _ in
+                // Refresh when displayName changes
+                viewContext.refreshAllObjects()
+            }
+            .onChange(of: userProfile?.username) { _ in
+                // Refresh when username changes
+                viewContext.refreshAllObjects()
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button {

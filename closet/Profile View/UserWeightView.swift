@@ -6,18 +6,22 @@
 //
 
 import SwiftUI
+import CoreData
 
 struct UserWeightView: View {
     @Environment(\.dismiss) private var dismiss
-    
-    @AppStorage("userWeightKg") private var storedWeightKg: Double = 0
-    @AppStorage("userWeightUnit") private var storedWeightUnit: String = ""
+    @Environment(\.managedObjectContext) private var viewContext
+    @EnvironmentObject var supabaseService: SupabaseService
     
     @State private var manualWeightInput: String = ""
     @State private var selectedUnit: WeightUnit = Locale.current.measurementSystem == .metric ? .kilograms : .pounds
     @State private var sliderWeightValue: Double = 150.0
     @State private var isLoading: Bool = true
     @State private var previousUnit: WeightUnit? = nil
+    
+    private var profileRepository: UserProfileRepository {
+        UserProfileRepository(context: viewContext)
+    }
     
     var isKilograms: Bool {
         selectedUnit.isKilograms
@@ -132,34 +136,33 @@ struct UserWeightView: View {
     }
     
     private func loadExistingWeight() {
-        // Load unit preference
-        let savedUnit = storedWeightUnit.isEmpty ? nil : storedWeightUnit
-        let newUnit: WeightUnit
-        if let unit = savedUnit {
-            newUnit = (unit == "kg") ? .kilograms : .pounds
-        } else {
-            newUnit = Locale.current.measurementSystem == .metric ? .kilograms : .pounds
-        }
-        
-        selectedUnit = newUnit
-        previousUnit = newUnit
-        
-        // Load weight value (stored in kg)
-        guard storedWeightKg > 0, storedWeightKg.isFinite && !storedWeightKg.isNaN else {
+        // Load weight from CoreData
+        guard let (weightKg, unit) = profileRepository.getWeight() else {
+            // No weight set, use defaults
             let currentMinLimit = self.minLimit
             let currentMaxLimit = self.maxLimit
             let defaultValue = (currentMinLimit + currentMaxLimit) / 2
             sliderWeightValue = defaultValue
             manualWeightInput = String(format: "%.1f", defaultValue)
+            
+            // Set unit based on locale
+            let newUnit: WeightUnit = Locale.current.measurementSystem == .metric ? .kilograms : .pounds
+            selectedUnit = newUnit
+            previousUnit = newUnit
             return
         }
+        
+        // Load unit preference
+        let newUnit: WeightUnit = (unit == "kg") ? .kilograms : .pounds
+        selectedUnit = newUnit
+        previousUnit = newUnit
         
         // Convert from stored kg to display unit
         let weightDisplay: Double
         if isKilograms {
-            weightDisplay = storedWeightKg
+            weightDisplay = weightKg
         } else {
-            weightDisplay = storedWeightKg * 2.20462
+            weightDisplay = weightKg * 2.20462
         }
         
         guard weightDisplay.isFinite && !weightDisplay.isNaN else {
@@ -189,9 +192,7 @@ struct UserWeightView: View {
     private func saveWeight() {
         guard let manualWeight = Double(manualWeightInput),
               manualWeight.isFinite && !manualWeight.isNaN else {
-            // Clear weight if invalid
-            storedWeightKg = 0
-            storedWeightUnit = ""
+            // Invalid weight, don't save
             return
         }
         
@@ -208,10 +209,19 @@ struct UserWeightView: View {
             return
         }
         
-        // Save to UserDefaults via @AppStorage
-        storedWeightKg = weightKg
-        storedWeightUnit = isKilograms ? "kg" : "lbs"
-        print("💾 Saved user weight: \(weightKg) kg (\(String(format: "%.1f", constrainedWeight)) \(isKilograms ? "kg" : "lbs"))")
+        // Save to CoreData
+        do {
+            // Get userId from SupabaseService
+            let userId = supabaseService.currentUser?.id.uuidString
+            try profileRepository.updateWeight(
+                weightKg: weightKg,
+                unit: isKilograms ? "kg" : "lbs",
+                userId: userId
+            )
+            print("💾 Saved user weight: \(weightKg) kg (\(String(format: "%.1f", constrainedWeight)) \(isKilograms ? "kg" : "lbs"))")
+        } catch {
+            print("❌ Failed to save user weight: \(error)")
+        }
     }
     
     private func validateWeightInput() {
