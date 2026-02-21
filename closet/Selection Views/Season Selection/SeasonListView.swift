@@ -44,7 +44,7 @@ struct SeasonListView: View {
                 }
             }
             .listStyle(.plain)
-            .navigationTitle("Select Seasons")
+            .navigationTitle("Select Season")
             .navigationBarTitleDisplayMode(.inline)
         //}
     }

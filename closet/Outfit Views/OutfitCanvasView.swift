@@ -104,21 +104,33 @@ struct OutfitAddView: View {
             return
         }
         
+        // Require authentication - get userId
+        guard let userId = SupabaseService.shared.currentUser?.id.uuidString else {
+            closetItems = []
+            return
+        }
+        
         let request: NSFetchRequest<Item> = Item.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.timestamp, ascending: sortAscending)]
         
         // Use the helper function to build predicate from filterModel
-        let filterPredicate = makePredicate(for: filterModel)
+        let filterPredicate = makePredicate(for: filterModel, context: viewContext)
+        
+        // Add userId filter (CRITICAL: only show current user's items)
+        let userIdPredicate = NSPredicate(format: "userId == %@", userId)
         
         // Add wardrobe filter
         let wardrobePredicate = NSPredicate(format: "ANY wardrobes == %@", wardrobe)
         
+        // Add soft delete filter
+        let softDeleteFilter = NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
+        
         // Combine predicates
         let finalPredicate: NSPredicate
         if let filter = filterPredicate {
-            finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [filter, wardrobePredicate])
+            finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [userIdPredicate, filter, wardrobePredicate, softDeleteFilter])
         } else {
-            finalPredicate = wardrobePredicate
+            finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [userIdPredicate, wardrobePredicate, softDeleteFilter])
         }
         
         request.predicate = finalPredicate
@@ -736,7 +748,9 @@ struct OutfitAddView: View {
         if outfitToEdit == nil {
             outfit.id = UUID()
         }
-        outfit.timestamp = Date()
+        let now = Date()
+        outfit.timestamp = now
+        outfit.createdAt = now
         
         // Save the collage image (compressed)
         if let imageData = collageImage.processForStorage() {
@@ -773,6 +787,11 @@ struct OutfitAddView: View {
         // Mark as not draft (explicitly set to false for regular outfits)
         outfit.isDraft = false
         
+        // Set updatedAt if editing existing outfit
+        if outfitToEdit != nil {
+            setUpdatedAt(outfit)
+        }
+        
         do {
             try viewContext.save()
             showingSaveAlert = true
@@ -792,7 +811,9 @@ struct OutfitAddView: View {
         // Always create a new draft (don't edit existing outfits)
         let draft = Outfit(context: viewContext)
         draft.id = UUID()
-        draft.timestamp = Date()
+        let now = Date()
+        draft.timestamp = now
+        draft.createdAt = now
         draft.isDraft = true
         
         // Save the collage image

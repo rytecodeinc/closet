@@ -30,6 +30,11 @@ struct OutfitAttributesSectionView: View {
             Divider()
                 .padding(.leading, 12)
             
+            tagRow()
+            
+            Divider()
+                .padding(.leading, 12)
+            
             notesRow()
         }
     }
@@ -38,7 +43,7 @@ struct OutfitAttributesSectionView: View {
 // MARK: - Sheet enum
 extension OutfitAttributesSectionView {
     enum Sheet: String, Identifiable {
-        case name, category, notes
+        case name, category, tag, notes
         var id: String { rawValue }
     }
 }
@@ -95,6 +100,31 @@ extension OutfitAttributesSectionView {
         }
     }
     
+    // Tags
+    func tagRow() -> some View {
+        Button { activeSheet = .tag } label: {
+            HStack {
+                Text("Tags")
+                    .foregroundColor(.primary)
+                Spacer()
+                if let tagSet = outfit.tags as? Set<Tag>, !tagSet.isEmpty {
+                    let names = tagSet.compactMap { $0.name }.sorted().joined(separator: ", ")
+                    Text(names.prefix(20))
+                        .foregroundColor(.gray)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.gray)
+                    .font(.caption)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Color(.systemBackground))
+            .cornerRadius(8)
+        }
+    }
+    
     // Notes
     func notesRow() -> some View {
         Button { activeSheet = .notes } label: {
@@ -127,6 +157,7 @@ extension OutfitAttributesSectionView.Sheet {
         switch self {
         case .name:     SetOutfitNameView(outfit: outfit)
         case .category: SetOutfitCategoryView(outfit: outfit)
+        case .tag:      SetOutfitTagView(outfit: outfit)
         case .notes:    SetOutfitNotesView(outfit: outfit)
         }
     }

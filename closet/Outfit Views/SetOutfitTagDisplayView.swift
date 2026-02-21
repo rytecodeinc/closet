@@ -1,16 +1,15 @@
 //
-//  TagListView.swift
+//  SetOutfitTagDisplayView.swift
 //  closet
 //
-//  Created by Dan Warner on 7/30/25.
+//  Created by Dan Warner on 12/19/25.
 //
 
 import SwiftUI
 import CoreData
-import Foundation
 
-struct TagDisplayView: View {
-    @ObservedObject var item: Item
+struct SetOutfitTagDisplayView: View {
+    @ObservedObject var outfit: Outfit
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
 
@@ -24,61 +23,63 @@ struct TagDisplayView: View {
     }
 
     var body: some View {
-        SelectionHeader(title: "Select Tag")
+        VStack(spacing: 0) {
+            SelectionHeader(title: "Select Tag")
+            
+            VStack(spacing: 12) {
+                // Search / Add row
+                HStack {
+                    TextField("Add or select a tag", text: $newTagName)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
 
-        VStack(spacing: 12) {
-            // Search / Add row
-            HStack {
-                TextField("Add or select a tag", text: $newTagName)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-
-                Button("Add") {
-                    addTag()
+                    Button("Add") {
+                        addTag()
+                    }
+                    .disabled(newTagName.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-                .disabled(newTagName.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-            .padding(.horizontal)
+                .padding(.horizontal)
+                .padding(.top)
 
-            // Tag List
-            if tags.isEmpty {
-                Text("Tags you add will appear in a list here.")
-                    .foregroundColor(.gray)
-                    .padding()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Spacer()
-            } else {
-                List {
-                    ForEach(filteredTags, id: \.self) { tag in
-                        Button(action: {
-                            toggleTag(tag)
-                            dismiss()
-                        }) {
-                            HStack {
-                                highlightedText(for: tag.name ?? "", matching: newTagName)
-                                    .foregroundColor(.black)
-                                Spacer()
-                                if (item.tags as? Set<Tag>)?.contains(tag) == true {
-                                    Image(systemName: "checkmark")
-                                        .foregroundColor(.blue)
+                // Tag List
+                if tags.isEmpty {
+                    Text("Tags you add will appear in a list here.")
+                        .foregroundColor(.gray)
+                        .padding()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Spacer()
+                } else {
+                    List {
+                        ForEach(filteredTags, id: \.self) { tag in
+                            Button(action: {
+                                toggleTag(tag)
+                                dismiss()
+                            }) {
+                                HStack {
+                                    highlightedText(for: tag.name ?? "", matching: newTagName)
+                                        .foregroundColor(.black)
+                                    Spacer()
+                                    if (outfit.tags as? Set<Tag>)?.contains(tag) == true {
+                                        Image(systemName: "checkmark")
+                                            .foregroundColor(.blue)
+                                    }
                                 }
                             }
                         }
                     }
+                    .listStyle(PlainListStyle())
                 }
-                .listStyle(PlainListStyle())
             }
         }
         .onAppear {
             fetchTags()
         }
-        .presentationDetents([.medium, .large])
     }
 
     // MARK: - Highlight Matching Text
     private func highlightedText(for tagName: String, matching input: String) -> Text {
         let lowerTag = tagName.lowercased()
         let lowerInput = input.lowercased()
-
+        
         guard let range = lowerTag.range(of: lowerInput) else {
             return Text(tagName)
         }
@@ -109,20 +110,16 @@ struct TagDisplayView: View {
 
     // MARK: - Toggle Tag Selection
     private func toggleTag(_ tag: Tag) {
-        if let tags = item.tags as? Set<Tag>, tags.contains(tag) {
-            item.removeFromTags(tag)
+        if let tags = outfit.tags as? Set<Tag>, tags.contains(tag) {
+            outfit.removeFromTags(tag)
         } else {
-            item.addToTags(tag)
+            outfit.addToTags(tag)
         }
-        saveContext()
-    }
-
-    // MARK: - Save Context
-    private func saveContext() {
+        
         do {
             try viewContext.save()
         } catch {
-            print("❌ Failed to save context: \(error)")
+            print("❌ Failed to save tag: \(error.localizedDescription)")
         }
     }
 
@@ -137,12 +134,18 @@ struct TagDisplayView: View {
             return
         }
 
+        // Create new tag
         let newTag = Tag(context: viewContext)
         newTag.name = trimmed
         newTag.id = UUID()
 
-        item.addToTags(newTag)
-        saveContext()
+        outfit.addToTags(newTag)
+        
+        do {
+            try viewContext.save()
+        } catch {
+            print("❌ Failed to save tag: \(error.localizedDescription)")
+        }
 
         newTagName = ""
         fetchTags()

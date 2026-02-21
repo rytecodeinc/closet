@@ -176,7 +176,9 @@ struct CanvasSceneView: View {
     private func saveOutfit() {
         let newOutfit = Outfit(context: viewContext)
         newOutfit.id = UUID()
-        newOutfit.timestamp = Date()
+        let now = Date()
+        newOutfit.timestamp = now
+        newOutfit.createdAt = now
         for canvasItem in scene.items {
             newOutfit.addToItems(canvasItem.item)
         }

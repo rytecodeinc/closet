@@ -15,7 +15,7 @@ struct WishlistView: View {
     
     @FetchRequest(
         sortDescriptors: [NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)],
-        predicate: NSPredicate(format: "type == %@", "wishlist")
+        predicate: NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", "wishlist")
     ) private var wishlists: FetchedResults<Wardrobe>
     
     @State private var selectedWishlist: Wardrobe?
@@ -212,7 +212,7 @@ private extension WishlistView {
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(Color(UIColor.secondarySystemBackground), for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
-           /* .toolbar {
+            .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
                         newWishlistName = ""
@@ -224,7 +224,7 @@ private extension WishlistView {
                         }
                     }
                 }
-            }*/
+            }
         }
         .presentationDetents([.medium, .large])
     }
@@ -238,10 +238,23 @@ private extension WishlistView {
         newWishlist.id = UUID()
         newWishlist.type = "wishlist"
         newWishlist.name = trimmed
-        newWishlist.timestamp = Date()
+        
+        // Set userId for sync
+        if let userId = SupabaseService.shared.currentUser?.id.uuidString {
+            newWishlist.userId = userId
+        }
+        
+        // Set timestamps using helper
+        setCreatedAndUpdatedAt(newWishlist)
+        let now = Date()
+        newWishlist.timestamp = now
         
         do {
             try viewContext.save()
+            
+            // Trigger automatic sync for the new wardrobe
+            SyncService.shared.syncWardrobeIfNeeded(newWishlist)
+            
             return newWishlist
         } catch {
             print("❌ Failed to save new wishlist: \(error.localizedDescription)")
@@ -250,9 +263,20 @@ private extension WishlistView {
     }
     
     private func deleteWishlist(_ wishlist: Wardrobe) {
-        viewContext.delete(wishlist)
+        // Ensure userId is set if missing (needed for sync)
+        if wishlist.userId == nil || wishlist.userId?.isEmpty == true,
+           let userId = SupabaseService.shared.currentUser?.id.uuidString {
+            wishlist.userId = userId
+        }
+        
+        // Soft delete the wardrobe (for sync) - this also sets updatedAt
+        softDelete(wishlist)
+        
         do {
             try viewContext.save()
+            
+            // Trigger automatic sync for the deleted wardrobe
+            SyncService.shared.syncWardrobeIfNeeded(wishlist)
         } catch {
             print("❌ Failed to delete wishlist: \(error.localizedDescription)")
         }
@@ -268,8 +292,21 @@ private extension WishlistView {
         guard !trimmed.isEmpty else { return }
         
         wardrobe.name = trimmed
+        
+        // Set updatedAt for sync
+        setUpdatedAt(wardrobe)
+        
+        // Ensure userId is set if missing
+        if wardrobe.userId == nil || wardrobe.userId?.isEmpty == true,
+           let userId = SupabaseService.shared.currentUser?.id.uuidString {
+            wardrobe.userId = userId
+        }
+        
         do {
             try viewContext.save()
+            
+            // Trigger automatic sync for the updated wardrobe
+            SyncService.shared.syncWardrobeIfNeeded(wardrobe)
         } catch {
             print("❌ Failed to update wardrobe name: \(error.localizedDescription)")
         }

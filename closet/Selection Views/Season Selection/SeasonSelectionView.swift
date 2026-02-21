@@ -17,7 +17,7 @@ struct SeasonSelectionView: View {
     @State private var selectedSeasonNames: Set<String> = []
 
     var body: some View {
-        Section(header: SelectionHeader(title: "Select a Season")) {
+        Section(header: SelectionHeader(title: "Select Season")) {
             SeasonListView(selectedSeasonNames: $selectedSeasonNames)
         }
         .onAppear {

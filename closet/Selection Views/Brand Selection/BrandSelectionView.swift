@@ -24,7 +24,7 @@ struct BrandSelectionView: View {
     }
     
     var body: some View {
-        SelectionHeader(title: "Select a Brand")
+        SelectionHeader(title: "Select Brand")
         
         VStack(spacing: 12) {
             HStack {
@@ -48,6 +48,9 @@ struct BrandSelectionView: View {
                 List {
                     ForEach(filteredBrands, id: \.self) { brand in
                         Button(action: {
+                            // Store the brand being unassigned to check if cleanup is needed
+                            let previousBrand = item.brand
+                            
                             // Toggle selection
                             if item.brand == brand {
                                 item.brand = nil
@@ -55,6 +58,12 @@ struct BrandSelectionView: View {
                                 item.brand = brand
                             }
                             saveContext()
+                            
+                            // If we unassigned a brand, check if it needs cleanup
+                            if previousBrand == brand {
+                                cleanupBrandIfOrphaned(previousBrand)
+                            }
+                            
                             dismiss()
                         }) {
                             HStack {
@@ -101,14 +110,51 @@ struct BrandSelectionView: View {
 
     // MARK: - Fetch Brands
     private func fetchBrands() {
+        // First, cleanup brands with 0 items
+        cleanupOrphanedBrands()
+        
         let request: NSFetchRequest<Brand> = Brand.fetchRequest()
         request.predicate = NSPredicate(format: "isVisible == YES")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Brand.name, ascending: true)]
         do {
-            brands = try viewContext.fetch(request)
+            let allBrands = try viewContext.fetch(request)
+            // Filter to only show brands that have at least one item
+            brands = allBrands.filter { brand in
+                if let items = brand.items as? Set<Item> {
+                    return !items.isEmpty
+                }
+                return false
+            }
         } catch {
             print("❌ Failed to fetch brands: \(error)")
             brands = []
+        }
+    }
+    
+    // MARK: - Cleanup Orphaned Brands
+    private func cleanupOrphanedBrands() {
+        let request: NSFetchRequest<Brand> = Brand.fetchRequest()
+        request.predicate = NSPredicate(format: "isVisible == YES")
+        
+        do {
+            let allBrands = try viewContext.fetch(request)
+            let orphanedBrands = allBrands.filter { brand in
+                if let items = brand.items as? Set<Item> {
+                    return items.isEmpty
+                }
+                return true // If no items relationship, consider it orphaned
+            }
+            
+            for brand in orphanedBrands {
+                viewContext.delete(brand)
+            }
+            
+            if !orphanedBrands.isEmpty {
+                try viewContext.save()
+                print("✅ Cleaned up \(orphanedBrands.count) orphaned brand(s)")
+            }
+        } catch {
+            print("❌ Failed to cleanup orphaned brands: \(error)")
         }
     }
 
@@ -147,6 +193,25 @@ struct BrandSelectionView: View {
 
         newBrandName = ""
         fetchBrands()
+    }
+    
+    // MARK: - Cleanup Single Brand
+    private func cleanupBrandIfOrphaned(_ brand: Brand?) {
+        guard let brand = brand else { return }
+        
+        // Refresh the brand to get current item count
+        viewContext.refresh(brand, mergeChanges: true)
+        
+        // Check if brand has any items
+        if let items = brand.items as? Set<Item>, items.isEmpty {
+            viewContext.delete(brand)
+            do {
+                try viewContext.save()
+                print("✅ Cleaned up orphaned brand: \(brand.name ?? "unknown")")
+            } catch {
+                print("❌ Failed to cleanup orphaned brand: \(error)")
+            }
+        }
     }
 }
 

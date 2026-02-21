@@ -24,38 +24,33 @@ struct WardrobeListView: View {
     private var displayedWardrobes: [Wardrobe] {
         var filtered = Array(wardrobes)
         
-        // Filter out excluded wardrobe types
-        if let excludeType = excludeWardrobeType {
-            filtered = filtered.filter { $0.type?.lowercased() != excludeType.lowercased() }
-        }
-        
-        // Sort to put default wardrobe first
+        // If defaultWardrobeType is provided, ONLY show wardrobes of that type
         if let defaultType = defaultWardrobeType {
+            filtered = filtered.filter { $0.type?.lowercased() == defaultType.lowercased() }
+            
+            // Sort by timestamp first (like ClosetView), then by name
             filtered.sort { wardrobe1, wardrobe2 in
-                let isDefault1 = wardrobe1.type?.lowercased() == defaultType.lowercased()
-                let isDefault2 = wardrobe2.type?.lowercased() == defaultType.lowercased()
-                
-                if isDefault1 && !isDefault2 {
-                    return true
-                } else if !isDefault1 && isDefault2 {
-                    return false
-                } else if isDefault1 && isDefault2 {
-                    // Both are default type - sort by timestamp first (like ClosetView), then by name
-                    let timestamp1 = wardrobe1.timestamp ?? Date.distantFuture
-                    let timestamp2 = wardrobe2.timestamp ?? Date.distantFuture
-                    if timestamp1 != timestamp2 {
-                        return timestamp1 < timestamp2
-                    }
-                    // If timestamps are equal, sort by name
-                    let name1 = wardrobe1.name ?? ""
-                    let name2 = wardrobe2.name ?? ""
-                    return name1 < name2
-                } else {
-                    // Neither are default, sort by name
-                    let name1 = wardrobe1.name ?? ""
-                    let name2 = wardrobe2.name ?? ""
-                    return name1 < name2
+                let timestamp1 = wardrobe1.timestamp ?? Date.distantFuture
+                let timestamp2 = wardrobe2.timestamp ?? Date.distantFuture
+                if timestamp1 != timestamp2 {
+                    return timestamp1 < timestamp2
                 }
+                // If timestamps are equal, sort by name
+                let name1 = wardrobe1.name ?? ""
+                let name2 = wardrobe2.name ?? ""
+                return name1 < name2
+            }
+        } else {
+            // If no default type specified, filter out excluded wardrobe types
+            if let excludeType = excludeWardrobeType {
+                filtered = filtered.filter { $0.type?.lowercased() != excludeType.lowercased() }
+            }
+            
+            // Sort by name when no default type
+            filtered.sort { wardrobe1, wardrobe2 in
+                let name1 = wardrobe1.name ?? ""
+                let name2 = wardrobe2.name ?? ""
+                return name1 < name2
             }
         }
         
@@ -99,16 +94,8 @@ struct WardrobeListView: View {
                 }
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    // Default wardrobes cannot be deselected
-                    if isDefault {
-                        return
-                    }
-                    
                     if selectedWardrobes.contains(wardrobe) {
-                        // Prevent deselecting if this is the last selected wardrobe
-                        if selectedWardrobes.count > 1 {
-                            selectedWardrobes.remove(wardrobe)
-                        }
+                        selectedWardrobes.remove(wardrobe)
                     } else {
                         selectedWardrobes.insert(wardrobe)
                     }

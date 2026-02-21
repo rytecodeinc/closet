@@ -41,8 +41,10 @@ struct EventDrawerView: View {
         let request: NSFetchRequest<Event> = Event.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Event.timestamp, ascending: false)]
 
-        // Use startDate instead of date
-        request.predicate = NSPredicate(format: "startDate >= %@ AND startDate < %@", startOfDay as NSDate, endOfDay as NSDate)
+        // Use startDate instead of date, and exclude soft-deleted events
+        let datePredicate = NSPredicate(format: "startDate >= %@ AND startDate < %@", startOfDay as NSDate, endOfDay as NSDate)
+        let softDeleteFilter = NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [datePredicate, softDeleteFilter])
 
         _events = FetchRequest(fetchRequest: request)
     }
@@ -79,22 +81,23 @@ struct EventDrawerView: View {
                 Divider()
                 
                 // Events list section
-                List {
-                    if events.isEmpty {
-                        VStack(spacing: 12) {
-                            Image(systemName: "calendar")
-                                .font(.system(size: 40))
-                                .foregroundColor(.secondary)
-                            Text("No events scheduled")
-                                .font(.headline)
-                                .foregroundColor(.secondary)
-                            Text("Tap 'New Event' to add an event")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.vertical, 40)
-                    } else {
+                if events.isEmpty {
+                    // Empty state - outside of List to avoid dividers
+                    VStack(spacing: 12) {
+                        Image(systemName: "calendar")
+                            .font(.system(size: 40))
+                            .foregroundColor(.secondary)
+                        Text("No events scheduled")
+                            .font(.headline)
+                            .foregroundColor(.secondary)
+                        Text("Tap 'New Event' to add an event")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 40)
+                } else {
+                    List {
                         ForEach(events, id: \.objectID) { event in
                             NavigationLink(destination: EventDetailView(event: event)
                                 .environment(\.managedObjectContext, viewContext)) {
@@ -112,8 +115,8 @@ struct EventDrawerView: View {
                             }
                         }
                     }
+                    .listStyle(PlainListStyle())
                 }
-                .listStyle(PlainListStyle())
                 
                 Spacer()
             }
@@ -143,7 +146,9 @@ struct EventDrawerView: View {
     
     private func deleteEvent(_ event: Event) {
         withAnimation {
-            viewContext.delete(event)
+            // Soft delete the event (for sync)
+            softDelete(event)
+            
             do {
                 try viewContext.save()
             } catch {
@@ -310,7 +315,9 @@ struct CreateEventView: View {
         newEvent.location = eventLocation.isEmpty ? nil : eventLocation
         newEvent.date = Calendar.current.startOfDay(for: eventDate)
         newEvent.time = eventTime
-        newEvent.timestamp = Date()
+        let now = Date()
+        newEvent.timestamp = now
+        newEvent.createdAt = now
         
         do {
             try viewContext.save()

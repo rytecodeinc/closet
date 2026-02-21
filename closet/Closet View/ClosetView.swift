@@ -15,7 +15,7 @@ struct ClosetView: View {
     
     @FetchRequest(
         sortDescriptors: [NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)],
-        predicate: NSPredicate(format: "type == %@", "closet")
+        predicate: NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", "closet")
     ) private var closets: FetchedResults<Wardrobe>
     
     @State private var selectedWardrobe: Wardrobe?
@@ -241,10 +241,23 @@ private extension ClosetView {
         newCloset.id = UUID()
         newCloset.type = "closet"
         newCloset.name = trimmed
-        newCloset.timestamp = Date()
+        
+        // Set userId for sync
+        if let userId = SupabaseService.shared.currentUser?.id.uuidString {
+            newCloset.userId = userId
+        }
+        
+        // Set timestamps using helper
+        setCreatedAndUpdatedAt(newCloset)
+        let now = Date()
+        newCloset.timestamp = now
         
         do {
             try viewContext.save()
+            
+            // Trigger automatic sync for the new wardrobe
+            SyncService.shared.syncWardrobeIfNeeded(newCloset)
+            
             return newCloset
         } catch {
             print("❌ Failed to save new closet: \(error.localizedDescription)")
@@ -253,16 +266,35 @@ private extension ClosetView {
     }
     
     private func deleteCloset(_ closet: Wardrobe) {
-        viewContext.delete(closet)
-        do {
-            try viewContext.save()
-        } catch {
-            print("❌ Failed to delete closet: \(error.localizedDescription)")
+        // Store the wardrobe ID before deletion (for sync)
+        guard let wardrobeId = closet.id else {
+            print("⚠️ Cannot delete wardrobe without ID")
+            return
         }
-
-        // Reset selectedCloset if the deleted one was selected
+        
+        // Ensure userId is set if missing (needed for sync)
+        if closet.userId == nil || closet.userId?.isEmpty == true,
+           let userId = SupabaseService.shared.currentUser?.id.uuidString {
+            closet.userId = userId
+        }
+        
+        // Soft delete the wardrobe (for sync) - this also sets updatedAt
+        softDelete(closet)
+        
+        // Reset selectedCloset if the deleted one was selected (before save)
         if selectedWardrobe == closet {
             selectedWardrobe = closets.first
+        }
+        
+        do {
+            try viewContext.save()
+            print("✅ Soft deleted wardrobe: \(closet.name ?? "unnamed") (isSoftDeleted: \(closet.isSoftDeleted))")
+            
+            // Trigger automatic sync for the deleted wardrobe
+            // Use the objectID to ensure we're syncing the correct wardrobe even after it's filtered out
+            SyncService.shared.syncWardrobeIfNeeded(closet)
+        } catch {
+            print("❌ Failed to delete closet: \(error.localizedDescription)")
         }
     }
     
@@ -271,8 +303,21 @@ private extension ClosetView {
         guard !trimmed.isEmpty else { return }
         
         wardrobe.name = trimmed
+        
+        // Set updatedAt for sync
+        setUpdatedAt(wardrobe)
+        
+        // Ensure userId is set if missing
+        if wardrobe.userId == nil || wardrobe.userId?.isEmpty == true,
+           let userId = SupabaseService.shared.currentUser?.id.uuidString {
+            wardrobe.userId = userId
+        }
+        
         do {
             try viewContext.save()
+            
+            // Trigger automatic sync for the updated wardrobe
+            SyncService.shared.syncWardrobeIfNeeded(wardrobe)
         } catch {
             print("❌ Failed to update wardrobe name: \(error.localizedDescription)")
         }

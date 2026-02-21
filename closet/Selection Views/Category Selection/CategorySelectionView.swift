@@ -21,7 +21,7 @@ struct CategorySelectionView: View {
 
     var body: some View {
         VStack {
-            SelectionHeader(title: "Select a Category")
+            SelectionHeader(title: "Select Category")
 
             if categories.isEmpty {
                 Text("No categories have been added.")

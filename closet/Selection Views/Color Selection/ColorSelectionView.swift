@@ -16,7 +16,7 @@ struct ColorSelectionView: View {
     @State private var selectedColorNames: Set<String> = []
 
     var body: some View {
-        Section(header: SelectionHeader(title: "Select a Color")) {
+        Section(header: SelectionHeader(title: "Select Color")) {
             ColorListView(selectedColorNames: $selectedColorNames)
         }
         .onAppear {

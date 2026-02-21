@@ -40,7 +40,7 @@ class ItemFilterModel: ObservableObject {
 }
 
 
-func makePredicate(for filterModel: ItemFilterModel) -> NSPredicate? {
+func makePredicate(for filterModel: ItemFilterModel, context: NSManagedObjectContext) -> NSPredicate? {
     var subpredicates: [NSPredicate] = []
 
     // Category/Subcategory filter
@@ -103,7 +103,8 @@ func makePredicate(for filterModel: ItemFilterModel) -> NSPredicate? {
 
     // Weight filter - only show items that can support user's weight
     if filterModel.filterByWeight {
-        let userWeightKg = UserDefaults.standard.double(forKey: "userWeightKg")
+        let repository = UserProfileRepository(context: context)
+        let userWeightKg = repository.getWeightKg()
         if userWeightKg > 0 {
             // Show ONLY items where:
             // - Item has weight set (weight != nil) AND

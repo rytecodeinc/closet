@@ -69,9 +69,6 @@ struct WardrobeSelectionView: View {
             }
         }
         .onDisappear {
-            // Ensure default wardrobe is always selected before saving
-            ensureDefaultWardrobeIsSelected()
-            
             // Sync selections to item.wardrobes
             item.wardrobes?.forEach { item.removeFromWardrobes($0 as! Wardrobe) }
             for wardrobe in selectedWardrobes {
@@ -98,7 +95,7 @@ struct WardrobeSelectionView: View {
         if !hasDefaultWardrobe {
             // Fetch the default wardrobe
             let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
-            request.predicate = NSPredicate(format: "type == %@", defaultType)
+            request.predicate = NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", defaultType)
             request.sortDescriptors = [NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)]
             
             if let defaultWardrobe = try? viewContext.fetch(request).first {

@@ -8,6 +8,7 @@
 
 import SwiftUI
 import CoreData
+import UIKit
 
 struct OutfitCalendarView: View {
     @Environment(\.managedObjectContext) private var viewContext
@@ -16,6 +17,8 @@ struct OutfitCalendarView: View {
     @State private var selectedDate: Date? = nil
     @State private var showingEventDrawer = false
     @State private var showingCreateEvent = false
+    @State private var showingDatePicker = false
+    @State private var pickerSelectedDate: Date = Date()
     
     @State private var currentMonth: Date = Date()
     @State private var dragOffset: CGFloat = 0
@@ -29,7 +32,7 @@ struct OutfitCalendarView: View {
                 ZStack(alignment: .top) {
                     
                     VStack(spacing: 0) {
-                        Divider()
+                       // Divider()
                         daysOfWeekHeader
                         
                         // Calendar grid with drag
@@ -55,11 +58,26 @@ struct OutfitCalendarView: View {
                                     }
                             )
                     }
-                    .padding(.top, 8)
+                  //  .padding(.top, 8)
                     .padding(.bottom, geo.safeAreaInsets.bottom)
-                    .navigationTitle(monthYearString(for: currentMonth))
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
+                        // Month/Year selector button
+                        ToolbarItem(placement: .principal) {
+                            Button(action: {
+                                pickerSelectedDate = currentMonth
+                                showingDatePicker = true
+                            }) {
+                                HStack(spacing: 4) {
+                                    Text(monthYearString(for: currentMonth))
+                                        .font(.headline)
+                                    Image(systemName: "chevron.down")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                        
                         // jump to today
                         ToolbarItem(placement: .navigationBarTrailing) {
                             Button(action: {
@@ -134,6 +152,27 @@ struct OutfitCalendarView: View {
                 .environment(\.managedObjectContext, viewContext)
                 .onDisappear { fetchEvents() }
         }
+        .sheet(isPresented: $showingDatePicker) {
+            NavigationView {
+                VStack {
+                    MonthYearPicker(selection: $pickerSelectedDate)
+                }
+              //  .padding()
+                .navigationTitle("Select Month")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Done") {
+                            withAnimation(.spring()) {
+                                currentMonth = startOfMonth(for: pickerSelectedDate)
+                            }
+                            showingDatePicker = false
+                        }
+                    }
+                }
+            }
+            .presentationDetents([.fraction(0.75), .height(300)])
+        }
     }
     
     // MARK: - Days of Week Header
@@ -142,13 +181,13 @@ struct OutfitCalendarView: View {
             ForEach(calendar.shortWeekdaySymbols, id: \.self) { day in
                 Text(String(day.prefix(3)))
                     .font(.caption)
-                    .fontWeight(.medium)
+                   // .fontWeight(.medium)
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity)
             }
         }
-        .frame(height: 30)
-        .padding(.bottom, 8)
+        .frame(height: 25)
+      //  .padding(.bottom, 8)
     }
     
     // MARK: - Change Month
@@ -330,9 +369,47 @@ struct OutfitCalendarView: View {
     }
 }
 
-
-
-
+// MARK: - Month Year Picker
+struct MonthYearPicker: UIViewRepresentable {
+    @Binding var selection: Date
+    
+    func makeUIView(context: Context) -> UIDatePicker {
+        let datePicker = UIDatePicker()
+        
+        if #available(iOS 17.4, *) {
+            datePicker.datePickerMode = .yearAndMonth
+            datePicker.preferredDatePickerStyle = .wheels
+        } else {
+            datePicker.datePickerMode = .init(rawValue: 4269) ?? .date
+            datePicker.preferredDatePickerStyle = .wheels
+        }
+        
+        datePicker.date = selection
+        datePicker.addTarget(context.coordinator, action: #selector(Coordinator.dateChanged(_:)), for: .valueChanged)
+        
+        return datePicker
+    }
+    
+    func updateUIView(_ uiView: UIDatePicker, context: Context) {
+        uiView.date = selection
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    class Coordinator: NSObject {
+        var parent: MonthYearPicker
+        
+        init(_ parent: MonthYearPicker) {
+            self.parent = parent
+        }
+        
+        @objc func dateChanged(_ sender: UIDatePicker) {
+            parent.selection = sender.date
+        }
+    }
+}
 
 
 

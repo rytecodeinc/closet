@@ -19,7 +19,7 @@ struct LinkSelectionView: View {
     @State private var linkToEdit: Link? = nil
 
     var body: some View {
-        SelectionHeader(title: "Purchase Links")
+        SelectionHeader(title: "Links")
 
         VStack(spacing: 16) {
             Button(action: {

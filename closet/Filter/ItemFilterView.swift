@@ -7,16 +7,23 @@
 
 import SwiftUI
 import Foundation
+import CoreData
 
 struct ItemFilterView: View {
     @ObservedObject var filterModel: ItemFilterModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.managedObjectContext) private var viewContext
+    
+    var wardrobeType: String = "closet" // Default to "closet" for backward compatibility
 
     var body: some View {
         NavigationStack {
                 List {
                     // Wardrobe filter
-                    NavigationLink(destination: WardrobeListView(selectedWardrobes: $filterModel.selectedWardrobes)) {
+                    NavigationLink(destination: WardrobeListView(
+                        selectedWardrobes: $filterModel.selectedWardrobes,
+                        defaultWardrobeType: wardrobeType
+                    )) {
                         HStack {
                             Text("Wardrobes")
                             Spacer()
@@ -150,8 +157,9 @@ struct ItemFilterView: View {
                         
                         // Show user weight if available and filter is enabled
                         if filterModel.filterByWeight {
-                            let userWeightKg = UserDefaults.standard.double(forKey: "userWeightKg")
-                            let userWeightUnit = UserDefaults.standard.string(forKey: "userWeightUnit") ?? (Locale.current.measurementSystem == .metric ? "kg" : "lbs")
+                            let repository = UserProfileRepository(context: viewContext)
+                            let userWeightKg = repository.getWeightKg()
+                            let userWeightUnit = repository.getWeightUnit()
                             
                             if userWeightKg > 0 {
                                 let displayWeight = userWeightUnit == "kg" ? userWeightKg : userWeightKg * 2.20462

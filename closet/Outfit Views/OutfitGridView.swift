@@ -138,7 +138,8 @@ struct OutfitGridView: View {
     }
     
     private func deleteOutfit(_ outfit: Outfit) {
-        viewContext.delete(outfit)
+        // Soft delete the outfit (for sync)
+        softDelete(outfit)
         do {
             try viewContext.save()
             fetchOutfits()

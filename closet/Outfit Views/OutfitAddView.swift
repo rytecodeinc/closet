@@ -145,17 +145,20 @@ struct OutfitAddView: View {
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.timestamp, ascending: sortAscending)]
         
         // Use the helper function to build predicate from filterModel
-        let filterPredicate = makePredicate(for: filterModel)
+        let filterPredicate = makePredicate(for: filterModel, context: viewContext)
         
         // Add wardrobe filter
         let wardrobePredicate = NSPredicate(format: "ANY wardrobes == %@", wardrobe)
         
+        // Add soft delete filter
+        let softDeleteFilter = NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
+        
         // Combine predicates
         let finalPredicate: NSPredicate
         if let filter = filterPredicate {
-            finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [filter, wardrobePredicate])
+            finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [filter, wardrobePredicate, softDeleteFilter])
         } else {
-            finalPredicate = wardrobePredicate
+            finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [wardrobePredicate, softDeleteFilter])
         }
         
         request.predicate = finalPredicate
@@ -438,13 +441,21 @@ struct OutfitAddView: View {
                         sortAscending = false
                         fetchClosetItems()
                     } label: {
-                        Label("Newest First", systemImage: !sortAscending ? "checkmark" : "")
+                        if !sortAscending {
+                            Label("Newest First", systemImage: "checkmark")
+                        } else {
+                            Text("Newest First")
+                        }
                     }
                     Button {
                         sortAscending = true
                         fetchClosetItems()
                     } label: {
-                        Label("Oldest First", systemImage: sortAscending ? "checkmark" : "")
+                        if sortAscending {
+                            Label("Oldest First", systemImage: "checkmark")
+                        } else {
+                            Text("Oldest First")
+                        }
                     }
                 } label: {
                     Image(systemName: "arrow.up.arrow.down")
@@ -867,7 +878,9 @@ struct OutfitAddView: View {
         if outfitToEdit == nil {
             outfit.id = UUID()
         }
-        outfit.timestamp = Date()
+        let now = Date()
+        outfit.timestamp = now
+        outfit.createdAt = now
         
         // Save the collage image (compressed)
         if let imageData = collageImage.processForStorage() {
@@ -904,6 +917,11 @@ struct OutfitAddView: View {
         // Mark as not draft (explicitly set to false for regular outfits)
         outfit.isDraft = false
         
+        // Set updatedAt if editing existing outfit
+        if outfitToEdit != nil {
+            setUpdatedAt(outfit)
+        }
+        
         do {
             try viewContext.save()
             showingSaveAlert = true
@@ -923,7 +941,9 @@ struct OutfitAddView: View {
         // Always create a new draft (don't edit existing outfits)
         let draft = Outfit(context: viewContext)
         draft.id = UUID()
-        draft.timestamp = Date()
+        let now = Date()
+        draft.timestamp = now
+        draft.createdAt = now
         draft.isDraft = true
         
         // Save the collage image

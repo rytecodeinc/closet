@@ -466,8 +466,15 @@ struct CreateEventView: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel", role: .cancel) {
                         // Clean up temp event only if it was newly created (not editing)
+                        // For new events that haven't been saved, we can hard delete
                         if eventToEdit == nil, let event = tempEvent {
-                            viewContext.delete(event)
+                            // If it's a new unsaved event, hard delete is fine
+                            // Otherwise soft delete for sync
+                            if event.objectID.isTemporaryID {
+                                viewContext.delete(event)
+                            } else {
+                                softDelete(event)
+                            }
                         }
                         dismiss()
                     }
@@ -636,6 +643,11 @@ struct CreateEventView: View {
         }
         
         guard let event = tempEvent else { return }
+        
+        // Set updatedAt if editing existing event
+        if tempEvent?.id != nil {
+            setUpdatedAt(event)
+        }
         
         do {
             try viewContext.save()
