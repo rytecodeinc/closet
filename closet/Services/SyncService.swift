@@ -8,6 +8,7 @@
 import Foundation
 import CoreData
 import Supabase
+import UIKit
 
 /// Service for syncing local items to Supabase
 @MainActor
@@ -129,16 +130,6 @@ class SyncService: ObservableObject {
             location.userId = userId.uuidString
         }
         
-        let collectionRequest: NSFetchRequest<Collection> = Collection.fetchRequest()
-        collectionRequest.predicate = NSPredicate(format: "userId == nil OR userId == ''")
-        let collections = try context.fetch(collectionRequest)
-        for collection in collections {
-            if collection.id == nil {
-                collection.id = UUID()
-            }
-            collection.userId = userId.uuidString
-        }
-        
         let wardrobeRequest: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
         wardrobeRequest.predicate = NSPredicate(format: "userId == nil OR userId == ''")
         let wardrobes = try context.fetch(wardrobeRequest)
@@ -166,8 +157,23 @@ class SyncService: ObservableObject {
                 return
             }
             
+            // Process pending changes to ensure newly added photos are included
+            if context.hasChanges {
+                do {
+                    try context.save()
+                    print("💾 Saved pending changes before sync")
+                } catch {
+                    print("⚠️ Failed to save pending changes: \(error.localizedDescription)")
+                }
+            }
+            
             // Refresh item from context to ensure we have latest values
-            context.refresh(item, mergeChanges: false)
+            // Use mergeChanges: true to preserve newly added relationships (like photos)
+            context.refresh(item, mergeChanges: true)
+            
+            // Ensure photos relationship is loaded (not a fault) - CRITICAL for new photos
+            // Access the relationship to force it to load from the context
+            _ = item.photos
             
             // Ensure pairedItems relationship is loaded (not a fault)
             if let pairedItems = item.pairedItems as? Set<Item> {
@@ -177,6 +183,16 @@ class SyncService: ObservableObject {
                 }
             } else {
                 print("🔍 Item '\(item.name ?? "unnamed")' has no paired items")
+            }
+            
+            // Log photos count for debugging
+            if let photos = item.photos as? Set<Photo> {
+                print("📸 Item '\(item.name ?? "unnamed")' has \(photos.count) photos in Core Data")
+                for (idx, photo) in Array(photos).enumerated() {
+                    print("   Photo #\(idx + 1): type=\(photo.type ?? "nil"), id=\(photo.id?.uuidString ?? "no ID")")
+                }
+            } else {
+                print("📸 Item '\(item.name ?? "unnamed")' has no photos")
             }
             
             // CRITICAL: Set userId on item if it's not set (for new items)
@@ -294,6 +310,268 @@ class SyncService: ObservableObject {
         syncStatus = "Sync complete!"
         
         print("✅ Successfully synced \(totalItems) items")
+    }
+    
+    /// One-time cleanup: Removes orphaned data from Supabase and R2
+    /// Orphaned data = data in Supabase that references items that don't exist in Core Data
+    func cleanupOrphanedData() async throws {
+        guard let context = context else {
+            throw SyncError.noContext
+        }
+        
+        guard supabaseService.isAuthenticated,
+              let userId = supabaseService.currentUser?.id else {
+            throw SyncError.notAuthenticated
+        }
+        
+        print("🧹 Starting orphaned data cleanup for user: \(userId.uuidString)")
+        
+        isSyncing = true
+        syncStatus = "Cleaning up orphaned data..."
+        
+        defer {
+            isSyncing = false
+            syncStatus = ""
+        }
+        
+        // STEP 1: Get all item IDs from Core Data (what should exist)
+        let itemRequest: NSFetchRequest<Item> = Item.fetchRequest()
+        itemRequest.predicate = NSPredicate(format: "userId == %@", userId.uuidString)
+        itemRequest.propertiesToFetch = ["id"]
+        let localItems = try context.fetch(itemRequest)
+        let localItemIds = Set(localItems.compactMap { $0.id?.uuidString })
+        print("📦 Found \(localItemIds.count) items in Core Data")
+        
+        // STEP 2: Get all items from Supabase
+        let supabaseItemsResponse = try await supabaseService.supabaseClient.from("items")
+            .select("id")
+            .eq("user_id", value: userId.uuidString)
+            .execute()
+        
+        let itemsData: Data = supabaseItemsResponse.data
+        struct ItemIdResponse: Codable {
+            let id: String
+        }
+        let supabaseItems = try JSONDecoder().decode([ItemIdResponse].self, from: itemsData)
+        let supabaseItemIds = Set(supabaseItems.map { $0.id })
+        print("📦 Found \(supabaseItemIds.count) items in Supabase")
+        
+        // STEP 3: Find orphaned items (in Supabase but not in Core Data)
+        let orphanedItemIds = supabaseItemIds.subtracting(localItemIds)
+        print("🗑️ Found \(orphanedItemIds.count) orphaned items")
+        
+        var deletedPhotos = 0
+        var deletedThumbnails = 0
+        var deletedJunctionEntries = 0
+        
+        // STEP 4: For each orphaned item, delete all related data
+        for (index, orphanedItemId) in orphanedItemIds.enumerated() {
+            syncProgress = Double(index) / Double(orphanedItemIds.count)
+            syncStatus = "Cleaning up item \(index + 1) of \(orphanedItemIds.count)..."
+            
+            guard let itemUUID = UUID(uuidString: orphanedItemId) else {
+                print("⚠️ Invalid item ID format: \(orphanedItemId)")
+                continue
+            }
+            
+            print("🗑️ Cleaning up orphaned item: \(orphanedItemId)")
+            
+            // Delete photos from R2 and Supabase
+            let photosResponse = try await supabaseService.supabaseClient.from("item_photos")
+                .select("id")
+                .eq("item_id", value: orphanedItemId)
+                .execute()
+            
+            let photosData: Data = photosResponse.data
+            if let photos = try? JSONDecoder().decode([ItemPhotoResponse].self, from: photosData) {
+                for photo in photos {
+                    guard let photoUUID = UUID(uuidString: photo.id) else { continue }
+                    
+                    // Delete from R2 (full image)
+                    do {
+                        try await supabaseService.deletePhoto(
+                            itemId: itemUUID,
+                            photoId: photoUUID,
+                            userId: userId
+                        )
+                        deletedPhotos += 1
+                        print("✅ Deleted photo from R2: \(photo.id)")
+                    } catch {
+                        print("⚠️ Failed to delete photo \(photo.id) from R2: \(error.localizedDescription)")
+                    }
+                    
+                    // Delete thumbnail from R2
+                    do {
+                        let thumbnailFileName = "\(userId.uuidString)/\(orphanedItemId)/\(photo.id)_thumb.jpg"
+                        let thumbnailUrl = URL(string: "\(CloudflareR2Config.workerURL)/\(thumbnailFileName)")!
+                        
+                        guard let session = supabaseService.currentSession else {
+                            continue
+                        }
+                        
+                        var thumbnailRequest = URLRequest(url: thumbnailUrl)
+                        thumbnailRequest.httpMethod = "DELETE"
+                        thumbnailRequest.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+                        
+                        let (_, response) = try await URLSession.shared.data(for: thumbnailRequest)
+                        if let httpResponse = response as? HTTPURLResponse,
+                           (200...299).contains(httpResponse.statusCode) {
+                            deletedThumbnails += 1
+                            print("✅ Deleted thumbnail from R2: \(photo.id)")
+                        }
+                    } catch {
+                        print("⚠️ Failed to delete thumbnail \(photo.id) from R2: \(error.localizedDescription)")
+                    }
+                }
+                
+                // Delete photo metadata from Supabase
+                do {
+                    try await supabaseService.supabaseClient.from("item_photos")
+                        .delete()
+                        .eq("item_id", value: orphanedItemId)
+                        .execute()
+                } catch {
+                    print("⚠️ Failed to delete photo metadata for item \(orphanedItemId): \(error.localizedDescription)")
+                }
+            }
+            
+            // Delete junction table entries
+            let junctionTables = [
+                "item_colors",
+                "item_seasons",
+                "item_tags",
+                "item_wardrobes",
+                "item_links",
+                "item_prices",
+                "item_pairs"
+            ]
+            
+            for table in junctionTables {
+                do {
+                    _ = try await supabaseService.supabaseClient.from(table)
+                        .delete()
+                        .eq("item_id", value: orphanedItemId)
+                        .execute()
+                    deletedJunctionEntries += 1
+                    print("✅ Deleted entries from \(table) for item: \(orphanedItemId)")
+                } catch {
+                    print("⚠️ Failed to delete from \(table) for item \(orphanedItemId): \(error.localizedDescription)")
+                }
+                
+                // Also delete reverse pairs
+                if table == "item_pairs" {
+                    do {
+                        try await supabaseService.supabaseClient.from(table)
+                            .delete()
+                            .eq("paired_item_id", value: orphanedItemId)
+                            .execute()
+                        print("✅ Deleted reverse pairs for item: \(orphanedItemId)")
+                    } catch {
+                        print("⚠️ Failed to delete reverse pairs for item \(orphanedItemId): \(error.localizedDescription)")
+                    }
+                }
+            }
+            
+            // Delete the item itself
+            try await supabaseService.supabaseClient.from("items")
+                .delete()
+                .eq("id", value: orphanedItemId)
+                .execute()
+            
+            print("✅ Cleaned up orphaned item: \(orphanedItemId)")
+        }
+        
+        // STEP 5: Clean up orphaned photos for existing items (photos that exist in Supabase but not in Core Data)
+        // Get all photos from Core Data
+        let photoRequest: NSFetchRequest<Photo> = Photo.fetchRequest()
+        let allLocalPhotos = try context.fetch(photoRequest)
+        let localPhotoIds = Set(allLocalPhotos.compactMap { $0.id?.uuidString })
+        print("📸 Found \(localPhotoIds.count) photos in Core Data")
+        
+        // Get all photos from Supabase for existing items
+        if !localItemIds.isEmpty {
+            // Get photos for items that exist in Core Data
+            let itemIdsArray = Array(localItemIds)
+            let allPhotosResponse = try await supabaseService.supabaseClient.from("item_photos")
+                .select("id, item_id")
+                .in("item_id", values: itemIdsArray)
+                .execute()
+            
+            struct PhotoWithItemResponse: Codable {
+                let id: String
+                let itemId: String
+                
+                enum CodingKeys: String, CodingKey {
+                    case id
+                    case itemId = "item_id"
+                }
+            }
+            
+            let allPhotosData: Data = allPhotosResponse.data
+            if let allPhotos = try? JSONDecoder().decode([PhotoWithItemResponse].self, from: allPhotosData) {
+                let orphanedPhotos = allPhotos.filter { !localPhotoIds.contains($0.id) }
+                print("📸 Found \(orphanedPhotos.count) orphaned photos for existing items")
+                
+                for photo in orphanedPhotos {
+                    guard let itemUUID = UUID(uuidString: photo.itemId),
+                          let photoUUID = UUID(uuidString: photo.id) else { continue }
+                    
+                    // Delete from R2
+                    do {
+                        try await supabaseService.deletePhoto(
+                            itemId: itemUUID,
+                            photoId: photoUUID,
+                            userId: userId
+                        )
+                        deletedPhotos += 1
+                        print("✅ Deleted orphaned photo from R2: \(photo.id)")
+                    } catch {
+                        print("⚠️ Failed to delete orphaned photo \(photo.id) from R2: \(error.localizedDescription)")
+                    }
+                    
+                    // Delete thumbnail
+                    do {
+                        let thumbnailFileName = "\(userId.uuidString)/\(photo.itemId)/\(photo.id)_thumb.jpg"
+                        let thumbnailUrl = URL(string: "\(CloudflareR2Config.workerURL)/\(thumbnailFileName)")!
+                        
+                        guard let session = supabaseService.currentSession else { continue }
+                        
+                        var thumbnailRequest = URLRequest(url: thumbnailUrl)
+                        thumbnailRequest.httpMethod = "DELETE"
+                        thumbnailRequest.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+                        
+                        let (_, response) = try await URLSession.shared.data(for: thumbnailRequest)
+                        if let httpResponse = response as? HTTPURLResponse,
+                           (200...299).contains(httpResponse.statusCode) {
+                            deletedThumbnails += 1
+                            print("✅ Deleted orphaned thumbnail from R2: \(photo.id)")
+                        }
+                    } catch {
+                        print("⚠️ Failed to delete orphaned thumbnail \(photo.id) from R2: \(error.localizedDescription)")
+                    }
+                    
+                    // Delete from Supabase
+                    do {
+                        try await supabaseService.supabaseClient.from("item_photos")
+                            .delete()
+                            .eq("id", value: photo.id)
+                            .execute()
+                        print("✅ Deleted orphaned photo metadata from Supabase: \(photo.id)")
+                    } catch {
+                        print("⚠️ Failed to delete orphaned photo \(photo.id) from Supabase: \(error.localizedDescription)")
+                    }
+                }
+            }
+        }
+        
+        syncProgress = 1.0
+        syncStatus = "Cleanup complete!"
+        
+        print("✅ Cleanup complete!")
+        print("   - Deleted \(orphanedItemIds.count) orphaned items")
+        print("   - Deleted \(deletedPhotos) orphaned photos from R2")
+        print("   - Deleted \(deletedThumbnails) orphaned thumbnails from R2")
+        print("   - Deleted \(deletedJunctionEntries) junction table entries")
     }
     
     /// Syncs all reference data (brands, categories, colors, etc.) before syncing items
@@ -420,14 +698,6 @@ class SyncService: ObservableObject {
         let locations = try context.fetch(locationRequest)
         for location in locations {
             try await syncLocation(location, userId: userId)
-        }
-        
-        // Sync collections - only if changed (collections already have updatedAt)
-        let collectionRequest: NSFetchRequest<Collection> = Collection.fetchRequest()
-        collectionRequest.predicate = NSPredicate(format: "userId == %@ AND (syncedAt == nil OR updatedAt > syncedAt)", userId.uuidString)
-        let collections = try context.fetch(collectionRequest)
-        for collection in collections {
-            try await syncCollection(collection, userId: userId)
         }
         
         // Sync wardrobes - only if changed (wardrobes already have syncedAt and updatedAt)
@@ -728,32 +998,83 @@ class SyncService: ObservableObject {
         try context.save()
     }
     
-    /// Syncs a collection to Supabase
-    private func syncCollection(_ collection: Collection, userId: UUID) async throws {
-        guard let context = context else { throw SyncError.noContext }
-        guard let collectionId = collection.id else { return }
-        
-        let collectionData = SyncCollectionData(
-            id: collectionId.uuidString,
-            userId: userId.uuidString,
-            name: collection.name ?? "",
-            type: collection.type,
-            createdAt: collection.createdAt?.ISO8601String ?? collection.timestamp?.ISO8601String
-        )
-        
-        try await supabaseService.supabaseClient.from("collections")
-            .upsert(collectionData, onConflict: "id")
-            .execute()
-        
-        // Mark as synced
-        collection.syncedAt = Date()
-        try context.save()
+    /// Syncs a single wardrobe to Supabase (for automatic sync after save)
+    nonisolated func syncWardrobeIfNeeded(_ wardrobe: Wardrobe) {
+        Task { @MainActor in
+            guard self.supabaseService.isAuthenticated,
+                  let userId = self.supabaseService.currentUser?.id,
+                  let wardrobeId = wardrobe.id,
+                  let context = self.context else {
+                return
+            }
+            
+            // Fetch the wardrobe by ID to ensure we have the latest state
+            // This is important after soft delete since the wardrobe might be filtered out of fetch requests
+            let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", wardrobeId as CVarArg)
+            request.fetchLimit = 1
+            
+            guard let refreshedWardrobe = try? context.fetch(request).first else {
+                print("⚠️ Could not find wardrobe with ID \(wardrobeId) for sync")
+                return
+            }
+            
+            // Set userId if not set (for new wardrobes)
+            if refreshedWardrobe.userId == nil || refreshedWardrobe.userId?.isEmpty == true {
+                refreshedWardrobe.userId = userId.uuidString
+                do {
+                    try context.save()
+                    print("✅ Set userId on new wardrobe: \(refreshedWardrobe.name ?? "unnamed")")
+                } catch {
+                    print("⚠️ Failed to set userId on wardrobe: \(error.localizedDescription)")
+                }
+            }
+            
+            // Check if wardrobe needs syncing
+            let needsSync: Bool
+            if refreshedWardrobe.syncedAt == nil {
+                needsSync = true
+            } else if let updatedAt = refreshedWardrobe.updatedAt, let syncedAt = refreshedWardrobe.syncedAt {
+                needsSync = updatedAt >= syncedAt
+            } else {
+                needsSync = false
+            }
+            
+            guard needsSync else {
+                return
+            }
+            
+            // Sync in background
+            do {
+                try await self.syncWardrobe(refreshedWardrobe, userId: userId)
+                print("✅ Auto-synced wardrobe: \(refreshedWardrobe.name ?? "unnamed") (isSoftDeleted: \(refreshedWardrobe.isSoftDeleted))")
+            } catch {
+                print("⚠️ Auto-sync failed for wardrobe '\(refreshedWardrobe.name ?? "unnamed")': \(error.localizedDescription)")
+            }
+        }
     }
     
     /// Syncs a wardrobe to Supabase
     private func syncWardrobe(_ wardrobe: Wardrobe, userId: UUID) async throws {
-        guard let wardrobeId = wardrobe.id else { return }
+        guard let wardrobeId = wardrobe.id,
+              let context = context else { return }
         
+        // If soft-deleted, actually delete from Supabase
+        if wardrobe.isSoftDeleted {
+            print("🗑️ Deleting wardrobe from Supabase: \(wardrobe.name ?? "unnamed")")
+            try await supabaseService.supabaseClient.from("wardrobes")
+                .delete()
+                .eq("id", value: wardrobeId.uuidString)
+                .execute()
+            
+            // Mark as synced after successful deletion
+            wardrobe.syncedAt = Date()
+            try context.save()
+            print("✅ Successfully deleted wardrobe from Supabase")
+            return
+        }
+        
+        // Otherwise, upsert as normal
         let wardrobeData = SyncWardrobeData(
             id: wardrobeId.uuidString,
             userId: userId.uuidString,
@@ -764,9 +1085,141 @@ class SyncService: ObservableObject {
             updatedAt: wardrobe.updatedAt?.ISO8601String
         )
         
+        print("📤 Syncing wardrobe to Supabase: \(wardrobe.name ?? "unnamed") (isSoftDeleted: \(wardrobe.isSoftDeleted))")
+        
         try await supabaseService.supabaseClient.from("wardrobes")
             .upsert(wardrobeData, onConflict: "id")
             .execute()
+        
+        print("✅ Successfully synced wardrobe to Supabase: \(wardrobe.name ?? "unnamed")")
+        
+        // Mark as synced after successful upload
+        wardrobe.syncedAt = Date()
+        try context.save()
+    }
+    
+    /// Syncs username to Core Data (called from SupabaseService when username is loaded)
+    @MainActor
+    func syncUsernameToCoreData(_ username: String) {
+        guard let context = context else {
+            print("⚠️ No context available for username sync")
+            return
+        }
+        
+        // Get userId from SupabaseService
+        let userId = supabaseService.currentUser?.id.uuidString
+        
+        let repository = UserProfileRepository(context: context)
+        do {
+            try repository.updateUsername(username, userId: userId)
+            print("✅ Synced username to Core Data: \(username)")
+        } catch {
+            print("⚠️ Failed to sync username to Core Data: \(error.localizedDescription)")
+        }
+    }
+    
+    /// Syncs display name to Core Data (called from SupabaseService when display_name is loaded)
+    @MainActor
+    func syncDisplayNameToCoreData(_ displayName: String) {
+        guard let context = context else {
+            print("⚠️ No context available for display name sync")
+            return
+        }
+        
+        // Get userId from SupabaseService
+        let userId = supabaseService.currentUser?.id.uuidString
+        
+        let repository = UserProfileRepository(context: context)
+        do {
+            try repository.updateDisplayName(displayName, userId: userId)
+            print("✅ Synced display name to Core Data: \(displayName)")
+        } catch {
+            print("⚠️ Failed to sync display name to Core Data: \(error.localizedDescription)")
+        }
+    }
+    
+    /// Syncs user profile (weight data) to Supabase
+    nonisolated func syncUserProfileIfNeeded(_ profile: UserProfile) {
+        // Only sync if authenticated - check on main actor
+        Task { @MainActor in
+            guard self.supabaseService.isAuthenticated,
+                  let userId = self.supabaseService.currentUser?.id,
+                  let context = self.context else {
+                return
+            }
+            
+            // Refresh profile from context to ensure we have latest values
+            context.refresh(profile, mergeChanges: false)
+            
+            // Check if profile needs syncing (syncedAt == nil OR updatedAt >= syncedAt)
+            let needsSync: Bool
+            if profile.syncedAt == nil {
+                needsSync = true // Never synced
+            } else if let updatedAt = profile.updatedAt, let syncedAt = profile.syncedAt {
+                // Use >= instead of > to handle edge case where they're set at same time
+                needsSync = updatedAt >= syncedAt // Changed since last sync
+            } else {
+                needsSync = false
+            }
+            
+            guard needsSync else {
+                return // Profile is already synced and up to date
+            }
+            
+            // Sync in background (don't block UI)
+            do {
+                try await self.syncUserProfile(profile, userId: userId)
+                print("✅ Auto-synced user profile (weight data)")
+            } catch {
+                print("⚠️ Auto-sync failed for user profile: \(error.localizedDescription)")
+                // Don't show error to user - sync happens in background
+            }
+        }
+    }
+    
+    /// Syncs user profile (weight, username, displayName) to Supabase
+    private func syncUserProfile(_ profile: UserProfile, userId: UUID) async throws {
+        guard let context = context else {
+            throw SyncError.noContext
+        }
+        
+        // Build profile data struct with all available fields
+        let weightKg = profile.weightKg
+        let hasWeight = weightKg > 0 && weightKg.isFinite && !weightKg.isNaN
+        let hasWeightUnit = profile.weightUnit != nil && !profile.weightUnit!.isEmpty
+        
+        let profileData = SyncUserProfileData(
+            userId: userId.uuidString,
+            weightKg: hasWeight && hasWeightUnit ? weightKg : nil,
+            weightUnit: hasWeightUnit ? profile.weightUnit : nil,
+            username: (profile.username?.isEmpty == false) ? profile.username : nil,
+            displayName: (profile.displayName?.isEmpty == false) ? profile.displayName : nil,
+            updatedAt: profile.updatedAt?.ISO8601String
+        )
+        
+        // Only sync if there's data to sync (more than just user_id)
+        let hasData = profileData.weightKg != nil || 
+                     profileData.weightUnit != nil ||
+                     profileData.username != nil ||
+                     profileData.displayName != nil
+        
+        guard hasData else {
+            print("ℹ️ User profile has no data to sync")
+            return
+        }
+        
+        print("📤 Syncing user profile to Supabase (user_id: \(userId.uuidString))")
+        
+        // Upsert profile data to user_profiles table (using user_id as conflict key)
+        try await supabaseService.supabaseClient.from("user_profiles")
+            .upsert(profileData, onConflict: "user_id")
+            .execute()
+        
+        print("✅ Successfully synced user profile to Supabase")
+        
+        // Mark as synced after successful upload
+        profile.syncedAt = Date()
+        try context.save()
     }
     
     /// Syncs a single item to Supabase
@@ -780,6 +1233,160 @@ class SyncService: ObservableObject {
             return
         }
         
+        // If soft-deleted, actually delete from Supabase and R2
+        if item.isSoftDeleted {
+            print("🗑️ Deleting item from Supabase and R2: \(item.name ?? "unnamed")")
+            
+            // STEP 1: Delete all photos from R2
+            if let photos = item.photos as? Set<Photo> {
+                for photo in photos {
+                    guard let photoId = photo.id else { continue }
+                    
+                    // Delete full image from R2
+                    do {
+                        try await supabaseService.deletePhoto(
+                            itemId: itemId,
+                            photoId: photoId,
+                            userId: userId
+                        )
+                        print("✅ Deleted photo from R2: \(photoId.uuidString)")
+                    } catch {
+                        print("⚠️ Failed to delete photo \(photoId.uuidString) from R2: \(error.localizedDescription)")
+                        // Continue with other deletions even if one fails
+                    }
+                    
+                    // Delete thumbnail from R2 (thumbnails use _thumb suffix)
+                    do {
+                        let thumbnailFileName = "\(userId.uuidString)/\(itemId.uuidString)/\(photoId.uuidString)_thumb.jpg"
+                        let thumbnailUrl = URL(string: "\(CloudflareR2Config.workerURL)/\(thumbnailFileName)")!
+                        
+                        guard let session = supabaseService.currentSession else {
+                            print("⚠️ No session available for thumbnail deletion")
+                            continue
+                        }
+                        
+                        var thumbnailRequest = URLRequest(url: thumbnailUrl)
+                        thumbnailRequest.httpMethod = "DELETE"
+                        thumbnailRequest.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+                        
+                        let (_, response) = try await URLSession.shared.data(for: thumbnailRequest)
+                        if let httpResponse = response as? HTTPURLResponse,
+                           (200...299).contains(httpResponse.statusCode) {
+                            print("✅ Deleted thumbnail from R2: \(photoId.uuidString)")
+                        }
+                    } catch {
+                        print("⚠️ Failed to delete thumbnail \(photoId.uuidString) from R2: \(error.localizedDescription)")
+                        // Continue with other deletions even if one fails
+                    }
+                }
+            }
+            
+            // STEP 2: Delete item relationships from Supabase (junction tables)
+            // Delete item_colors
+            do {
+                try await supabaseService.supabaseClient.from("item_colors")
+                    .delete()
+                    .eq("item_id", value: itemId.uuidString)
+                    .execute()
+            } catch {
+                print("⚠️ Failed to delete item_colors: \(error.localizedDescription)")
+            }
+            
+            // Delete item_seasons
+            do {
+                try await supabaseService.supabaseClient.from("item_seasons")
+                    .delete()
+                    .eq("item_id", value: itemId.uuidString)
+                    .execute()
+            } catch {
+                print("⚠️ Failed to delete item_seasons: \(error.localizedDescription)")
+            }
+            
+            // Delete item_tags
+            do {
+                try await supabaseService.supabaseClient.from("item_tags")
+                    .delete()
+                    .eq("item_id", value: itemId.uuidString)
+                    .execute()
+            } catch {
+                print("⚠️ Failed to delete item_tags: \(error.localizedDescription)")
+            }
+            
+            // Delete item_wardrobes
+            do {
+                try await supabaseService.supabaseClient.from("item_wardrobes")
+                    .delete()
+                    .eq("item_id", value: itemId.uuidString)
+                    .execute()
+            } catch {
+                print("⚠️ Failed to delete item_wardrobes: \(error.localizedDescription)")
+            }
+            
+            // Delete item_pairs (both directions)
+            do {
+                try await supabaseService.supabaseClient.from("item_pairs")
+                    .delete()
+                    .eq("item_id", value: itemId.uuidString)
+                    .execute()
+                
+                try await supabaseService.supabaseClient.from("item_pairs")
+                    .delete()
+                    .eq("paired_item_id", value: itemId.uuidString)
+                    .execute()
+            } catch {
+                print("⚠️ Failed to delete item_pairs: \(error.localizedDescription)")
+            }
+            
+            // Delete item_links
+            do {
+                try await supabaseService.supabaseClient.from("item_links")
+                    .delete()
+                    .eq("item_id", value: itemId.uuidString)
+                    .execute()
+            } catch {
+                print("⚠️ Failed to delete item_links: \(error.localizedDescription)")
+            }
+            
+            // Delete item_prices
+            do {
+                try await supabaseService.supabaseClient.from("item_prices")
+                    .delete()
+                    .eq("item_id", value: itemId.uuidString)
+                    .execute()
+            } catch {
+                print("⚠️ Failed to delete item_prices: \(error.localizedDescription)")
+            }
+            
+            // Delete item_photos
+            do {
+                try await supabaseService.supabaseClient.from("item_photos")
+                    .delete()
+                    .eq("item_id", value: itemId.uuidString)
+                    .execute()
+            } catch {
+                print("⚠️ Failed to delete item_photos: \(error.localizedDescription)")
+            }
+            
+            // STEP 3: Delete the item itself from Supabase
+            do {
+                try await supabaseService.supabaseClient.from("items")
+                    .delete()
+                    .eq("id", value: itemId.uuidString)
+                    .execute()
+                print("✅ Successfully deleted item from Supabase: \(item.name ?? "unnamed")")
+            } catch {
+                print("❌ Failed to delete item from Supabase: \(error.localizedDescription)")
+                throw error
+            }
+            
+            // Mark as synced after successful deletion
+            item.syncedAt = Date()
+            try context.save()
+            print("✅ Successfully deleted item from Supabase and R2")
+            return
+        }
+        
+        // Otherwise, upsert as normal
         // Prepare item data using Codable struct
         // Sizes are now independent of categories, so we can always include size_id
         let itemData = SyncItemData(
@@ -788,7 +1395,7 @@ class SyncService: ObservableObject {
             name: item.name ?? "",
             notes: item.notes,
             isFavorite: item.isFavorite,
-            isWishlist: item.isWishlist,
+            // isWishlist removed - replaced by item_wardrobes junction table
             isDraft: item.isDraft,
             minTemperature: item.minTemperature > 0 ? item.minTemperature : nil,
             maxTemperature: item.maxTemperature > 0 ? item.maxTemperature : nil,
@@ -820,12 +1427,8 @@ class SyncService: ObservableObject {
             throw error
         }
         
-        // Sync photos
-        if let photos = item.photos as? Set<Photo> {
-            for photo in photos {
-                try await syncPhoto(photo, itemId: itemId, userId: userId)
-            }
-        }
+        // Sync photos with proper deletion handling
+        try await syncItemPhotos(item, itemId: itemId, userId: userId)
         
         // Sync relationships (colors, seasons, tags, etc.)
         try await syncItemRelationships(item, userId: userId)
@@ -835,12 +1438,8 @@ class SyncService: ObservableObject {
             try await syncPrice(price, itemId: itemId, userId: userId)
         }
         
-        // Sync links if exist
-        if let links = item.links as? Set<Link> {
-            for link in links {
-                try await syncLink(link, itemId: itemId, userId: userId)
-            }
-        }
+        // Sync links with proper deletion handling
+        try await syncItemLinks(item, itemId: itemId, userId: userId)
         
         // Mark as synced
         item.syncedAt = Date()
@@ -849,9 +1448,115 @@ class SyncService: ObservableObject {
         print("✅ Synced item: \(item.name ?? "unnamed")")
     }
     
+    /// Syncs item photos with proper deletion handling
+    /// Compares Core Data photos vs Supabase photos and deletes orphaned photos from R2 and Supabase
+    private func syncItemPhotos(_ item: Item, itemId: UUID, userId: UUID) async throws {
+        print("📸 Starting photo sync for item: \(item.name ?? "unnamed") (ID: \(itemId.uuidString))")
+        
+        // STEP 1: Get what photos SHOULD exist (from Core Data)
+        let currentPhotoIds: Set<String>
+        if let photos = item.photos as? Set<Photo> {
+            currentPhotoIds = Set(photos.compactMap { $0.id?.uuidString })
+            print("📸 Core Data shows \(currentPhotoIds.count) photos for this item")
+        } else {
+            currentPhotoIds = Set()
+            print("📸 Core Data shows 0 photos for this item")
+        }
+        
+        // STEP 2: Get what photos currently exist in Supabase (BEFORE making any changes)
+        let existingPhotosResponse = try await supabaseService.supabaseClient.from("item_photos")
+            .select("id")
+            .eq("item_id", value: itemId.uuidString)
+            .execute()
+        
+        let data: Data = existingPhotosResponse.data
+        let existingPhotoIds: Set<String>
+        if let existingPhotos = try? JSONDecoder().decode([ItemPhotoResponse].self, from: data) {
+            existingPhotoIds = Set(existingPhotos.compactMap { $0.id })
+            print("📸 Supabase shows \(existingPhotoIds.count) existing photos")
+        } else {
+            existingPhotoIds = Set()
+            print("📸 Supabase shows 0 existing photos (or failed to decode)")
+        }
+        
+        // STEP 3: Delete photos that no longer exist in Core Data
+        let photosToDelete = existingPhotoIds.subtracting(currentPhotoIds)
+        if !photosToDelete.isEmpty {
+            print("🗑️ Deleting \(photosToDelete.count) orphaned photos from R2 and Supabase")
+            for photoIdToDelete in photosToDelete {
+                guard let photoUUID = UUID(uuidString: photoIdToDelete) else {
+                    print("⚠️ Invalid photo ID format: \(photoIdToDelete)")
+                    continue
+                }
+                
+                // Delete from R2 (full image)
+                do {
+                    try await supabaseService.deletePhoto(
+                        itemId: itemId,
+                        photoId: photoUUID,
+                        userId: userId
+                    )
+                    print("✅ Deleted photo from R2: \(photoIdToDelete)")
+                } catch {
+                    print("⚠️ Failed to delete photo \(photoIdToDelete) from R2: \(error.localizedDescription)")
+                    // Continue with other deletions even if one fails
+                }
+                
+                // Delete thumbnail from R2 (thumbnails use _thumb suffix)
+                do {
+                    let thumbnailFileName = "\(userId.uuidString)/\(itemId.uuidString)/\(photoIdToDelete)_thumb.jpg"
+                    let thumbnailUrl = URL(string: "\(CloudflareR2Config.workerURL)/\(thumbnailFileName)")!
+                    
+                    guard let session = supabaseService.currentSession else {
+                        print("⚠️ No session available for thumbnail deletion")
+                        continue
+                    }
+                    
+                    var thumbnailRequest = URLRequest(url: thumbnailUrl)
+                    thumbnailRequest.httpMethod = "DELETE"
+                    thumbnailRequest.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+                    
+                    let (_, response) = try await URLSession.shared.data(for: thumbnailRequest)
+                    if let httpResponse = response as? HTTPURLResponse,
+                       (200...299).contains(httpResponse.statusCode) {
+                        print("✅ Deleted thumbnail from R2: \(photoIdToDelete)")
+                    }
+                } catch {
+                    print("⚠️ Failed to delete thumbnail \(photoIdToDelete) from R2: \(error.localizedDescription)")
+                    // Continue with other deletions even if one fails
+                }
+                
+                // Delete from Supabase item_photos table
+                do {
+                    try await supabaseService.supabaseClient.from("item_photos")
+                        .delete()
+                        .eq("id", value: photoIdToDelete)
+                        .execute()
+                    print("✅ Deleted photo metadata from Supabase: \(photoIdToDelete)")
+                } catch {
+                    print("⚠️ Failed to delete photo \(photoIdToDelete) from Supabase: \(error)")
+                }
+            }
+        } else {
+            print("📸 No orphaned photos to delete")
+        }
+        
+        // STEP 4: Now sync current photos (upsert new/existing)
+        if let photos = item.photos as? Set<Photo> {
+            print("📸 Upserting \(photos.count) current photos to Supabase")
+            for photo in photos {
+                try await syncPhoto(photo, itemId: itemId, userId: userId)
+            }
+            print("✅ Finished syncing \(photos.count) photos")
+        } else {
+            print("📸 No photos in Core Data")
+        }
+    }
+    
     /// Syncs a photo to Cloudflare R2 via Worker and stores URL
     /// Each photo (front, back, worn) has a unique photoId, ensuring they don't conflict
     /// Uploads both full image and thumbnail to R2 for storage efficiency
+    /// Handles migration from base64 thumbnails to R2 URLs
     private func syncPhoto(_ photo: Photo, itemId: UUID, userId: UUID) async throws {
         guard let context = context else {
             throw SyncError.noContext
@@ -862,60 +1567,81 @@ class SyncService: ObservableObject {
             return
         }
         
-        // Check if photo already has URLs - if so, skip upload unless we have new data to upload
-        let hasExistingUrls = (photo.imageUrl != nil && !photo.imageUrl!.isEmpty) && 
-                              (photo.thumbnailUrl != nil && !photo.thumbnailUrl!.isEmpty)
-        let hasNewData = (photo.data != nil && !photo.data!.isEmpty) || 
-                         (photo.thumbnailData != nil && !photo.thumbnailData!.isEmpty)
-        
-        // If URLs exist and no new data, just update metadata and skip upload
-        if hasExistingUrls && !hasNewData {
-            try await updatePhotoMetadata(photo, itemId: itemId, userId: userId)
-            return
-        }
-        
         var imageUrl: String? = nil
         var thumbnailUrl: String? = nil
         
-        // Upload full image to Cloudflare R2 via Worker if we have data
-        // Only upload if we have new data (don't re-upload if URLs already exist and no new data)
+        // Check if we have existing R2 URLs (not base64)
+        let hasValidImageUrl = photo.imageUrl != nil && 
+                              !photo.imageUrl!.isEmpty && 
+                              !photo.imageUrl!.starts(with: "data:")
+        
+        let hasValidThumbnailUrl = photo.thumbnailUrl != nil && 
+                                   !photo.thumbnailUrl!.isEmpty && 
+                                   !photo.thumbnailUrl!.starts(with: "data:")
+        
+        // STEP 1: Upload full image if needed
         if let imageData = photo.data, !imageData.isEmpty {
+            // We have new image data - upload it
             imageUrl = try await supabaseService.uploadPhoto(
                 imageData: imageData,
                 itemId: itemId,
                 photoId: photoId,
                 userId: userId
             )
-            
-            // Store URL in Core Data and save immediately
             photo.imageUrl = imageUrl
             try context.save()
-            print("✅ Saved image URL to Core Data: \(imageUrl ?? "nil")")
-        } else if hasExistingUrls {
-            // Use existing URL if we have one
+            print("✅ Uploaded new image to R2: \(imageUrl ?? "nil")")
+        } else if hasValidImageUrl {
+            // Use existing R2 URL
             imageUrl = photo.imageUrl
+            print("✅ Using existing image URL: \(imageUrl ?? "nil")")
+        } else {
+            print("⚠️ No image data and no valid R2 URL for photo \(photoId)")
         }
         
-        // Upload thumbnail to R2 if we have thumbnail data
-        // Only upload if we have new data (don't re-upload if URLs already exist and no new data)
+        // STEP 2: Upload thumbnail
         if let thumbnailData = photo.thumbnailData, !thumbnailData.isEmpty {
+            // We have thumbnail data - upload it to R2
             thumbnailUrl = try await supabaseService.uploadThumbnail(
                 imageData: thumbnailData,
                 itemId: itemId,
                 photoId: photoId,
                 userId: userId
             )
-            
-            // Store thumbnail URL in Core Data and save immediately
             photo.thumbnailUrl = thumbnailUrl
             try context.save()
-            print("✅ Saved thumbnail URL to Core Data: \(thumbnailUrl ?? "nil")")
-        } else if hasExistingUrls {
-            // Use existing thumbnail URL if we have one
+            print("✅ Uploaded new thumbnail to R2: \(thumbnailUrl ?? "nil")")
+        } else if hasValidThumbnailUrl {
+            // Use existing R2 URL
             thumbnailUrl = photo.thumbnailUrl
+            print("✅ Using existing thumbnail URL: \(thumbnailUrl ?? "nil")")
+        } else {
+            // MIGRATION: If we have base64 thumbnail, re-generate from image
+            if let existingThumb = photo.thumbnailUrl, existingThumb.starts(with: "data:") {
+                print("🔄 Migrating base64 thumbnail to R2 for photo \(photoId)")
+                
+                // Try to get thumbnail data from the base64 string or re-generate from full image
+                if let imageData = photo.data, !imageData.isEmpty {
+                    // Generate thumbnail from full image
+                    if let thumbnailData = generateThumbnail(from: imageData) {
+                        thumbnailUrl = try await supabaseService.uploadThumbnail(
+                            imageData: thumbnailData,
+                            itemId: itemId,
+                            photoId: photoId,
+                            userId: userId
+                        )
+                        photo.thumbnailUrl = thumbnailUrl
+                        photo.thumbnailData = thumbnailData  // Store for future use
+                        try context.save()
+                        print("✅ Migrated thumbnail to R2: \(thumbnailUrl ?? "nil")")
+                    }
+                } else {
+                    print("⚠️ Cannot migrate thumbnail - no image data available")
+                }
+            }
         }
         
-        // Update photo metadata in database (stores URLs, not base64)
+        // STEP 3: Update metadata in Supabase
         try await updatePhotoMetadata(photo, itemId: itemId, userId: userId, imageUrl: imageUrl, thumbnailUrl: thumbnailUrl)
     }
     
@@ -953,83 +1679,309 @@ class SyncService: ObservableObject {
         }
     }
     
-    /// Syncs item relationships (colors, seasons, tags, collections)
+    /// Generates a thumbnail from full image data
+    private func generateThumbnail(from imageData: Data, maxSize: CGFloat = 200) -> Data? {
+        guard let image = UIImage(data: imageData) else { return nil }
+        
+        let size = image.size
+        let aspectRatio = size.width / size.height
+        
+        var newSize: CGSize
+        if size.width > size.height {
+            newSize = CGSize(width: maxSize, height: maxSize / aspectRatio)
+        } else {
+            newSize = CGSize(width: maxSize * aspectRatio, height: maxSize)
+        }
+        
+        UIGraphicsBeginImageContextWithOptions(newSize, false, 1.0)
+        image.draw(in: CGRect(origin: .zero, size: newSize))
+        let thumbnail = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        
+        return thumbnail?.jpegData(compressionQuality: 0.7)
+    }
+    
+    /// Downloads image data from URL
+    private func downloadImage(from urlString: String) async throws -> Data {
+        guard let url = URL(string: urlString) else {
+            throw NSError(domain: "SyncService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])
+        }
+        
+        let (data, _) = try await URLSession.shared.data(from: url)
+        return data
+    }
+    
+    /// Syncs item relationships (colors, seasons, tags, wardrobes, pairs)
+    /// Handles deletion of orphaned relationships when they're removed from items
     private func syncItemRelationships(_ item: Item, userId: UUID) async throws {
         guard let itemId = item.id else { return }
         
-        // Sync item_colors
+        // Sync item_colors with proper deletion handling
+        print("🎨 Starting color sync for item: \(item.name ?? "unnamed") (ID: \(itemId.uuidString))")
+        
+        // STEP 1: Get what colors SHOULD exist (from Core Data)
+        let currentColorIds: Set<String>
         if let colors = item.colors as? Set<AppColor> {
+            currentColorIds = Set(colors.compactMap { $0.id?.uuidString })
+            print("🎨 Core Data shows \(currentColorIds.count) colors for this item")
+        } else {
+            currentColorIds = Set()
+            print("🎨 Core Data shows 0 colors for this item")
+        }
+        
+        // STEP 2: Get what colors currently exist in Supabase (BEFORE making any changes)
+        let existingColorsResponse = try await supabaseService.supabaseClient.from("item_colors")
+            .select("color_id")
+            .eq("item_id", value: itemId.uuidString)
+            .execute()
+        
+        let colorsData: Data = existingColorsResponse.data
+        let existingColorIds: Set<String>
+        if let existingColors = try? JSONDecoder().decode([ItemColorResponse].self, from: colorsData) {
+            existingColorIds = Set(existingColors.compactMap { $0.colorId })
+            print("🎨 Supabase shows \(existingColorIds.count) existing colors")
+        } else {
+            existingColorIds = Set()
+            print("🎨 Supabase shows 0 existing colors (or failed to decode)")
+        }
+        
+        // STEP 3: Delete colors that no longer exist in Core Data
+        let colorsToDelete = existingColorIds.subtracting(currentColorIds)
+        if !colorsToDelete.isEmpty {
+            print("🗑️ Deleting \(colorsToDelete.count) orphaned colors from Supabase")
+            for colorIdToDelete in colorsToDelete {
+                do {
+                    try await supabaseService.supabaseClient.from("item_colors")
+                        .delete()
+                        .eq("item_id", value: itemId.uuidString)
+                        .eq("color_id", value: colorIdToDelete)
+                        .execute()
+                    print("✅ Deleted color: \(colorIdToDelete)")
+                } catch {
+                    print("⚠️ Failed to delete color \(colorIdToDelete): \(error)")
+                }
+            }
+        } else {
+            print("🎨 No orphaned colors to delete")
+        }
+        
+        // STEP 4: Now sync current colors (upsert new/existing)
+        if let colors = item.colors as? Set<AppColor> {
+            print("🎨 Upserting \(colors.count) current colors to Supabase")
             for color in colors {
                 guard let colorId = color.id else { continue }
                 let junctionData = ItemColorJunction(
                     itemId: itemId.uuidString,
-                    colorId: colorId.uuidString,
-                  //  userId: userId.uuidString
+                    colorId: colorId.uuidString
                 )
                 try await supabaseService.supabaseClient.from("item_colors")
                     .upsert(junctionData, onConflict: "item_id,color_id")
                     .execute()
             }
+            print("✅ Finished syncing \(colors.count) colors")
+        } else {
+            print("🎨 No colors in Core Data")
         }
         
-        // Sync item_seasons
+        // Sync item_seasons with proper deletion handling
+        print("🍂 Starting season sync for item: \(item.name ?? "unnamed") (ID: \(itemId.uuidString))")
+        
+        // STEP 1: Get what seasons SHOULD exist (from Core Data)
+        let currentSeasonIds: Set<String>
         if let seasons = item.seasons as? Set<Season> {
+            currentSeasonIds = Set(seasons.compactMap { $0.id?.uuidString })
+            print("🍂 Core Data shows \(currentSeasonIds.count) seasons for this item")
+        } else {
+            currentSeasonIds = Set()
+            print("🍂 Core Data shows 0 seasons for this item")
+        }
+        
+        // STEP 2: Get what seasons currently exist in Supabase (BEFORE making any changes)
+        let existingSeasonsResponse = try await supabaseService.supabaseClient.from("item_seasons")
+            .select("season_id")
+            .eq("item_id", value: itemId.uuidString)
+            .execute()
+        
+        let seasonsData: Data = existingSeasonsResponse.data
+        let existingSeasonIds: Set<String>
+        if let existingSeasons = try? JSONDecoder().decode([ItemSeasonResponse].self, from: seasonsData) {
+            existingSeasonIds = Set(existingSeasons.compactMap { $0.seasonId })
+            print("🍂 Supabase shows \(existingSeasonIds.count) existing seasons")
+        } else {
+            existingSeasonIds = Set()
+            print("🍂 Supabase shows 0 existing seasons (or failed to decode)")
+        }
+        
+        // STEP 3: Delete seasons that no longer exist in Core Data
+        let seasonsToDelete = existingSeasonIds.subtracting(currentSeasonIds)
+        if !seasonsToDelete.isEmpty {
+            print("🗑️ Deleting \(seasonsToDelete.count) orphaned seasons from Supabase")
+            for seasonIdToDelete in seasonsToDelete {
+                do {
+                    try await supabaseService.supabaseClient.from("item_seasons")
+                        .delete()
+                        .eq("item_id", value: itemId.uuidString)
+                        .eq("season_id", value: seasonIdToDelete)
+                        .execute()
+                    print("✅ Deleted season: \(seasonIdToDelete)")
+                } catch {
+                    print("⚠️ Failed to delete season \(seasonIdToDelete): \(error)")
+                }
+            }
+        } else {
+            print("🍂 No orphaned seasons to delete")
+        }
+        
+        // STEP 4: Now sync current seasons (upsert new/existing)
+        if let seasons = item.seasons as? Set<Season> {
+            print("🍂 Upserting \(seasons.count) current seasons to Supabase")
             for season in seasons {
                 guard let seasonId = season.id else { continue }
                 let junctionData = ItemSeasonJunction(
                     itemId: itemId.uuidString,
-                    seasonId: seasonId.uuidString,
-                  //  userId: userId.uuidString
+                    seasonId: seasonId.uuidString
                 )
                 try await supabaseService.supabaseClient.from("item_seasons")
                     .upsert(junctionData, onConflict: "item_id,season_id")
                     .execute()
             }
+            print("✅ Finished syncing \(seasons.count) seasons")
+        } else {
+            print("🍂 No seasons in Core Data")
         }
         
-        // Sync item_tags
+        // Sync item_tags with proper deletion handling
+        print("🏷️ Starting tag sync for item: \(item.name ?? "unnamed") (ID: \(itemId.uuidString))")
+        
+        // STEP 1: Get what tags SHOULD exist (from Core Data)
+        let currentTagIds: Set<String>
         if let tags = item.tags as? Set<Tag> {
+            currentTagIds = Set(tags.compactMap { $0.id?.uuidString })
+            print("🏷️ Core Data shows \(currentTagIds.count) tags for this item")
+        } else {
+            currentTagIds = Set()
+            print("🏷️ Core Data shows 0 tags for this item")
+        }
+        
+        // STEP 2: Get what tags currently exist in Supabase (BEFORE making any changes)
+        let existingTagsResponse = try await supabaseService.supabaseClient.from("item_tags")
+            .select("tag_id")
+            .eq("item_id", value: itemId.uuidString)
+            .execute()
+        
+        let tagsData: Data = existingTagsResponse.data
+        let existingTagIds: Set<String>
+        if let existingTags = try? JSONDecoder().decode([ItemTagResponse].self, from: tagsData) {
+            existingTagIds = Set(existingTags.compactMap { $0.tagId })
+            print("🏷️ Supabase shows \(existingTagIds.count) existing tags")
+        } else {
+            existingTagIds = Set()
+            print("🏷️ Supabase shows 0 existing tags (or failed to decode)")
+        }
+        
+        // STEP 3: Delete tags that no longer exist in Core Data
+        let tagsToDelete = existingTagIds.subtracting(currentTagIds)
+        if !tagsToDelete.isEmpty {
+            print("🗑️ Deleting \(tagsToDelete.count) orphaned tags from Supabase")
+            for tagIdToDelete in tagsToDelete {
+                do {
+                    try await supabaseService.supabaseClient.from("item_tags")
+                        .delete()
+                        .eq("item_id", value: itemId.uuidString)
+                        .eq("tag_id", value: tagIdToDelete)
+                        .execute()
+                    print("✅ Deleted tag: \(tagIdToDelete)")
+                } catch {
+                    print("⚠️ Failed to delete tag \(tagIdToDelete): \(error)")
+                }
+            }
+        } else {
+            print("🏷️ No orphaned tags to delete")
+        }
+        
+        // STEP 4: Now sync current tags (upsert new/existing)
+        if let tags = item.tags as? Set<Tag> {
+            print("🏷️ Upserting \(tags.count) current tags to Supabase")
             for tag in tags {
                 guard let tagId = tag.id else { continue }
                 let junctionData = ItemTagJunction(
                     itemId: itemId.uuidString,
-                    tagId: tagId.uuidString,
-                  //  userId: userId.uuidString
+                    tagId: tagId.uuidString
                 )
                 try await supabaseService.supabaseClient.from("item_tags")
                     .upsert(junctionData, onConflict: "item_id,tag_id")
                     .execute()
             }
+            print("✅ Finished syncing \(tags.count) tags")
+        } else {
+            print("🏷️ No tags in Core Data")
         }
         
-        // Sync item_collections
-        if let collections = item.collections as? Set<Collection> {
-            for collection in collections {
-                guard let collectionId = collection.id else { continue }
-                let junctionData = ItemCollectionJunction(
-                    itemId: itemId.uuidString,
-                    collectionId: collectionId.uuidString,
-                  //  userId: userId.uuidString
-                )
-                try await supabaseService.supabaseClient.from("item_collections")
-                    .upsert(junctionData, onConflict: "item_id,collection_id")
-                    .execute()
-            }
-        }
+        // Sync item_wardrobes with proper deletion handling
+        print("👔 Starting wardrobe sync for item: \(item.name ?? "unnamed") (ID: \(itemId.uuidString))")
         
-        // Sync item_wardrobes
+        // STEP 1: Get what wardrobes SHOULD exist (from Core Data)
+        let currentWardrobeIds: Set<String>
         if let wardrobes = item.wardrobes as? Set<Wardrobe> {
+            currentWardrobeIds = Set(wardrobes.compactMap { $0.id?.uuidString })
+            print("👔 Core Data shows \(currentWardrobeIds.count) wardrobes for this item")
+        } else {
+            currentWardrobeIds = Set()
+            print("👔 Core Data shows 0 wardrobes for this item")
+        }
+        
+        // STEP 2: Get what wardrobes currently exist in Supabase (BEFORE making any changes)
+        let existingWardrobesResponse = try await supabaseService.supabaseClient.from("item_wardrobes")
+            .select("wardrobe_id")
+            .eq("item_id", value: itemId.uuidString)
+            .execute()
+        
+        let wardrobesData: Data = existingWardrobesResponse.data
+        let existingWardrobeIds: Set<String>
+        if let existingWardrobes = try? JSONDecoder().decode([ItemWardrobeResponse].self, from: wardrobesData) {
+            existingWardrobeIds = Set(existingWardrobes.compactMap { $0.wardrobeId })
+            print("👔 Supabase shows \(existingWardrobeIds.count) existing wardrobes")
+        } else {
+            existingWardrobeIds = Set()
+            print("👔 Supabase shows 0 existing wardrobes (or failed to decode)")
+        }
+        
+        // STEP 3: Delete wardrobes that no longer exist in Core Data
+        let wardrobesToDelete = existingWardrobeIds.subtracting(currentWardrobeIds)
+        if !wardrobesToDelete.isEmpty {
+            print("🗑️ Deleting \(wardrobesToDelete.count) orphaned wardrobes from Supabase")
+            for wardrobeIdToDelete in wardrobesToDelete {
+                do {
+                    try await supabaseService.supabaseClient.from("item_wardrobes")
+                        .delete()
+                        .eq("item_id", value: itemId.uuidString)
+                        .eq("wardrobe_id", value: wardrobeIdToDelete)
+                        .execute()
+                    print("✅ Deleted wardrobe: \(wardrobeIdToDelete)")
+                } catch {
+                    print("⚠️ Failed to delete wardrobe \(wardrobeIdToDelete): \(error)")
+                }
+            }
+        } else {
+            print("👔 No orphaned wardrobes to delete")
+        }
+        
+        // STEP 4: Now sync current wardrobes (upsert new/existing)
+        if let wardrobes = item.wardrobes as? Set<Wardrobe> {
+            print("👔 Upserting \(wardrobes.count) current wardrobes to Supabase")
             for wardrobe in wardrobes {
                 guard let wardrobeId = wardrobe.id else { continue }
                 let junctionData = ItemWardrobeJunction(
                     itemId: itemId.uuidString,
-                    wardrobeId: wardrobeId.uuidString,
-                  //  userId: userId.uuidString
+                    wardrobeId: wardrobeId.uuidString
                 )
                 try await supabaseService.supabaseClient.from("item_wardrobes")
                     .upsert(junctionData, onConflict: "item_id,wardrobe_id")
                     .execute()
             }
+            print("✅ Finished syncing \(wardrobes.count) wardrobes")
+        } else {
+            print("👔 No wardrobes in Core Data")
         }
         
         // Sync item_pairs with proper deletion handling
@@ -1196,7 +2148,67 @@ class SyncService: ObservableObject {
             .execute()
     }
     
-    /// Syncs item link
+    /// Syncs item links with proper deletion handling
+    private func syncItemLinks(_ item: Item, itemId: UUID, userId: UUID) async throws {
+        print("🔗 Starting link sync for item: \(item.name ?? "unnamed") (ID: \(itemId.uuidString))")
+        
+        // STEP 1: Get what links SHOULD exist (from Core Data)
+        let currentLinkIds: Set<String>
+        if let links = item.links as? Set<Link> {
+            currentLinkIds = Set(links.compactMap { $0.id?.uuidString })
+            print("🔗 Core Data shows \(currentLinkIds.count) links for this item")
+        } else {
+            currentLinkIds = Set()
+            print("🔗 Core Data shows 0 links for this item")
+        }
+        
+        // STEP 2: Get what links currently exist in Supabase (BEFORE making any changes)
+        let existingLinksResponse = try await supabaseService.supabaseClient.from("item_links")
+            .select("id")
+            .eq("item_id", value: itemId.uuidString)
+            .execute()
+        
+        let data: Data = existingLinksResponse.data
+        let existingLinkIds: Set<String>
+        if let existingLinks = try? JSONDecoder().decode([ItemLinkResponse].self, from: data) {
+            existingLinkIds = Set(existingLinks.compactMap { $0.id })
+            print("🔗 Supabase shows \(existingLinkIds.count) existing links")
+        } else {
+            existingLinkIds = Set()
+            print("🔗 Supabase shows 0 existing links (or failed to decode)")
+        }
+        
+        // STEP 3: Delete links that no longer exist in Core Data
+        let linksToDelete = existingLinkIds.subtracting(currentLinkIds)
+        if !linksToDelete.isEmpty {
+            print("🗑️ Deleting \(linksToDelete.count) orphaned links from Supabase")
+            for linkIdToDelete in linksToDelete {
+                do {
+                    try await supabaseService.supabaseClient.from("item_links")
+                        .delete()
+                        .eq("id", value: linkIdToDelete)
+                        .execute()
+                    print("✅ Deleted link: \(linkIdToDelete)")
+                } catch {
+                    print("⚠️ Failed to delete link \(linkIdToDelete): \(error)")
+                }
+            }
+        } else {
+            print("🔗 No orphaned links to delete")
+        }
+        
+        // STEP 4: Now sync current links (upsert new/existing)
+        if let links = item.links as? Set<Link> {
+            print("🔗 Upserting \(links.count) current links to Supabase")
+            for link in links {
+                try await syncLink(link, itemId: itemId, userId: userId)
+            }
+            print("✅ Finished syncing \(links.count) links")
+        } else {
+            print("🔗 No links in Core Data")
+        }
+    }
+    
     private func syncLink(_ link: Link, itemId: UUID, userId: UUID) async throws {
         guard let linkId = link.id else { return }
         
@@ -1245,7 +2257,7 @@ private struct SyncItemData: Codable {
     let name: String
     let notes: String?
     let isFavorite: Bool
-    let isWishlist: Bool
+    // isWishlist removed - replaced by item_wardrobes junction table
     let isDraft: Bool
     let minTemperature: Double?
     let maxTemperature: Double?
@@ -1267,7 +2279,7 @@ private struct SyncItemData: Codable {
         case name
         case notes
         case isFavorite = "is_favorite"
-        case isWishlist = "is_wishlist"
+        // isWishlist removed - replaced by item_wardrobes junction table
         case isDraft = "is_draft"
         case minTemperature = "min_temperature"
         case maxTemperature = "max_temperature"
@@ -1349,18 +2361,6 @@ private struct ItemTagJunction: Codable {
     }
 }
 
-private struct ItemCollectionJunction: Codable {
-    let itemId: String
-    let collectionId: String
-  //  let userId: String
-    
-    enum CodingKeys: String, CodingKey {
-        case itemId = "item_id"
-        case collectionId = "collection_id"
-      //  case userId = "user_id"
-    }
-}
-
 private struct ItemWardrobeJunction: Codable {
     let itemId: String
     let wardrobeId: String
@@ -1388,6 +2388,54 @@ private struct ItemPairResponse: Codable {
     
     enum CodingKeys: String, CodingKey {
         case pairedItemId = "paired_item_id"
+    }
+}
+
+private struct ItemLinkResponse: Codable {
+    let id: String
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+    }
+}
+
+private struct ItemPhotoResponse: Codable {
+    let id: String
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+    }
+}
+
+private struct ItemColorResponse: Codable {
+    let colorId: String
+    
+    enum CodingKeys: String, CodingKey {
+        case colorId = "color_id"
+    }
+}
+
+private struct ItemSeasonResponse: Codable {
+    let seasonId: String
+    
+    enum CodingKeys: String, CodingKey {
+        case seasonId = "season_id"
+    }
+}
+
+private struct ItemTagResponse: Codable {
+    let tagId: String
+    
+    enum CodingKeys: String, CodingKey {
+        case tagId = "tag_id"
+    }
+}
+
+private struct ItemWardrobeResponse: Codable {
+    let wardrobeId: String
+    
+    enum CodingKeys: String, CodingKey {
+        case wardrobeId = "wardrobe_id"
     }
 }
 
@@ -1539,22 +2587,6 @@ private struct SyncLocationData: Codable {
     }
 }
 
-private struct SyncCollectionData: Codable {
-    let id: String
-    let userId: String
-    let name: String
-    let type: String?
-    let createdAt: String?
-    
-    enum CodingKeys: String, CodingKey {
-        case id
-        case userId = "user_id"
-        case name
-        case type
-        case createdAt = "created_at"
-    }
-}
-
 private struct SyncWardrobeData: Codable {
     let id: String
     let userId: String
@@ -1574,6 +2606,25 @@ private struct SyncWardrobeData: Codable {
         case updatedAt = "updated_at"
     }
 }
+
+private struct SyncUserProfileData: Codable {
+    let userId: String
+    let weightKg: Double?
+    let weightUnit: String?
+    let username: String?
+    let displayName: String?
+    let updatedAt: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case userId = "user_id"
+        case weightKg = "weight_kg"
+        case weightUnit = "weight_unit"
+        case username
+        case displayName = "display_name"
+        case updatedAt = "updated_at"
+    }
+}
+
 
 // MARK: - Date Extension
 

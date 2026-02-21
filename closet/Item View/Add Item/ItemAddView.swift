@@ -532,6 +532,9 @@ struct ItemAddView: View {
                 newPhoto.isPrimary = true // Front images are primary by default
                 newPhoto.item = vm.draftItem
                 
+                // CRITICAL: Update the item's updatedAt timestamp
+                setUpdatedAt(vm.draftItem)
+                
                 // Refresh UI
                 vm.photoRefreshToken = UUID()
                 selectedImageType = .front
@@ -560,6 +563,9 @@ struct ItemAddView: View {
                 newPhoto.isPrimary = false
                 newPhoto.item = vm.draftItem
                 
+                // CRITICAL: Update the item's updatedAt timestamp
+                setUpdatedAt(vm.draftItem)
+                
                 // Refresh UI
                 vm.photoRefreshToken = UUID()
                 selectedImageType = .back
@@ -587,6 +593,9 @@ struct ItemAddView: View {
                 newPhoto.type = "worn"
                 newPhoto.isPrimary = false
                 newPhoto.item = vm.draftItem
+                
+                // CRITICAL: Update the item's updatedAt timestamp
+                setUpdatedAt(vm.draftItem)
                 
                 // Refresh UI
                 vm.photoRefreshToken = UUID()
@@ -645,6 +654,9 @@ struct ItemAddView: View {
             newPhoto.isPrimary = true
             newPhoto.item = vm.draftItem
             
+            // CRITICAL: Update the item's updatedAt timestamp
+            setUpdatedAt(vm.draftItem)
+            
             // Refresh UI
             vm.photoRefreshToken = UUID()
             selectedImageType = .front
@@ -677,6 +689,9 @@ struct ItemAddView: View {
             newPhoto.isPrimary = false
             newPhoto.item = vm.draftItem
             
+            // CRITICAL: Update the item's updatedAt timestamp
+            setUpdatedAt(vm.draftItem)
+            
             // Refresh UI
             vm.photoRefreshToken = UUID()
             selectedImageType = .back
@@ -708,6 +723,9 @@ struct ItemAddView: View {
             newPhoto.type = "worn"
             newPhoto.isPrimary = false
             newPhoto.item = vm.draftItem
+            
+            // CRITICAL: Update the item's updatedAt timestamp
+            setUpdatedAt(vm.draftItem)
             
             // Refresh UI
             vm.photoRefreshToken = UUID()
@@ -984,7 +1002,9 @@ final class ItemAddViewModel: ObservableObject {
         // Create a new Item in the child context
         let item = Item(context: ctx)
         item.id = UUID()
-        item.timestamp = Date()
+        let now = Date()
+        item.timestamp = now
+        item.createdAt = now
         
         // If a wardrobe was selected, re-fetch it in the child context and assign to item immediately
         // This ensures the wardrobe name appears in the UI right away
@@ -1004,29 +1024,81 @@ final class ItemAddViewModel: ObservableObject {
         self.draftItem = item
     }
     
+    @MainActor
     func persistToParent() throws {
         // Only save if there are actual changes
         guard childContext.hasChanges else { return }
         
+        // Require authentication before saving
+        guard SupabaseService.shared.isAuthenticated,
+              let userId = SupabaseService.shared.currentUser?.id else {
+            throw NSError(
+                domain: "ItemAdd",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "User must be authenticated to save items"]
+            )
+        }
+        
         // Mark as not draft (explicitly set to false for regular items)
         draftItem.isDraft = false
         
-        // Note: Wardrobe is already assigned in init, but if it wasn't (e.g., if user removed it),
-        // we ensure it's still assigned here as a fallback. However, since we assign it in init,
-        // this is mainly for safety. The wardrobe relationship should already be set.
+        // Set createdAt if not already set (for new items)
+        if draftItem.createdAt == nil {
+            draftItem.createdAt = Date()
+        }
+        
+        // Set updatedAt (this is a modification, even if it's a new item being finalized)
+        setUpdatedAt(draftItem)
+        
+        // Set userId on draft item before saving
+        if draftItem.userId == nil || draftItem.userId?.isEmpty == true {
+            draftItem.userId = userId.uuidString
+        }
         
         // Save the child context first
         try childContext.save()
         
+        // Get the item's objectID before saving parent (in case it changes)
+        let itemObjectID = draftItem.objectID
+        
         // Then save the parent context to persist to disk
-        if let parent = childContext.parent, parent.hasChanges {
+        // IMPORTANT: Always save parent if it exists, don't check hasChanges
+        // because child context save pushes changes to parent
+        if let parent = childContext.parent {
             do {
                 try parent.save()
                 
-                // After saving, refresh the item in the parent context to ensure photos relationship is up to date
-                let itemObjectID = draftItem.objectID
-                if !itemObjectID.isTemporaryID {
-                    parent.refresh(try parent.existingObject(with: itemObjectID), mergeChanges: true)
+                // After saving, get the item from parent context
+                // Use the objectID we captured before save
+                let savedItem: Item?
+                if itemObjectID.isTemporaryID {
+                    // If still temporary, try to get by ID
+                    if let itemId = draftItem.id {
+                        let request: NSFetchRequest<Item> = Item.fetchRequest()
+                        request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
+                        request.fetchLimit = 1
+                        savedItem = try parent.fetch(request).first
+                    } else {
+                        savedItem = nil
+                    }
+                } else {
+                    savedItem = try parent.existingObject(with: itemObjectID) as? Item
+                }
+                
+                    if let item = savedItem {
+                    parent.refresh(item, mergeChanges: true)
+                    
+                    // Ensure userId is set before syncing (should already be set above)
+                    if item.userId == nil || item.userId?.isEmpty == true {
+                        item.userId = userId.uuidString
+                        try parent.save()
+                    }
+                    
+                    // Trigger automatic sync for the saved item
+                    print("🔄 Triggering sync for newly saved item: \(item.name ?? "unnamed")")
+                        SyncService.shared.syncItemIfNeeded(item)
+                } else {
+                    print("⚠️ Could not find saved item in parent context for sync")
                 }
             } catch let error as NSError {
                 // Handle constraint conflicts specifically (error code 133021)
@@ -1037,10 +1109,33 @@ final class ItemAddViewModel: ObservableObject {
                     // Retry save after conflict resolution
                     try parent.save()
                     
-                    // Refresh after conflict resolution too
-                    let itemObjectID = draftItem.objectID
-                    if !itemObjectID.isTemporaryID {
-                        parent.refresh(try parent.existingObject(with: itemObjectID), mergeChanges: true)
+                    // Try to get item again after conflict resolution
+                    let savedItem: Item?
+                    if itemObjectID.isTemporaryID {
+                        if let itemId = draftItem.id {
+                            let request: NSFetchRequest<Item> = Item.fetchRequest()
+                            request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
+                            request.fetchLimit = 1
+                            savedItem = try parent.fetch(request).first
+                        } else {
+                            savedItem = nil
+                        }
+                    } else {
+                        savedItem = try parent.existingObject(with: itemObjectID) as? Item
+                    }
+                    
+                        if let item = savedItem {
+                        parent.refresh(item, mergeChanges: true)
+                        
+                        // Ensure userId is set before syncing (userId is already unwrapped from guard above)
+                        if item.userId == nil || item.userId?.isEmpty == true {
+                            item.userId = userId.uuidString
+                            try parent.save()
+                        }
+                        
+                        // Trigger automatic sync for the saved item
+                        print("🔄 Triggering sync for saved item (after conflict resolution): \(item.name ?? "unnamed")")
+                            SyncService.shared.syncItemIfNeeded(item)
                     }
                 } else {
                     throw error
@@ -1058,7 +1153,9 @@ final class ItemAddViewModel: ObservableObject {
         // Create a new Item in the child context for the next image in queue
         let item = Item(context: childContext)
         item.id = UUID()
-        item.timestamp = Date()
+        let now = Date()
+        item.timestamp = now
+        item.createdAt = now
         
         // Assign wardrobe if provided
         if let wardrobe = selectedWardrobe {
