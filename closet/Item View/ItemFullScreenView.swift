@@ -55,8 +55,8 @@ struct ItemFullScreenView: View {
     
     var body: some View {
         ZStack {
-            // White background
-            Color.white
+            // Full screen background
+            Color(red: 247/255, green: 247/255, blue: 247/255)
                 .ignoresSafeArea()
                 .onTapGesture {
                     isPresented = false

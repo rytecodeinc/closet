@@ -18,7 +18,7 @@ struct SetLinkView: View {
     @State private var linkToEdit: Link? = nil
 
     var body: some View {
-        SelectionHeader(title: "Purchase Links")
+        SelectionHeader(title: "Links")
 
         VStack(spacing: 16) {
             Button(action: {
@@ -84,10 +84,16 @@ struct SetLinkView: View {
                         item.addToLinks(newLink)
                     }
                     
+                    // Set updatedAt since we're modifying the item
+                    setUpdatedAt(item)
+                    
                     // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
                     if viewContext.parent == nil {
                         do {
                             try viewContext.save()
+                            
+                            // Trigger automatic sync for the modified item
+                            SyncService.shared.syncItemIfNeeded(item)
                         } catch {
                             print("❌ Failed to save link: \(error.localizedDescription)")
                         }
@@ -134,10 +140,16 @@ struct SetLinkView: View {
             viewContext.delete(linkToDelete)
         }
         
+        // Set updatedAt since we're modifying the item
+        setUpdatedAt(item)
+        
         // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
         if viewContext.parent == nil {
             do {
                 try viewContext.save()
+                
+                // Trigger automatic sync for the modified item
+                SyncService.shared.syncItemIfNeeded(item)
             } catch {
                 print("❌ Failed to save link deletion: \(error.localizedDescription)")
             }

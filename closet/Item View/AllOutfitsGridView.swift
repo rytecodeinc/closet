@@ -24,13 +24,14 @@ struct AllOutfitsGridView: View {
     }
     
     private let columns = [
-        GridItem(.flexible(), spacing: 6),
-        GridItem(.flexible(), spacing: 6)
+        GridItem(.flexible(), spacing: 2),
+        GridItem(.flexible(), spacing: 2),
+        GridItem(.flexible(), spacing: 2)
     ]
 
     var body: some View {
         ScrollView {
-            LazyVGrid(columns: columns, spacing: 6) {
+            LazyVGrid(columns: columns, spacing: 2) {
                 ForEach(outfits, id: \.objectID) { outfit in
                     NavigationLink(destination: OutfitDetailView(outfit: outfit)) {
                         OutfitGridCell(outfit: outfit)
@@ -49,7 +50,7 @@ private struct OutfitGridCell: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             OutfitImageView(outfit: outfit)
-                .frame(height: UIScreen.main.bounds.width * 0.5)
+                .frame(height: UIScreen.main.bounds.width * 0.3)
                // .cornerRadius(10)
                /* .overlay(
                     RoundedRectangle(cornerRadius: 10)

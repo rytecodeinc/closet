@@ -12,18 +12,23 @@ import UIKit
 class ImageQueueCoordinator: ObservableObject {
     @Published private(set) var imageQueue: [UIImage] = []
     @Published private(set) var currentIndex: Int = 0
+    @Published var currentCroppedImage: UIImage? = nil // Store the currently cropped image
     
-    var hasMore: Bool {
-        currentIndex < imageQueue.count - 1
+    var hasMore: Bool { 
+        currentIndex < imageQueue.count - 1 
     }
     
-    var remainingCount: Int {
+    var remainingCount: Int { 
         max(0, imageQueue.count - currentIndex - 1)
     }
     
-    var currentImage: UIImage? {
+    var currentImage: UIImage? { 
         guard currentIndex < imageQueue.count else { return nil }
-        return imageQueue[currentIndex]
+        return imageQueue[currentIndex] 
+    }
+    
+    var nextCroppedImage: UIImage? {
+        return currentCroppedImage
     }
     
     var isQueueActive: Bool {
@@ -33,7 +38,13 @@ class ImageQueueCoordinator: ObservableObject {
     func loadQueue(_ images: [UIImage]) {
         self.imageQueue = images
         self.currentIndex = 0
+        self.currentCroppedImage = nil
         print("📸 Queue loaded with \(images.count) images")
+    }
+    
+    func storeCroppedImage(_ image: UIImage) {
+        self.currentCroppedImage = image
+        print("📸 Stored cropped image for index \(currentIndex)")
     }
     
     func moveToNext() {
@@ -42,6 +53,7 @@ class ImageQueueCoordinator: ObservableObject {
             return
         }
         currentIndex += 1
+        currentCroppedImage = nil // Clear the cropped image for next item
         print("📸 ✅ Moved to next image (currentIndex: \(currentIndex), remaining: \(remainingCount))")
     }
     
@@ -49,6 +61,7 @@ class ImageQueueCoordinator: ObservableObject {
         print("📸 Clearing queue (had \(imageQueue.count) images)")
         imageQueue.removeAll()
         currentIndex = 0
+        currentCroppedImage = nil
     }
 }
 

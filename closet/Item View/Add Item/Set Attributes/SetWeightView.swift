@@ -102,7 +102,20 @@ struct SetWeightView: View {
                     .padding(.horizontal)
                 }
                 .padding(.vertical, 8)
+                
                 Spacer()
+                
+                // Save Button
+                HStack {
+                    Spacer()
+                    Button("Save") {
+                        saveWeight()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.horizontal)
+                    Spacer()
+                }
+                .padding(.bottom)
             }
         }
         .onAppear {
@@ -111,9 +124,6 @@ struct SetWeightView: View {
             loadExistingWeight()
             previousUnit = selectedUnit
             isLoading = false
-        }
-        .onDisappear {
-            applyWeightToItem()
         }
         .presentationDetents([.medium])
     }
@@ -275,7 +285,13 @@ struct SetWeightView: View {
                     return
                 }
                 
+                // Set updatedAt on item since we're modifying it
+                setUpdatedAt(item)
+                
                 try viewContext.save()
+                
+                // Trigger automatic sync for the modified item
+                SyncService.shared.syncItemIfNeeded(item)
                 
                 // Verify the save by reading back the value
                 viewContext.refresh(item, mergeChanges: false)
@@ -295,6 +311,12 @@ struct SetWeightView: View {
             // We're in a child context (ItemAddView), changes will be saved when parent saves
             print("✅ Weight set in child context (will be saved with item)")
         }
+    }
+    
+    // MARK: - Save Weight
+    private func saveWeight() {
+        applyWeightToItem()
+        dismiss()
     }
     
     private func validateWeightInput() {

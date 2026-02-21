@@ -32,7 +32,9 @@ struct PersistenceController {
         // Seed items and attach them to one of the wardrobes
         for i in 0..<11 {
             let newItem = Item(context: viewContext)
-            newItem.timestamp = Date()
+            let now = Date()
+            newItem.timestamp = now
+            newItem.createdAt = now
             
             if i < 5 {
                 newItem.isWishlist = true

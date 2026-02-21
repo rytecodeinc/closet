@@ -8,31 +8,38 @@
 import SwiftUI
 import CoreData
 
+enum TemperatureUnit: String, CaseIterable {
+    case celsius = "Celsius"
+    case fahrenheit = "Fahrenheit"
+    
+    var isCelsius: Bool {
+        self == .celsius
+    }
+}
+
 struct SetWeatherView: View {
     @ObservedObject var item: Item
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
     
-    @State private var selectedRanges: Set<Int> = [] // Store range indices (0-9, 10-19, etc.)
     @State private var manualMinInput: String = ""
     @State private var manualMaxInput: String = ""
-    @State private var isCelsius: Bool = true
+    @State private var selectedUnit: TemperatureUnit = Locale.current.measurementSystem == .metric ? .celsius : .fahrenheit
+    @State private var sliderMinValue: Double = -33.0  // Will be updated in onAppear
+    @State private var sliderMaxValue: Double = 110.0  // Will be updated in onAppear
+    @State private var isLoading: Bool = true  // Prevents conversion during initial load
+    @State private var previousUnit: TemperatureUnit? = nil  // Track previous unit to detect user changes
     
-    // Temperature ranges for Celsius: -36 to 43 (groups of 10, max 43°C ≈ 110°F)
-    private let celsiusRanges: [(min: Double, max: Double)] = [
-        (-36, -27), (-26, -17), (-16, -7), (-6, 3), (4, 13),
-        (14, 23), (24, 33), (34, 43)
-    ]
+    var isCelsius: Bool {
+        selectedUnit.isCelsius
+    }
     
-    // Temperature ranges for Fahrenheit: -33 to 110 (groups of 10)
-    private let fahrenheitRanges: [(min: Double, max: Double)] = [
-        (-33, -24), (-23, -14), (-13, -4), (-3, 6), (7, 16), (17, 26),
-        (27, 36), (37, 46), (47, 56), (57, 66), (67, 76), (77, 86),
-        (87, 96), (97, 106), (107, 110)
-    ]
+    var minLimit: Double {
+        isCelsius ? -36.0 : -33.0
+    }
     
-    var currentRanges: [(min: Double, max: Double)] {
-        isCelsius ? celsiusRanges : fahrenheitRanges
+    var maxLimit: Double {
+        isCelsius ? 43.0 : 110.0
     }
     
     var temperatureSymbol: String {
@@ -45,220 +52,130 @@ struct SetWeatherView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            SelectionHeader(title: "Set Weather Range")
+            SelectionHeader(title: "Set Weather")
             
-            VStack(spacing: 16) {
-                // Celsius/Fahrenheit Toggle
-                HStack {
-                    Text("Celsius")
-                        .foregroundColor(isCelsius ? .primary : .secondary)
-                    Toggle("", isOn: $isCelsius)
-                        .labelsHidden()
-                        .onChange(of: isCelsius) {
-                            convertBetweenUnits()
-                        }
-                    Text("Fahrenheit")
-                        .foregroundColor(!isCelsius ? .primary : .secondary)
+            // Segmented picker for temperature unit
+            Picker("Temperature Unit", selection: $selectedUnit) {
+                ForEach(TemperatureUnit.allCases, id: \.self) { unit in
+                    Text(unit.rawValue).tag(unit)
                 }
-                .padding(.horizontal)
-                .padding(.top)
-                
-                Divider()
-                
-                // Manual Input Section
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(Color(UIColor.secondarySystemBackground))
+            .onChange(of: selectedUnit) { newUnit in
+                // Only convert if:
+                // 1. We're not loading AND
+                // 2. The value actually changed from a previous value (user-initiated change)
+                if !isLoading, let previous = previousUnit, previous != newUnit {
+                    convertBetweenUnits()
+                }
+                // Update previous value for next time
+                previousUnit = newUnit
+            }
+            
+            VStack(spacing: 6) {
+                // Temperature Range Section
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Manual Entry")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal)
-                    
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Min")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            TextField("Min", text: $manualMinInput)
-                                .keyboardType(.numbersAndPunctuation)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .onChange(of: manualMinInput) {
-                                    updateRangesFromManualInput()
-                                }
+                    // Range Slider
+                    VStack(spacing: 0) {
+                        RangeSlider(
+                            minValue: $sliderMinValue,
+                            maxValue: $sliderMaxValue,
+                            bounds: minLimit...maxLimit
+                        )
+                        .padding(.horizontal, 4)
+                        .onChange(of: sliderMinValue) {
+                            updateMinInputFromSlider()
+                        }
+                        .onChange(of: sliderMaxValue) {
+                            updateMaxInputFromSlider()
                         }
                         
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Max")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            TextField("Max", text: $manualMaxInput)
-                                .keyboardType(.numbersAndPunctuation)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .onChange(of: manualMaxInput) {
-                                    updateRangesFromManualInput()
-                                }
+                        // Min and Max Input Fields
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                TextField("Min", text: $manualMinInput)
+                                    .keyboardType(.numbersAndPunctuation)
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    .onChange(of: manualMinInput) {
+                                        validateMinInput()
+                                    }
+                                Text("Min \(temperatureSymbol)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .frame(maxWidth: 100)
+                            
+                            Spacer()
+                            
+                            VStack(alignment: .leading, spacing: 4) {
+                                TextField("Max", text: $manualMaxInput)
+                                    .keyboardType(.numbersAndPunctuation)
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    .onChange(of: manualMaxInput) {
+                                        validateMaxInput()
+                                    }
+                                    .multilineTextAlignment(.trailing)
+                                Text("Max \(temperatureSymbol)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .trailing)
+                            }
+                            .frame(maxWidth: 100)
                         }
                     }
                     .padding(.horizontal)
                 }
                 .padding(.vertical, 8)
                 
-                Divider()
-                
-                // Range Selection Section
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Select Ranges (Groups of 10)")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal)
-                    
-                    ScrollView {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 8)], spacing: 8) {
-                            ForEach(Array(currentRanges.enumerated()), id: \.offset) { index, range in
-                                rangeButton(index: index, range: range)
-                            }
-                        }
-                        .padding(.horizontal)
-                    }
-                }
-                .frame(maxHeight: 300)
-                
                 Spacer()
+                
+                // Save Button
+                HStack {
+                    Spacer()
+                    Button("Save") {
+                        saveWeather()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.horizontal)
+                    Spacer()
+                }
+                .padding(.bottom)
             }
-            
-            // Save button
-            Button("Save") {
-                saveWeather()
-            }
-            .buttonStyle(.borderedProminent)
-            .padding(.horizontal)
-            .padding(.bottom)
         }
         .onAppear {
+            isLoading = true
+            previousUnit = selectedUnit  // Set initial previous value
             loadExistingWeather()
+            // Set previous value to the loaded value AFTER loading
+            previousUnit = selectedUnit
+            isLoading = false  // After loading, allow conversion on toggle
         }
-        .presentationDetents([.medium, .large])
-    }
-    
-    // MARK: - Range Button
-    private func rangeButton(index: Int, range: (min: Double, max: Double)) -> some View {
-        Button(action: {
-            toggleRange(index)
-        }) {
-            Text("\(Int(range.min))-\(Int(range.max))\(temperatureSymbol)")
-                .font(.caption)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(selectedRanges.contains(index) ? Color.blue : Color(.systemGray5))
-                .foregroundColor(selectedRanges.contains(index) ? .white : .primary)
-                .cornerRadius(8)
-        }
-    }
-    
-    // MARK: - Toggle Range
-    private func toggleRange(_ index: Int) {
-        if selectedRanges.contains(index) {
-            selectedRanges.remove(index)
-        } else {
-            selectedRanges.insert(index)
-            // Automatically fill in gaps between selected ranges
-            fillGapsInRanges()
-        }
-        updateManualInputFromRanges()
-    }
-    
-    // MARK: - Fill Gaps
-    private func fillGapsInRanges() {
-        guard !selectedRanges.isEmpty else { return }
-        let sorted = selectedRanges.sorted()
-        let minIndex = sorted.first!
-        let maxIndex = sorted.last!
-        
-        // Validate indices are within bounds
-        guard minIndex >= 0 && maxIndex < currentRanges.count else { return }
-        
-        // Fill all ranges between min and max
-        for index in minIndex...maxIndex {
-            selectedRanges.insert(index)
-        }
-    }
-    
-    // MARK: - Update Manual Input from Ranges
-    private func updateManualInputFromRanges() {
-        guard !selectedRanges.isEmpty else {
-            manualMinInput = ""
-            manualMaxInput = ""
-            return
-        }
-        
-        // Filter out invalid indices and sort
-        let validIndices = selectedRanges.filter { $0 >= 0 && $0 < currentRanges.count }
-        guard !validIndices.isEmpty else {
-            selectedRanges.removeAll()
-            manualMinInput = ""
-            manualMaxInput = ""
-            return
-        }
-        
-        let sorted = validIndices.sorted()
-        let minIndex = sorted.first!
-        let maxIndex = sorted.last!
-        
-        // Ensure indices are still valid
-        guard minIndex >= 0 && minIndex < currentRanges.count,
-              maxIndex >= 0 && maxIndex < currentRanges.count else {
-            return
-        }
-        
-        let minRange = currentRanges[minIndex]
-        let maxRange = currentRanges[maxIndex]
-        
-        manualMinInput = String(Int(round(minRange.min)))
-        manualMaxInput = String(Int(round(maxRange.max)))
-        
-        // Update selectedRanges to only include valid indices
-        selectedRanges = Set(validIndices)
-    }
-    
-    // MARK: - Update Ranges from Manual Input
-    private func updateRangesFromManualInput() {
-        guard let minValue = Double(manualMinInput),
-              let maxValue = Double(manualMaxInput) else {
-            // Invalid input, don't update ranges
-            return
-        }
-        
-        // Use the helper function to select ranges
-        selectRangesForMinMax(min: minValue, max: maxValue)
-        
-        // Update manual input with constrained values if they changed
-        // Get the constrained values by checking limits
-        let maxLimit = isCelsius ? 43.0 : 110.0
-        let minLimit = isCelsius ? -36.0 : -33.0
-        
-        let constrainedMin = Swift.max(minValue, minLimit)
-        let constrainedMax = Swift.min(maxValue, maxLimit)
-        
-        // Update manual input if values were constrained
-        if constrainedMin != minValue || constrainedMax != maxValue {
-            manualMinInput = String(Int(round(constrainedMin)))
-            manualMaxInput = String(Int(round(constrainedMax)))
-            // Re-select ranges with constrained values
-            selectRangesForMinMax(min: constrainedMin, max: constrainedMax)
-        }
+        .presentationDetents([.medium])
     }
     
     // MARK: - Convert Between Units
     private func convertBetweenUnits() {
-        // Convert using manual input values instead of range indices to avoid index issues
+        // CRITICAL: Read values from INPUT fields (current display values)
         guard let minValue = Double(manualMinInput),
               let maxValue = Double(manualMaxInput),
+              minValue.isFinite && maxValue.isFinite,
+              !minValue.isNaN && !maxValue.isNaN,
               minValue < maxValue,
               (maxValue - minValue) >= 1.0 else {
-            // If no valid manual input, clear selection
-            selectedRanges.removeAll()
+            // If inputs are invalid, initialize to bounds
+            let currentMinLimit = self.minLimit
+            let currentMaxLimit = self.maxLimit
+            manualMinInput = String(Int(currentMinLimit))
+            manualMaxInput = String(Int(currentMaxLimit))
+            sliderMinValue = currentMinLimit
+            sliderMaxValue = currentMaxLimit
             return
         }
         
-        // Convert the values (they're already in the OLD unit, isCelsius has already toggled)
+        // These values are in the OLD unit (isCelsius has already toggled)
         // So if isCelsius is NOW true, we were in Fahrenheit before
         let oldMin = minValue
         let oldMax = maxValue
@@ -277,165 +194,204 @@ struct SetWeatherView: View {
             newMax = (oldMax * 9/5) + 32
         }
         
-        // Round first to get integer values (this is what we display)
+        // Round first to get integer values
         newMin = round(newMin)
         newMax = round(newMax)
         
         // Apply constraints after rounding
-        let maxLimit = isCelsius ? 43.0 : 110.0
-        let minLimit = isCelsius ? -36.0 : -33.0
-        
-        let constrainedMin = max(newMin, minLimit)
-        let constrainedMax = min(newMax, maxLimit)
+        let constrainedMin = max(newMin, self.minLimit)
+        let constrainedMax = min(newMax, self.maxLimit)
         
         // Ensure min is still at least 1 less than max after constraints
         guard constrainedMin < constrainedMax, (constrainedMax - constrainedMin) >= 1.0 else {
-            selectedRanges.removeAll()
+            // If constraint broke the relationship, use bounds
+            let currentMinLimit = self.minLimit
+            let currentMaxLimit = self.maxLimit
+            manualMinInput = String(Int(currentMinLimit))
+            manualMaxInput = String(Int(currentMaxLimit))
+            sliderMinValue = currentMinLimit
+            sliderMaxValue = currentMaxLimit
             return
         }
         
-        // Update manual input with converted and constrained values (already rounded)
+        // Update BOTH inputs AND slider values with converted values
         manualMinInput = String(Int(constrainedMin))
         manualMaxInput = String(Int(constrainedMax))
+        sliderMinValue = constrainedMin
+        sliderMaxValue = constrainedMax
         
-        // Find corresponding ranges in new unit based on converted values
-        selectedRanges.removeAll()
-        for (index, range) in currentRanges.enumerated() {
-            if range.max >= constrainedMin && range.min <= constrainedMax {
-                selectedRanges.insert(index)
-            }
-        }
+        print("🔄 Unit converted: \(oldMin) to \(constrainedMin), \(oldMax) to \(constrainedMax) (\(isCelsius ? "°C" : "°F"))")
     }
     
     // MARK: - Load Existing Weather
     private func loadExistingWeather() {
-        // Set unit preference first
-        if let unit = item.temperatureUnit {
-            isCelsius = (unit == "C")
+        // STEP 1: Set unit preference first (CRITICAL: do this before loading/converting values)
+        let savedUnit = item.primitiveValue(forKey: "temperatureUnit") as? String
+        let newUnit: TemperatureUnit
+        if let unit = savedUnit {
+            newUnit = (unit == "C") ? .celsius : .fahrenheit
         } else {
-            isCelsius = Locale.current.measurementSystem == .metric
+            newUnit = Locale.current.measurementSystem == .metric ? .celsius : .fahrenheit
         }
         
-        // Load existing values (stored in Celsius)
-        let minC = item.primitiveValue(forKey: "minTemperature") as? Double
-        let maxC = item.primitiveValue(forKey: "maxTemperature") as? Double
+        // Set both selectedUnit and previousUnit together to prevent onChange from triggering
+        selectedUnit = newUnit
+        previousUnit = newUnit  // Set immediately to prevent conversion trigger
         
-        guard let minC = minC, let maxC = maxC else {
+        // STEP 2: Load existing values (stored in Celsius in Core Data)
+        let rawMinC = item.primitiveValue(forKey: "minTemperature") as? Double
+        let rawMaxC = item.primitiveValue(forKey: "maxTemperature") as? Double
+        
+        // Debug: Print what we're loading
+        if let minC = rawMinC, let maxC = rawMaxC {
+            print("📖 Loading weather: minC=\(minC), maxC=\(maxC), savedUnit=\(savedUnit ?? "nil"), isCelsius=\(isCelsius)")
+        }
+        
+        guard let minC = rawMinC,
+              let maxC = rawMaxC,
+              minC.isFinite && maxC.isFinite,
+              !minC.isNaN && !maxC.isNaN else {
+            // No existing data - initialize to bounds for current unit
+            let currentMinLimit = self.minLimit
+            let currentMaxLimit = self.maxLimit
+            sliderMinValue = currentMinLimit
+            sliderMaxValue = currentMaxLimit
+            manualMinInput = String(Int(currentMinLimit))
+            manualMaxInput = String(Int(currentMaxLimit))
+            print("📖 No saved weather, initializing to bounds: \(Int(currentMinLimit)) to \(Int(currentMaxLimit))")
             return
         }
         
-        // Convert to display unit if needed
-        let minDisplay = isCelsius ? minC : (minC * 9/5) + 32
-        let maxDisplay = isCelsius ? maxC : (maxC * 9/5) + 32
+        // STEP 3: Convert from stored Celsius to display unit
+        // Values are ALWAYS stored in Celsius, so we convert based on isCelsius
+        let minDisplay: Double
+        let maxDisplay: Double
         
-        // Round the display values
-        let minRounded = round(minDisplay)
-        let maxRounded = round(maxDisplay)
+        if isCelsius {
+            // Displaying in Celsius - use values directly
+            minDisplay = minC
+            maxDisplay = maxC
+        } else {
+            // Displaying in Fahrenheit - convert from Celsius
+            minDisplay = (minC * 9/5) + 32
+            maxDisplay = (maxC * 9/5) + 32
+        }
         
-        // Set manual input
+        print("📖 Converted: minDisplay=\(minDisplay), maxDisplay=\(maxDisplay), isCelsius=\(isCelsius)")
+        
+        // STEP 4: Validate converted values
+        guard minDisplay.isFinite && maxDisplay.isFinite,
+              !minDisplay.isNaN && !maxDisplay.isNaN else {
+            print("❌ Conversion failed, using bounds")
+            let currentMinLimit = self.minLimit
+            let currentMaxLimit = self.maxLimit
+            sliderMinValue = currentMinLimit
+            sliderMaxValue = currentMaxLimit
+            manualMinInput = String(Int(currentMinLimit))
+            manualMaxInput = String(Int(currentMaxLimit))
+            return
+        }
+        
+        // STEP 5: Round to integers for display
+        var minRounded = round(minDisplay)
+        var maxRounded = round(maxDisplay)
+        
+        // STEP 6: Ensure values are within bounds for the current unit
+        let currentMinLimit = self.minLimit
+        let currentMaxLimit = self.maxLimit
+        
+        // Only constrain if values are actually out of bounds
+        if minRounded < currentMinLimit {
+            print("⚠️ minRounded (\(minRounded)) below minLimit (\(currentMinLimit)), constraining")
+            minRounded = currentMinLimit
+        }
+        if maxRounded > currentMaxLimit {
+            print("⚠️ maxRounded (\(maxRounded)) above maxLimit (\(currentMaxLimit)), constraining")
+            maxRounded = currentMaxLimit
+        }
+        
+        // STEP 7: Ensure min < max after constraint
+        guard minRounded < maxRounded else {
+            print("❌ After constraint, min >= max (\(minRounded) >= \(maxRounded)), using bounds")
+            let defaultMin = currentMinLimit
+            let defaultMax = currentMaxLimit
+            sliderMinValue = defaultMin
+            sliderMaxValue = defaultMax
+            manualMinInput = String(Int(defaultMin))
+            manualMaxInput = String(Int(defaultMax))
+            return
+        }
+        
+        // STEP 8: Update UI with loaded values
         manualMinInput = String(Int(minRounded))
         manualMaxInput = String(Int(maxRounded))
+        sliderMinValue = minRounded
+        sliderMaxValue = maxRounded
         
-        // Select corresponding ranges using the rounded values directly
-        selectRangesForMinMax(min: minRounded, max: maxRounded)
+        print("✅ Loaded weather: \(Int(minRounded)) to \(Int(maxRounded)) (\(isCelsius ? "°C" : "°F"))")
     }
     
-    // MARK: - Select Ranges for Min/Max Values
-    private func selectRangesForMinMax(min minValue: Double, max maxValue: Double) {
-        // Validate: min must be at least 1 less than max
-        guard minValue < maxValue, (maxValue - minValue) >= 1.0 else {
+    // MARK: - Apply Weather to Item
+    private func applyWeatherToItem() {
+        // Check if manual input is valid
+        guard let manualMin = Double(manualMinInput),
+              let manualMax = Double(manualMaxInput),
+              manualMin < manualMax,
+              (manualMax - manualMin) >= 1.0 else {
+            // Clear weather data if input is invalid
+            // Use setValue to properly trigger change notifications
+            _ = item.primitiveValue(forKey: "minTemperature")
+            _ = item.primitiveValue(forKey: "maxTemperature")
+            _ = item.primitiveValue(forKey: "temperatureUnit")
+            
+            item.setValue(nil, forKey: "minTemperature")
+            item.setValue(nil, forKey: "maxTemperature")
+            item.setValue(nil, forKey: "temperatureUnit")
+            
+            // Mark item as changed to trigger UI refresh
+            item.objectWillChange.send()
+            viewContext.processPendingChanges()
+            
+            // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
+            // If viewContext has a parent, we're in a child context and shouldn't save
+            if viewContext.parent == nil {
+                // We're in a parent context (ItemDetailView), save immediately
+                do {
+                    guard viewContext.hasChanges else {
+                        print("⚠️ No changes to save in context")
+                        return
+                    }
+                    
+                    // Set updatedAt on item since we're modifying it
+                    setUpdatedAt(item)
+                    
+                    try viewContext.save()
+                    viewContext.refresh(item, mergeChanges: false)
+                    print("✅ Weather cleared successfully")
+                } catch {
+                    print("❌ Failed to save weather: \(error.localizedDescription)")
+                    if let nsError = error as NSError? {
+                        print("❌ Error details: \(nsError.userInfo)")
+                    }
+                }
+            } else {
+                print("✅ Weather cleared in child context (will be saved with item)")
+            }
+            // Otherwise, we're in a child context (ItemAddView), don't save - let parent handle it
             return
         }
         
-        // Constrain max to 110°F (43°C) and min to -33°F (-36°C)
-        let maxLimit = isCelsius ? 43.0 : 110.0
-        let minLimit = isCelsius ? -36.0 : -33.0
-        
-        let constrainedMin = Swift.max(minValue, minLimit)
-        let constrainedMax = Swift.min(maxValue, maxLimit)
+        // Apply constraints
+        let constrainedMin = max(manualMin, self.minLimit)
+        let constrainedMax = min(manualMax, self.maxLimit)
         
         // Ensure min is still at least 1 less than max after constraints
         guard constrainedMin < constrainedMax, (constrainedMax - constrainedMin) >= 1.0 else {
             return
         }
         
-        // Find which ranges should be selected based on min/max
-        selectedRanges.removeAll()
-        for (index, range) in currentRanges.enumerated() {
-            // Select range if it overlaps with the min-max range
-            if range.max >= constrainedMin && range.min <= constrainedMax {
-                selectedRanges.insert(index)
-            }
-        }
-    }
-    
-    // MARK: - Save Weather
-    private func saveWeather() {
-        guard !selectedRanges.isEmpty else {
-            // Clear weather data
-            item.setPrimitiveValue(nil, forKey: "minTemperature")
-            item.setPrimitiveValue(nil, forKey: "maxTemperature")
-            item.temperatureUnit = nil
-            
-            if viewContext.parent == nil {
-                try? viewContext.save()
-            }
-            dismiss()
-            return
-        }
-        
-        // Determine min and max values
-        let minValue: Double
-        let maxValue: Double
-        
-        // Constraints
-        let maxLimit = isCelsius ? 43.0 : 110.0
-        let minLimit = isCelsius ? -36.0 : -33.0
-        
-        // Use manual input if available and valid, otherwise use range boundaries
-        if let manualMin = Double(manualMinInput),
-           let manualMax = Double(manualMaxInput),
-           manualMin < manualMax,
-           (manualMax - manualMin) >= 1.0 {
-            // Apply constraints
-            let constrainedMin = max(manualMin, minLimit)
-            let constrainedMax = min(manualMax, maxLimit)
-            
-            // Ensure min is still at least 1 less than max after constraints
-            guard constrainedMin < constrainedMax, (constrainedMax - constrainedMin) >= 1.0 else {
-                return
-            }
-            
-            minValue = constrainedMin
-            maxValue = constrainedMax
-        } else {
-            // Fallback to range boundaries
-            let validIndices = selectedRanges.filter { $0 >= 0 && $0 < currentRanges.count }
-            guard !validIndices.isEmpty else {
-                return
-            }
-            let sorted = validIndices.sorted()
-            let minIndex = sorted.first!
-            let maxIndex = sorted.last!
-            guard minIndex >= 0 && minIndex < currentRanges.count,
-                  maxIndex >= 0 && maxIndex < currentRanges.count else {
-                return
-            }
-            let minRange = currentRanges[minIndex]
-            let maxRange = currentRanges[maxIndex]
-            
-            // Apply constraints to range boundaries
-            let constrainedMin = max(minRange.min, minLimit)
-            let constrainedMax = min(maxRange.max, maxLimit)
-            
-            // Ensure min is still at least 1 less than max after constraints
-            guard constrainedMin < constrainedMax, (constrainedMax - constrainedMin) >= 1.0 else {
-                return
-            }
-            
-            minValue = constrainedMin
-            maxValue = constrainedMax
-        }
+        let minValue = constrainedMin
+        let maxValue = constrainedMax
         
         // Convert to Celsius for storage
         let minC: Double
@@ -449,20 +405,183 @@ struct SetWeatherView: View {
             maxC = (maxValue - 32) * 5/9
         }
         
-        // Save to Core Data
-        item.setPrimitiveValue(minC, forKey: "minTemperature")
-        item.setPrimitiveValue(maxC, forKey: "maxTemperature")
-        item.temperatureUnit = temperatureUnit
-        
-        // Save context if parent context
-        if viewContext.parent == nil {
-            do {
-                try viewContext.save()
-            } catch {
-                print("❌ Failed to save weather: \(error.localizedDescription)")
-            }
+        // Validate converted values before saving
+        guard minC.isFinite && maxC.isFinite,
+              !minC.isNaN && !maxC.isNaN,
+              minC < maxC else {
+            print("❌ Invalid temperature values to save: minC=\(minC), maxC=\(maxC)")
+            return
         }
         
+        // Save to Core Data - use setValue to properly trigger change notifications
+        // First ensure the values are accessed (not faults)
+        _ = item.primitiveValue(forKey: "minTemperature")
+        _ = item.primitiveValue(forKey: "maxTemperature")
+        _ = item.primitiveValue(forKey: "temperatureUnit")
+        
+        // Now set the values using setValue which properly notifies Core Data
+        item.setValue(minC, forKey: "minTemperature")
+        item.setValue(maxC, forKey: "maxTemperature")
+        item.setValue(temperatureUnit, forKey: "temperatureUnit")
+        
+        // Debug: Print what we're saving
+        print("💾 Saving weather: minC=\(minC), maxC=\(maxC), unit=\(temperatureUnit), displayMin=\(Int(minValue)), displayMax=\(Int(maxValue))")
+        
+        // Mark item as changed to trigger UI refresh
+        item.objectWillChange.send()
+        
+        // Process pending changes to ensure Core Data tracks the changes
+        viewContext.processPendingChanges()
+        
+        // Set updatedAt since we're modifying the item
+        setUpdatedAt(item)
+        
+        // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
+        // If viewContext has a parent, we're in a child context and shouldn't save
+        if viewContext.parent == nil {
+            // We're in a parent context (ItemDetailView), save immediately
+            do {
+                // Ensure we have changes to save
+                guard viewContext.hasChanges else {
+                    print("⚠️ No changes to save in context")
+                    return
+                }
+                
+                try viewContext.save()
+                
+                // Trigger automatic sync for the modified item
+                SyncService.shared.syncItemIfNeeded(item)
+                
+                // Verify the save by reading back the values
+                viewContext.refresh(item, mergeChanges: false)
+                if let savedMinC = item.primitiveValue(forKey: "minTemperature") as? Double,
+                   let savedMaxC = item.primitiveValue(forKey: "maxTemperature") as? Double,
+                   let savedUnit = item.primitiveValue(forKey: "temperatureUnit") as? String {
+                    print("✅ Weather saved successfully to persistent store: minC=\(savedMinC), maxC=\(savedMaxC), unit=\(savedUnit)")
+                } else {
+                    print("⚠️ Warning: Weather save may have failed - values not found after save")
+                }
+            } catch {
+                print("❌ Failed to save weather: \(error.localizedDescription)")
+                if let nsError = error as NSError? {
+                    print("❌ Error details: \(nsError.userInfo)")
+                }
+            }
+        } else {
+            // We're in a child context (ItemAddView), changes will be saved when parent saves
+            print("✅ Weather set in child context (will be saved with item)")
+        }
+    }
+    
+    // MARK: - Save Weather
+    private func saveWeather() {
+        applyWeatherToItem()
         dismiss()
+    }
+    
+    // MARK: - Validate Inputs (similar to Apple's TextField validation)
+    private func validateMinInput() {
+        guard let value = Double(manualMinInput),
+              value.isFinite,
+              !value.isNaN else {
+            // If invalid, revert to slider value
+            manualMinInput = String(Int(round(sliderMinValue)))
+            return
+        }
+        
+        // Validate and constrain: min(max(bounds.lowerBound, value), maxValue)
+        let validatedValue = min(max(self.minLimit, value), sliderMaxValue - 1)
+        sliderMinValue = validatedValue
+        manualMinInput = String(Int(round(validatedValue)))
+    }
+    
+    private func validateMaxInput() {
+        guard let value = Double(manualMaxInput),
+              value.isFinite,
+              !value.isNaN else {
+            // If invalid, revert to slider value
+            manualMaxInput = String(Int(round(sliderMaxValue)))
+            return
+        }
+        
+        // Validate and constrain: max(min(bounds.upperBound, value), minValue)
+        let validatedValue = max(min(self.maxLimit, value), sliderMinValue + 1)
+        sliderMaxValue = validatedValue
+        manualMaxInput = String(Int(round(validatedValue)))
+    }
+    
+    // MARK: - Update Inputs from Slider
+    private func updateMinInputFromSlider() {
+        manualMinInput = String(Int(round(sliderMinValue)))
+    }
+    
+    private func updateMaxInputFromSlider() {
+        manualMaxInput = String(Int(round(sliderMaxValue)))
+    }
+}
+
+// MARK: - Range Slider Component
+struct RangeSlider: View {
+    @Binding var minValue: Double
+    @Binding var maxValue: Double
+    let bounds: ClosedRange<Double>
+    
+    var body: some View {
+        GeometryReader { geo in
+            let width = geo.size.width
+            
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(.gray.opacity(0.3))
+                    .frame(height: 4)
+                
+                Capsule()
+                    .fill(.blue)
+                    .frame(
+                        width: thumbX(maxValue, width) - thumbX(minValue, width),
+                        height: 4
+                    )
+                    .offset(x: thumbX(minValue, width))
+                
+                Thumb(x: thumbX(minValue, width))
+                    .gesture(dragGesture(isMin: true, width: width))
+                
+                Thumb(x: thumbX(maxValue, width))
+                    .gesture(dragGesture(isMin: false, width: width))
+            }
+        }
+        .frame(height: 32)
+    }
+    
+    private func dragGesture(isMin: Bool, width: CGFloat) -> some Gesture {
+        DragGesture()
+            .onChanged { value in
+                let percent = min(max(0, value.location.x / width), 1)
+                let newValue = bounds.lowerBound +
+                    percent * (bounds.upperBound - bounds.lowerBound)
+                
+                if isMin {
+                    minValue = min(newValue, maxValue - 1)
+                } else {
+                    maxValue = max(newValue, minValue + 1)
+                }
+            }
+    }
+    
+    private func thumbX(_ value: Double, _ width: CGFloat) -> CGFloat {
+        CGFloat((value - bounds.lowerBound) / (bounds.upperBound - bounds.lowerBound)) * width
+    }
+}
+
+// MARK: - Thumb Component
+struct Thumb: View {
+    let x: CGFloat
+    
+    var body: some View {
+        Circle()
+            .fill(.blue)
+            .frame(width: 20, height: 20)
+            .shadow(radius: 2)
+            .offset(x: x - 10)
     }
 }

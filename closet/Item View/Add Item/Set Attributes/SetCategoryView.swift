@@ -20,7 +20,7 @@ struct SetCategoryView: View {
 
     var body: some View {
         VStack {
-            SelectionHeader(title: "Select a Category")
+            SelectionHeader(title: "Select Category")
 
             if categories.isEmpty {
                 Text("No categories have been added.")
@@ -157,12 +157,18 @@ struct SetCategoryView: View {
             item.subcategory = nil
         }
         
+        // Set updatedAt since we're modifying the item
+        setUpdatedAt(item)
+        
         // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
         // If viewContext has a parent, we're in a child context and shouldn't save
         if viewContext.parent == nil {
             // We're in a parent context (ItemDetailView), save immediately
             do {
                 try viewContext.save()
+                
+                // Trigger automatic sync for the modified item
+                SyncService.shared.syncItemIfNeeded(item)
             } catch {
                 print("❌ Failed to save category: \(error.localizedDescription)")
             }

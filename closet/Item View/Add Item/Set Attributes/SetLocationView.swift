@@ -23,7 +23,7 @@ struct SetLocationView: View {
     }
 
     var body: some View {
-        SelectionHeader(title: "Select a Location")
+        SelectionHeader(title: "Select Location")
 
         VStack(spacing: 12) {
             HStack {
@@ -49,10 +49,16 @@ struct SetLocationView: View {
                         Button(action: {
                             item.location = location
                             
+                            // Set updatedAt since we're modifying the item
+                            setUpdatedAt(item)
+                            
                             // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
                             if viewContext.parent == nil {
                                 do {
                                     try viewContext.save()
+                                    
+                                    // Trigger automatic sync for the modified item
+                                    SyncService.shared.syncItemIfNeeded(item)
                                 } catch {
                                     print("❌ Failed to save location: \(error.localizedDescription)")
                                 }

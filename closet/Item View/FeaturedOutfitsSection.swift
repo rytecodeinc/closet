@@ -14,12 +14,12 @@ struct FeaturedOutfitsSection: View {
     var body: some View {
        
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
+                HStack(spacing: 2) {
                     ForEach(outfits, id: \.objectID) { outfit in
                         FeaturedOutfitCell(outfit: outfit)
                     }
                 }
-                .padding(.vertical, 4)
+               // .padding(.vertical, 4)
             }
         
     }
@@ -27,14 +27,14 @@ struct FeaturedOutfitsSection: View {
 
 struct FeaturedOutfitCell: View {
     @ObservedObject var outfit: Outfit
+    let size: CGFloat = (UIScreen.main.bounds.width - 6) / 3
 
     var body: some View {
         NavigationLink(destination: OutfitDetailView(outfit: outfit)) {
             VStack {
                 OutfitImageView(outfit: outfit)
-                    .frame(width: 80, height: 80)
-                    .cornerRadius(8)
-                    .border(.gray.opacity(0.3))
+                    .frame(width: size, height: size)
+                  //  .border(.gray.opacity(0.3))
             }
         }
     }

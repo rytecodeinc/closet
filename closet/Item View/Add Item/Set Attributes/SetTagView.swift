@@ -80,10 +80,16 @@ struct SetTagView: View {
             item.addToTags(tag)
         }
         
+        // Set updatedAt since we're modifying the item
+        setUpdatedAt(item)
+        
         // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
         if viewContext.parent == nil {
             do {
                 try viewContext.save()
+                
+                // Trigger automatic sync for the modified item
+                SyncService.shared.syncItemIfNeeded(item)
             } catch {
                 print("❌ Failed to save tag: \(error.localizedDescription)")
             }

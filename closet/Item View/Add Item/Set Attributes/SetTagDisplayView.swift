@@ -23,7 +23,7 @@ struct SetTagDisplayView: View {
     }
 
     var body: some View {
-        SelectionHeader(title: "Select a Tag")
+        SelectionHeader(title: "Select Tag")
 
         VStack(spacing: 12) {
             // Search / Add row

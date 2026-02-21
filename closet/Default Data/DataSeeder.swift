@@ -270,6 +270,13 @@ struct DataSeeder {
             if forceReseed {
                 try deleteAllSizes(in: context)
             }
+            
+            // Run migration to deduplicate existing sizes if any exist
+            let sizeCount = try countSizes(in: context)
+            if sizeCount > 0 {
+                try migrateDeduplicateSizes(in: context)
+            }
+            
             if try countSizes(in: context) == 0 {
                 try insertDefaultSizes(in: context)
             }
@@ -286,6 +293,114 @@ struct DataSeeder {
         try context.execute(batchDelete)
         try context.save()
     }
+    
+    // MARK: - Migration: Deduplicate Sizes
+    
+    /// Migrates existing sizes to unique (value, scale) combinations
+    /// - Removes duplicates by keeping one size per (value, scale) pair
+    /// - Updates all Item.size references to point to kept sizes
+    /// - Sets category to nil on all sizes (sizes are now independent)
+    private func migrateDeduplicateSizes(in context: NSManagedObjectContext) throws {
+        print("🔄 Starting size deduplication migration...")
+        
+        // Fetch all sizes
+        let allSizesRequest: NSFetchRequest<Size> = Size.fetchRequest()
+        let allSizes = try context.fetch(allSizesRequest)
+        
+        if allSizes.isEmpty {
+            print("✅ No sizes to migrate")
+            return
+        }
+        
+        // Group sizes by (value, scale) combination
+        var sizeGroups: [String: [Size]] = [:] // key: "value|scale", value: array of duplicate sizes
+        
+        for size in allSizes {
+            guard let value = size.value, let scale = size.scale else { continue }
+            let key = "\(value)|\(scale)"
+            if sizeGroups[key] == nil {
+                sizeGroups[key] = []
+            }
+            sizeGroups[key]?.append(size)
+        }
+        
+        // For each group, keep one size and mark others for deletion
+        var sizesToDelete: [Size] = []
+        var valueToKeptSize: [String: Size] = [:] // Track which size we're keeping for each key
+        
+        for (key, sizes) in sizeGroups {
+            guard !sizes.isEmpty else { continue }
+            
+            // Keep the first size (or one that's already being used by items)
+            // Prefer a size that has items referencing it
+            let sortedSizes = sizes.sorted { size1, size2 in
+                let items1 = (size1.items as? Set<Item>)?.count ?? 0
+                let items2 = (size2.items as? Set<Item>)?.count ?? 0
+                return items1 > items2 // Prefer size with more items
+            }
+            
+            guard let keptSize = sortedSizes.first else { continue }
+            valueToKeptSize[key] = keptSize
+            
+            // Mark others for deletion (but first update item references)
+            for size in sortedSizes.dropFirst() {
+                // Update all items that reference this size to reference the kept size instead
+                if let items = size.items as? Set<Item> {
+                    for item in items {
+                        item.size = keptSize
+                    }
+                }
+                sizesToDelete.append(size)
+            }
+        }
+        
+        // Update all sizes to have category = nil (sizes are now independent)
+        for size in allSizes {
+            size.category = nil
+        }
+        
+        // Delete duplicate sizes
+        for size in sizesToDelete {
+            context.delete(size)
+        }
+        
+        // Ensure unique sizes exist for all expected (value, scale) combinations
+        let expectedSizes: [String: [String]] = [
+            "Alpha (XXS-XXL)": ["XXS", "XS", "S", "M", "L", "XL", "XXL"],
+            "US Numeric": ["00", "0", "2", "4", "6", "8", "10", "12", "14", "16"],
+            "US Shoe": ["5", "5.5", "6", "6.5", "7", "7.5", "8", "8.5", "9", "9.5", "10", "10.5", "11", "11.5", "12", "12.5", "13"],
+            "One Size": ["One Size"]
+        ]
+        
+        // Create any missing size combinations
+        for (scale, values) in expectedSizes {
+            for (idx, value) in values.enumerated() {
+                let key = "\(value)|\(scale)"
+                
+                // If we don't have a size for this combination, create one
+                if valueToKeptSize[key] == nil {
+                    let existingRequest: NSFetchRequest<Size> = Size.fetchRequest()
+                    existingRequest.predicate = NSPredicate(format: "value == %@ AND scale == %@", value, scale)
+                    existingRequest.fetchLimit = 1
+                    
+                    if try context.fetch(existingRequest).isEmpty {
+                        let s = Size(context: context)
+                        s.id = UUID()
+                        s.value = value
+                        s.scale = scale
+                        s.sortOrder = Int16(idx)
+                        s.category = nil
+                    }
+                } else if let keptSize = valueToKeptSize[key] {
+                    // Update sortOrder if it's not correct
+                    keptSize.sortOrder = Int16(idx)
+                }
+            }
+        }
+        
+        try context.save()
+        print("✅ Size deduplication migration completed. Deleted \(sizesToDelete.count) duplicate sizes.")
+    }
 
     
     // MARK: - Size Helpers
@@ -295,28 +410,36 @@ struct DataSeeder {
     }
     
     private func insertDefaultSizes(in context: NSManagedObjectContext) throws {
-        let categories = try fetchAllCategories(in: context)
-        let byName = Dictionary(uniqueKeysWithValues: categories.compactMap { cat in
-            (cat.name.map { ($0, cat) })
-        })
-
-        for (catName, bundles) in Self.defaultSizesByCategory {
-            guard let cat = byName[catName] else { continue }
-
-            // Keep values in each bundle contiguous and ordered
-            var runningOrder: Int16 = 0
-            for bundle in bundles {
-                for (idx, v) in bundle.values.enumerated() {
+        // Define all unique scale types and their values globally
+        // This ensures one Size entity per (value, scale) combination
+        let globalSizeDefinitions: [String: [String]] = [
+            "Alpha (XXS-XXL)": ["XXS", "XS", "S", "M", "L", "XL", "XXL"],
+            "US Numeric": ["00", "0", "2", "4", "6", "8", "10", "12", "14", "16"],
+            "US Shoe": ["5", "5.5", "6", "6.5", "7", "7.5", "8", "8.5", "9", "9.5", "10", "10.5", "11", "11.5", "12", "12.5", "13"],
+            "One Size": ["One Size"]
+        ]
+        
+        // Create one Size per (value, scale) combination
+        // Each scale type maintains its correct sort order
+        for (scale, values) in globalSizeDefinitions {
+            for (idx, value) in values.enumerated() {
+                // Check if this size already exists (by value and scale)
+                let existingRequest: NSFetchRequest<Size> = Size.fetchRequest()
+                existingRequest.predicate = NSPredicate(format: "value == %@ AND scale == %@", value, scale)
+                existingRequest.fetchLimit = 1
+                
+                if try context.fetch(existingRequest).isEmpty {
+                    // Only create if it doesn't exist
                     let s = Size(context: context)
                     s.id = UUID()
-                    s.value = v
-                    s.scale = bundle.scale
-                    s.sortOrder = runningOrder // or Int16(idx) if you don’t care about bundle grouping
-                    s.category = cat
-                    runningOrder += 1
+                    s.value = value
+                    s.scale = scale
+                    s.sortOrder = Int16(idx) // Maintain correct order for each scale type
+                    s.category = nil // Sizes are now independent of categories
                 }
             }
         }
+        
         try context.save()
     }
     
@@ -355,7 +478,9 @@ struct DataSeeder {
                 wardrobe.id = UUID()
                 wardrobe.name = name
                 wardrobe.type = type
-                wardrobe.timestamp = Date()
+                let now = Date()
+                wardrobe.timestamp = now
+                wardrobe.createdAt = now
             }
         }
         try context.save()

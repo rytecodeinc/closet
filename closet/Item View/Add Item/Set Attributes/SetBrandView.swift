@@ -23,7 +23,7 @@ struct SetBrandView: View {
     }
     
     var body: some View {
-        SelectionHeader(title: "Select a Brand")
+        SelectionHeader(title: "Select Brand")
         
         VStack(spacing: 12) {
             HStack {
@@ -47,6 +47,9 @@ struct SetBrandView: View {
                 List {
                     ForEach(filteredBrands, id: \.self) { brand in
                         Button(action: {
+                            // Store the brand being unassigned to check if cleanup is needed
+                            let previousBrand = item.brand
+                            
                             // Toggle selection
                             if item.brand == brand {
                                 item.brand = nil
@@ -58,6 +61,10 @@ struct SetBrandView: View {
                             if viewContext.parent == nil {
                                 do {
                                     try viewContext.save()
+                                    // If we unassigned a brand, check if it needs cleanup
+                                    if previousBrand == brand {
+                                        cleanupBrandIfOrphaned(previousBrand)
+                                    }
                                 } catch {
                                     print("❌ Failed to save brand: \(error.localizedDescription)")
                                 }
@@ -109,14 +116,52 @@ struct SetBrandView: View {
 
     // MARK: - Fetch Brands
     private func fetchBrands() {
+        // First, cleanup brands with 0 items
+        cleanupOrphanedBrands()
+        
         let request: NSFetchRequest<Brand> = Brand.fetchRequest()
         request.predicate = NSPredicate(format: "isVisible == YES")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Brand.name, ascending: true)]
         do {
-            brands = try viewContext.fetch(request)
+            let allBrands = try viewContext.fetch(request)
+            // Filter to only show brands that have at least one item
+            brands = allBrands.filter { brand in
+                if let items = brand.items as? Set<Item> {
+                    return !items.isEmpty
+                }
+                return false
+            }
         } catch {
             print("❌ Failed to fetch brands: \(error)")
             brands = []
+        }
+    }
+    
+    // MARK: - Cleanup Orphaned Brands
+    private func cleanupOrphanedBrands() {
+        let request: NSFetchRequest<Brand> = Brand.fetchRequest()
+        request.predicate = NSPredicate(format: "isVisible == YES")
+        
+        do {
+            let allBrands = try viewContext.fetch(request)
+            let orphanedBrands = allBrands.filter { brand in
+                if let items = brand.items as? Set<Item> {
+                    return items.isEmpty
+                }
+                return true // If no items relationship, consider it orphaned
+            }
+            
+            for brand in orphanedBrands {
+                viewContext.delete(brand)
+            }
+            
+            // Only save if we're in parent context (ItemDetailView), not child context (ItemAddView)
+            if viewContext.parent == nil && !orphanedBrands.isEmpty {
+                try viewContext.save()
+                print("✅ Cleaned up \(orphanedBrands.count) orphaned brand(s)")
+            }
+        } catch {
+            print("❌ Failed to cleanup orphaned brands: \(error)")
         }
     }
 
@@ -133,10 +178,16 @@ struct SetBrandView: View {
             if let existing = brands.first(where: { ($0.name ?? "").localizedCaseInsensitiveCompare(trimmed) == .orderedSame }) {
                 item.brand = existing
                 
+                // Set updatedAt since we're modifying the item
+                setUpdatedAt(item)
+                
                 // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
                 if viewContext.parent == nil {
                     do {
                         try viewContext.save()
+                        
+                        // Trigger automatic sync for the modified item
+                        SyncService.shared.syncItemIfNeeded(item)
                     } catch {
                         print("❌ Failed to save brand: \(error.localizedDescription)")
                     }
@@ -155,10 +206,16 @@ struct SetBrandView: View {
 
         item.brand = newBrand
         
+        // Set updatedAt since we're modifying the item
+        setUpdatedAt(item)
+        
         // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
         if viewContext.parent == nil {
             do {
                 try viewContext.save()
+                
+                // Trigger automatic sync for the modified item
+                SyncService.shared.syncItemIfNeeded(item)
             } catch {
                 print("❌ Failed to save brand: \(error.localizedDescription)")
             }
@@ -167,5 +224,31 @@ struct SetBrandView: View {
         newBrandName = ""
         fetchBrands()
         dismiss()
+    }
+    
+    // MARK: - Cleanup Single Brand
+    private func cleanupBrandIfOrphaned(_ brand: Brand?) {
+        guard let brand = brand else { return }
+        
+        // Use the parent context if we're in a child context
+        let context = viewContext.parent ?? viewContext
+        
+        // Refresh the brand to get current item count
+        context.refresh(brand, mergeChanges: true)
+        
+        // Check if brand has any items
+        if let items = brand.items as? Set<Item>, items.isEmpty {
+            context.delete(brand)
+            
+            // Only save if we're in parent context
+            if viewContext.parent == nil {
+                do {
+                    try context.save()
+                    print("✅ Cleaned up orphaned brand: \(brand.name ?? "unknown")")
+                } catch {
+                    print("❌ Failed to cleanup orphaned brand: \(error)")
+                }
+            }
+        }
     }
 }

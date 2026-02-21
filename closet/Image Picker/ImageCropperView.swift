@@ -16,6 +16,7 @@ import CoreImage.CIFilterBuiltins
 struct ImageCropperView: View {
     let originalImage: UIImage
     let onCrop: (UIImage) -> Void
+    let isEditing: Bool // true when editing existing image, false when adding new
 
     // The image currently shown/edited
     @State private var currentImage: UIImage
@@ -25,10 +26,13 @@ struct ImageCropperView: View {
     @State private var scale: CGFloat = 1.0
     @State private var lastScale: CGFloat = 1.0
     @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero // Track the offset at the start of drag
+    @State private var isDragging: Bool = false // Track if we're currently dragging
 
     @State private var cropViewSize: CGSize = .zero
 
     @State private var isProcessingBackgroundRemoval = false
+    @State private var hasBackgroundRemoved = false
 
     // Erase mode state
     @State private var isErasing: Bool = false
@@ -45,10 +49,11 @@ struct ImageCropperView: View {
     @State private var currentErasePath = Path()
 
     @Environment(\.dismiss) private var dismiss
-
-    init(originalImage: UIImage, onCrop: @escaping (UIImage) -> Void) {
+    
+    init(originalImage: UIImage, onCrop: @escaping (UIImage) -> Void, isEditing: Bool = false) {
         self.originalImage = originalImage
         self.onCrop = onCrop
+        self.isEditing = isEditing
         // Initialize the current image and undo image to original
         _currentImage = State(initialValue: originalImage)
         _originalForUndo = State(initialValue: originalImage)
@@ -57,92 +62,120 @@ struct ImageCropperView: View {
     var body: some View {
         VStack {
             ZStack {
-           //     Color.black.opacity(0.1)
+                Color.black
 
                 GeometryReader { geo in
-    let side = min(geo.size.width, geo.size.height)
-
-    ZStack {
-        Color.white
-        // BACKING IMAGE LAYER with gestures
-        Image(uiImage: currentImage)
-            .resizable()
-            .aspectRatio(contentMode: .fit)
-            .scaleEffect(scale)
-            .offset(offset)
-            .gesture(
-                DragGesture().onChanged {
-                    guard !isErasing else { return }
-                    self.offset = $0.translation
-                }
-            )
-            .simultaneousGesture(
-                MagnificationGesture()
-                    .onChanged { value in
-                        guard !isErasing else { return }
-                        scale = lastScale * value
-                    }
-                    .onEnded { value in
-                        guard !isErasing else { return }
-                        lastScale = scale
-                    }
-            )
-            .frame(width: side, height: side)
-            .clipped()
-
-        // DRAWING (MASK) LAYER for eraser
-        Canvas { context, _ in
-            for erase in erasePaths {
-                context.stroke(
-                    erase.path,
-                    with: .color(.white),
-                    lineWidth: erase.lineWidth
-                )
-            }
-
-            context.stroke(
-                currentErasePath,
-                with: .color(.white),
-                lineWidth: eraserBrushSize
-            )
-        }
-        .frame(width: side, height: side)
-        .allowsHitTesting(isErasing)
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { value in
-                    guard isErasing else { return }
-
-                    if currentErasePath.isEmpty {
-                        currentErasePath.move(to: value.location)
-                    } else {
-                        currentErasePath.addLine(to: value.location)
-                    }
+                    let side = min(geo.size.width, geo.size.height)
                     
-                    handleEraseDrag(at: value.location, side: side)
-                }
-                .onEnded { _ in
-                    guard isErasing else { return }
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            
+                            ZStack {
+                                Color.white
+                                    .frame(width: side, height: side)
+                                // BACKING IMAGE LAYER with gestures
+                                Image(uiImage: currentImage)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fit)
+                                    .scaleEffect(scale)
+                                    .offset(offset)
+                                    .gesture(
+                                        DragGesture(minimumDistance: 0)
+                                            .onChanged { value in
+                                                guard !isErasing else { return }
+                                                // On first change of a new drag, capture current offset as starting point
+                                                if !isDragging {
+                                                    lastOffset = offset
+                                                    isDragging = true
+                                                }
+                                                // Add translation to the last offset for smooth movement
+                                                self.offset = CGSize(
+                                                    width: lastOffset.width + value.translation.width,
+                                                    height: lastOffset.height + value.translation.height
+                                                )
+                                            }
+                                            .onEnded { _ in
+                                                guard !isErasing else { return }
+                                                // Update lastOffset when drag ends for next drag
+                                                lastOffset = offset
+                                                isDragging = false
+                                            }
+                                    )
+                                    .simultaneousGesture(
+                                        MagnificationGesture()
+                                            .onChanged { value in
+                                                guard !isErasing else { return }
+                                                scale = lastScale * value
+                                            }
+                                            .onEnded { value in
+                                                guard !isErasing else { return }
+                                                lastScale = scale
+                                            }
+                                    )
+                                    .frame(width: side, height: side)
+                                    .clipped()
 
-                    erasePaths.append(
-                        ErasePath(
-                            path: currentErasePath,
-                            lineWidth: eraserBrushSize
-                        )
-                    )
-                    currentErasePath = Path()
-                    lastErasePoint = nil
+                                // DRAWING (MASK) LAYER for eraser
+                                Canvas { context, _ in
+                                    for erase in erasePaths {
+                                        context.stroke(
+                                            erase.path,
+                                            with: .color(.white),
+                                            lineWidth: erase.lineWidth
+                                        )
+                                    }
+
+                                    context.stroke(
+                                        currentErasePath,
+                                        with: .color(.white),
+                                        lineWidth: eraserBrushSize
+                                    )
+                                }
+                                .frame(width: side, height: side)
+                                .allowsHitTesting(isErasing)
+                                .gesture(
+                                    DragGesture(minimumDistance: 0)
+                                        .onChanged { value in
+                                            guard isErasing else { return }
+
+                                            if currentErasePath.isEmpty {
+                                                currentErasePath.move(to: value.location)
+                                            } else {
+                                                currentErasePath.addLine(to: value.location)
+                                            }
+                                            
+                                            handleEraseDrag(at: value.location, side: side)
+                                        }
+                                        .onEnded { _ in
+                                            guard isErasing else { return }
+
+                                            erasePaths.append(
+                                                ErasePath(
+                                                    path: currentErasePath,
+                                                    lineWidth: eraserBrushSize
+                                                )
+                                            )
+                                            currentErasePath = Path()
+                                            lastErasePoint = nil
+                                        }
+                                )
+                            }
+                            .frame(width: side, height: side)
+                            .onAppear {
+                                cropViewSize = CGSize(width: side, height: side)
+                            }
+                            .onChange(of: geo.size) { newSize in
+                                let s = min(newSize.width, newSize.height)
+                                cropViewSize = CGSize(width: s, height: s)
+                            }
+                            
+                            Spacer()
+                        }
+                        Spacer()
+                    }
                 }
-        )
-    }
-    .onAppear {
-        cropViewSize = CGSize(width: side, height: side)
-    }
-    .onChange(of: geo.size) { newSize in
-        let s = min(newSize.width, newSize.height)
-        cropViewSize = CGSize(width: s, height: s)
-    }
-}
 }
            /* if isProcessingBackgroundRemoval {
                 ProgressView("Removing Background...")
@@ -154,36 +187,30 @@ struct ImageCropperView: View {
         .navigationTitle("Crop")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel", role: .cancel) {
-                    dismiss()
-                }
-                .foregroundColor(Color.red)
-            }
             ToolbarItem(placement: .bottomBar) {
-    HStack {
-        Button {
-            toggleEraseMode()
-        } label: {
-            VStack {
-                Image(systemName: "eraser")
-                Text("Erase")
-            }
-            .foregroundColor(isErasing ? .blue : .primary)
-        }
-        .disabled(isProcessingBackgroundRemoval)
-        
-        Button {
-            restoreErase()
-        } label: {
-            VStack {
-                Image(systemName: "arrow.counterclockwise")
-                Text("Restore")
-            }
-        }
-        .disabled(isProcessingBackgroundRemoval)
-        
-        Button {
+                HStack {
+                    Button {
+                        toggleEraseMode()
+                    } label: {
+                        VStack {
+                            Image(systemName: "eraser")
+                            Text("Erase")
+                        }
+                        .foregroundColor(isErasing ? .blue : .primary)
+                    }
+                    .disabled(isProcessingBackgroundRemoval)
+                    
+                    Button {
+                        restoreErase()
+                    } label: {
+                        VStack {
+                            Image(systemName: "arrow.counterclockwise")
+                            Text("Restore")
+                        }
+                    }
+                    .disabled(isProcessingBackgroundRemoval)
+                    
+                    Button {
             undoBackgroundRemoval()
         } label: {
             VStack{
@@ -197,13 +224,13 @@ struct ImageCropperView: View {
             removeBackground()
         }
         .buttonStyle(.borderedProminent)
-        .disabled(isProcessingBackgroundRemoval)
+        .disabled(isProcessingBackgroundRemoval || hasBackgroundRemoved)
     }
     .padding()
 }
 
             ToolbarItem(placement: .confirmationAction) {
-                Button("Add") {
+                Button(isEditing ? "Save" : "Add") {
                     cropAndSaveImage()
                 }
             }
@@ -240,6 +267,9 @@ struct ImageCropperView: View {
         
         // Reapply the mask to update the displayed image (showing full original image)
         applyEraseMask()
+        
+        // Reset background removal state to allow removing background again
+        hasBackgroundRemoved = false
     }
     
     func handleEraseDrag(at location: CGPoint, side: CGFloat) {
@@ -421,6 +451,7 @@ struct ImageCropperView: View {
                         self.originalForUndo = self.currentImage // save for undo
                         self.currentImage = finalUIImage
                         self.isProcessingBackgroundRemoval = false
+                        self.hasBackgroundRemoved = true
                     }
                 } else {
                     DispatchQueue.main.async {
@@ -440,6 +471,7 @@ struct ImageCropperView: View {
 
     func undoBackgroundRemoval() {
         currentImage = originalForUndo
+        hasBackgroundRemoved = false
     }
 
     func cropAndSaveImage() {

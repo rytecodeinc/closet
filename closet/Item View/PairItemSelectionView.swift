@@ -109,7 +109,7 @@ struct PairItemSelectionView: View {
     private func fetchClosetItems() {
         // Fetch the closet wardrobe
         let wardrobeRequest: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
-        wardrobeRequest.predicate = NSPredicate(format: "type == %@", "closet")
+        wardrobeRequest.predicate = NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", "closet")
         
         do {
             let wardrobes = try viewContext.fetch(wardrobeRequest)
@@ -175,7 +175,16 @@ struct PairItemSelectionView: View {
         pairedItem.pairedItems = pairedItemSet as NSSet
         
         do {
+            // Set updatedAt on both items since we're modifying them
+            setUpdatedAt(item)
+            setUpdatedAt(pairedItem)
+            
             try viewContext.save()
+            
+            // Trigger automatic sync for both items
+            SyncService.shared.syncItemIfNeeded(item)
+            SyncService.shared.syncItemIfNeeded(pairedItem)
+            
             dismiss()
         } catch {
             print("❌ Failed to save paired item: \(error)")
@@ -196,7 +205,16 @@ struct PairItemSelectionView: View {
         itemToRemove.pairedItems = otherItemPairedItems as NSSet
         
         do {
+            // Set updatedAt on both items since we're modifying them
+            setUpdatedAt(item)
+            setUpdatedAt(itemToRemove)
+            
             try viewContext.save()
+            
+            // Trigger automatic sync for both items
+            SyncService.shared.syncItemIfNeeded(item)
+            SyncService.shared.syncItemIfNeeded(itemToRemove)
+            
             // Clear the state variable and allow user to continue pairing/unpairing
             itemToUnpair = nil
         } catch {

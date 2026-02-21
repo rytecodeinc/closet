@@ -10,10 +10,23 @@ import CoreData
 
 struct EmptyItemStateView: View {
     @ObservedObject var wardrobe: Wardrobe
+    var wardrobeType: String
     @Environment(\.managedObjectContext) private var viewContext
     @State private var showAddByTagSheet = false
     @State private var showAddByCategorySheet = false
     @State private var showMenu = false
+    
+    // Check if this is the default wardrobe (first wardrobe of this type)
+    private var isDefaultWardrobe: Bool {
+        let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
+        request.predicate = NSPredicate(format: "type == %@", wardrobeType)
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)]
+        
+        if let firstWardrobe = try? viewContext.fetch(request).first {
+            return wardrobe.objectID == firstWardrobe.objectID
+        }
+        return false
+    }
     
     var body: some View {
         VStack {
@@ -32,7 +45,10 @@ struct EmptyItemStateView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity) // Ensure it takes full height
         .contentShape(Rectangle())
         .onTapGesture {
-            showMenu = true
+            // Only show menu if not default wardrobe
+            if !isDefaultWardrobe {
+                showMenu = true
+            }
         }
         .confirmationDialog("Add Items", isPresented: $showMenu, titleVisibility: .visible) {
             Button("Add by Tag") {

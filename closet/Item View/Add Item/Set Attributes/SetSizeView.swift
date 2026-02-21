@@ -15,33 +15,32 @@ struct SetSizeView: View {
 
     @State private var selectedSizeID: UUID?
     @State private var sizes: [Size] = []
-
-    // Optional: control the order of sections (types)
-    private let preferredScaleOrder = ["One Size", "Alpha (XXS-XXL)","US Numeric", "US Shoe"]
+    @State private var selectedSizeType: SizeType = .alpha
 
     var body: some View {
-        VStack {
-            SelectionHeader(title: "Select a Size")
+        VStack(spacing: 0) {
+            SelectionHeader(title: "Select Size")
+            
+            // Segmented picker for size types - always show all three options
+            Picker("Size Type", selection: $selectedSizeType) {
+                ForEach(SizeType.allCases, id: \.self) { type in
+                    Text(type.rawValue).tag(type)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(Color(UIColor.secondarySystemBackground))
 
-            if item.category == nil {
-                Text("Select a category first to see available sizes.")
-                    .foregroundColor(.gray)
-                    .padding()
-                Spacer()
-            } else if sizes.isEmpty {
-                Text("No sizes are defined for \(item.category?.name ?? "this category").")
+            if sizes.isEmpty {
+                Text("No sizes are available.")
                     .foregroundColor(.gray)
                     .padding()
                 Spacer()
             } else {
                 List {
-                    // Group by scale, then make a section per type
-                    ForEach(groupedSizes(), id: \.scale) { group in
-                        Section(header: sectionHeader(group.scale)) {
-                            ForEach(group.items, id: \.self) { size in
-                                sizeRow(size)
-                            }
-                        }
+                    ForEach(filteredAndDeduplicatedSizes(), id: \.self) { size in
+                        sizeRow(size)
                     }
                 }
                 .listStyle(.plain)
@@ -49,15 +48,12 @@ struct SetSizeView: View {
         }
         .onAppear {
             refreshSizes()
-            if let current = item.size, let cat = item.category, current.category == cat {
+            setInitialSizeType()
+            if let current = item.size {
                 selectedSizeID = current.id
             } else {
                 selectedSizeID = nil
             }
-        }
-        .onChange(of: item.category?.name) { _ in
-            refreshSizes()
-            selectedSizeID = nil
         }
         .onDisappear {
             // Apply size selection to item (but DON'T save context)
@@ -71,10 +67,12 @@ struct SetSizeView: View {
     private func applySizeSelectionToItem() {
         if let sid = selectedSizeID, let chosen = fetchSize(by: sid) {
             item.size = chosen
-        } else if item.size?.category != item.category {
-            // Clear size if it doesn't match the current category
+        } else {
             item.size = nil
         }
+        
+        // Set updatedAt since we're modifying the item
+        setUpdatedAt(item)
         
         // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
         // If viewContext has a parent, we're in a child context and shouldn't save
@@ -82,6 +80,9 @@ struct SetSizeView: View {
             // We're in a parent context (ItemDetailView), save immediately
             do {
                 try viewContext.save()
+                
+                // Trigger automatic sync for the modified item
+                SyncService.shared.syncItemIfNeeded(item)
             } catch {
                 print("❌ Failed to save size: \(error.localizedDescription)")
             }
@@ -118,30 +119,55 @@ struct SetSizeView: View {
         }
     }
 
-    private func sectionHeader(_ scale: String) -> some View {
-        Text(scale)
-            .font(.subheadline)
-            .foregroundColor(.gray)
-    }
-
-    // MARK: - Grouping
-
-    private func groupedSizes() -> [(scale: String, items: [Size])] {
-        let dict = Dictionary(grouping: sizes) { (s: Size) in (s.scale ?? "Other") }
-        let keys = dict.keys.sorted { a, b in rank(a) < rank(b) || (rank(a) == rank(b) && a < b) }
-        return keys.map { key in
-            let sorted = (dict[key] ?? []).sorted {
-                if $0.sortOrder != $1.sortOrder {
-                    return $0.sortOrder < $1.sortOrder
-                }
-                return ($0.value ?? "") < ($1.value ?? "")
+    // MARK: - Filtering and Deduplication
+    
+    private func filteredAndDeduplicatedSizes() -> [Size] {
+        // Filter sizes by selected type
+        let filtered = sizes.filter { selectedSizeType.matches(scale: $0.scale) }
+        
+        // Sort first to maintain order
+        let sorted = filtered.sorted {
+            if $0.sortOrder != $1.sortOrder {
+                return $0.sortOrder < $1.sortOrder
             }
-            return (scale: key, items: sorted)
+            return ($0.value ?? "") < ($1.value ?? "")
         }
+        
+        // Remove duplicates by value, keeping the first occurrence
+        // But if we encounter item.size, replace the existing entry with it
+        var seenValues = Set<String>()
+        var uniqueSizes: [Size] = []
+        
+        for size in sorted {
+            if let value = size.value, !value.isEmpty {
+                if !seenValues.contains(value) {
+                    seenValues.insert(value)
+                    uniqueSizes.append(size)
+                } else if size == item.size {
+                    // If this is the current item's size and we've already seen this value,
+                    // replace the existing entry with this one
+                    if let index = uniqueSizes.firstIndex(where: { $0.value == value }) {
+                        uniqueSizes[index] = size
+                    }
+                }
+            }
+        }
+        
+        return uniqueSizes
     }
-
-    private func rank(_ scale: String) -> Int {
-        preferredScaleOrder.firstIndex(of: scale) ?? Int.max
+    
+    private func setInitialSizeType() {
+        // If current size matches a type, select that type
+        if let currentSize = item.size, let scale = currentSize.scale {
+            if SizeType.alpha.matches(scale: scale) {
+                selectedSizeType = .alpha
+            } else if SizeType.numeric.matches(scale: scale) {
+                selectedSizeType = .numeric
+            } else if SizeType.shoe.matches(scale: scale) {
+                selectedSizeType = .shoe
+            }
+        }
+        // Otherwise default to alpha
     }
 
     // MARK: - Helpers
@@ -154,11 +180,9 @@ struct SetSizeView: View {
 
     private func refreshSizes() {
         sizes.removeAll()
-        guard let category = item.category else { return }
 
         let request: NSFetchRequest<Size> = Size.fetchRequest()
-        request.predicate = NSPredicate(format: "category == %@", category)
-        // Base order; final order is refined inside groupedSizes()
+        // Fetch all sizes regardless of category
         request.sortDescriptors = [
             NSSortDescriptor(keyPath: \Size.sortOrder, ascending: true),
             NSSortDescriptor(keyPath: \Size.value,     ascending: true)

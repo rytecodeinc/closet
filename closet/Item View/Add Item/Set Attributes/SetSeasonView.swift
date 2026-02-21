@@ -16,7 +16,7 @@ struct SetSeasonView: View {
     @State private var selectedSeasonNames: Set<String> = []
 
     var body: some View {
-        Section(header: SelectionHeader(title: "Select a Season")) {
+        Section(header: SelectionHeader(title: "Select Season")) {
             SeasonListView(selectedSeasonNames: $selectedSeasonNames)
         }
         .onAppear {
@@ -53,12 +53,18 @@ struct SetSeasonView: View {
             }
         }
         
+        // Set updatedAt since we're modifying the item
+        setUpdatedAt(item)
+        
         // Check if this is a child context (ItemAddView) or parent context (ItemDetailView)
         // If viewContext has a parent, we're in a child context and shouldn't save
         if viewContext.parent == nil {
             // We're in a parent context (ItemDetailView), save immediately
             do {
                 try viewContext.save()
+                
+                // Trigger automatic sync for the modified item
+                SyncService.shared.syncItemIfNeeded(item)
             } catch {
                 print("❌ Failed to save seasons: \(error.localizedDescription)")
             }
