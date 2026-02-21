@@ -7,5 +7,16 @@
             <string>googleapp</string>
             <string>comgooglemaps</string>
         </array>
+        <key>CFBundleURLTypes</key>
+        <array>
+            <dict>
+                <key>CFBundleURLSchemes</key>
+                <array>
+                    <string>closetapp</string>
+                </array>
+                <key>CFBundleURLName</key>
+                <string>rytecode.closet</string>
+            </dict>
+        </array>
     </dict>
 </plist>

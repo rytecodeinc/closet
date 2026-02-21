@@ -10,6 +10,9 @@
 		6C0D2AEE2E98C1D800849F4C /* AppShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 6C0D2AE42E98C1D800849F4C /* AppShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		6C18C8D62F148FAF00F076FD /* StableDiffusion in Frameworks */ = {isa = PBXBuildFile; productRef = 6C18C8D52F148FAF00F076FD /* StableDiffusion */; };
 		6C18C8D92F148FC800F076FD /* SwiftSoup in Frameworks */ = {isa = PBXBuildFile; productRef = 6C18C8D82F148FC800F076FD /* SwiftSoup */; };
+		6C88E2332F3ADF0A00A8D6E2 /* Auth in Frameworks */ = {isa = PBXBuildFile; productRef = 6C88E2322F3ADF0A00A8D6E2 /* Auth */; };
+		6C88E2352F3ADF0A00A8D6E2 /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = 6C88E2342F3ADF0A00A8D6E2 /* PostgREST */; };
+		6C88E23F2F3AE90C00A8D6E2 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 6C88E23E2F3AE90C00A8D6E2 /* Supabase */; };
 		6CF5734F2F149B5800C2E4AC /* Models in Resources */ = {isa = PBXBuildFile; fileRef = 6CF5734E2F149B5800C2E4AC /* Models */; };
 /* End PBXBuildFile section */
 
@@ -125,8 +128,11 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6C88E23F2F3AE90C00A8D6E2 /* Supabase in Frameworks */,
+				6C88E2352F3ADF0A00A8D6E2 /* PostgREST in Frameworks */,
 				6C18C8D62F148FAF00F076FD /* StableDiffusion in Frameworks */,
 				6C18C8D92F148FC800F076FD /* SwiftSoup in Frameworks */,
+				6C88E2332F3ADF0A00A8D6E2 /* Auth in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -243,6 +249,7 @@
 			buildRules = (
 			);
 			dependencies = (
+				6C88E23D2F3AE48700A8D6E2 /* PBXTargetDependency */,
 				6CF573312F1499A200C2E4AC /* PBXTargetDependency */,
 				6CF5732F2F14999E00C2E4AC /* PBXTargetDependency */,
 				6C0D2AED2E98C1D800849F4C /* PBXTargetDependency */,
@@ -254,6 +261,9 @@
 			packageProductDependencies = (
 				6C18C8D52F148FAF00F076FD /* StableDiffusion */,
 				6C18C8D82F148FC800F076FD /* SwiftSoup */,
+				6C88E2322F3ADF0A00A8D6E2 /* Auth */,
+				6C88E2342F3ADF0A00A8D6E2 /* PostgREST */,
+				6C88E23E2F3AE90C00A8D6E2 /* Supabase */,
 			);
 			productName = closet;
 			productReference = 6CD1D4752DAAF40C00913D5D /* closet.app */;
@@ -343,6 +353,7 @@
 			packageReferences = (
 				6C18C8D42F148FAF00F076FD /* XCRemoteSwiftPackageReference "ml-stable-diffusion" */,
 				6C18C8D72F148FC800F076FD /* XCRemoteSwiftPackageReference "SwiftSoup" */,
+				6C88E2312F3ADF0A00A8D6E2 /* XCRemoteSwiftPackageReference "supabase-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 6CD1D4762DAAF40C00913D5D /* Products */;
@@ -435,6 +446,10 @@
 			isa = PBXTargetDependency;
 			target = 6C0D2AE32E98C1D800849F4C /* AppShareExtension */;
 			targetProxy = 6C0D2AEC2E98C1D800849F4C /* PBXContainerItemProxy */;
+		};
+		6C88E23D2F3AE48700A8D6E2 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			productRef = 6C88E23C2F3AE48700A8D6E2 /* Supabase */;
 		};
 		6CD1D48D2DAAF40E00913D5D /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -867,6 +882,14 @@
 				minimumVersion = 2.11.3;
 			};
 		};
+		6C88E2312F3ADF0A00A8D6E2 /* XCRemoteSwiftPackageReference "supabase-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/supabase/supabase-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.5.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -879,6 +902,26 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 6C18C8D72F148FC800F076FD /* XCRemoteSwiftPackageReference "SwiftSoup" */;
 			productName = SwiftSoup;
+		};
+		6C88E2322F3ADF0A00A8D6E2 /* Auth */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 6C88E2312F3ADF0A00A8D6E2 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Auth;
+		};
+		6C88E2342F3ADF0A00A8D6E2 /* PostgREST */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 6C88E2312F3ADF0A00A8D6E2 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = PostgREST;
+		};
+		6C88E23C2F3AE48700A8D6E2 /* Supabase */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 6C88E2312F3ADF0A00A8D6E2 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Supabase;
+		};
+		6C88E23E2F3AE90C00A8D6E2 /* Supabase */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 6C88E2312F3ADF0A00A8D6E2 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Supabase;
 		};
 		6CF5732E2F14999E00C2E4AC /* StableDiffusion */ = {
 			isa = XCSwiftPackageProductDependency;
