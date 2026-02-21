@@ -16,20 +16,38 @@ enum NavigationDestination: Hashable {
 struct ContentView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject var deepLinkRouter: DeepLinkRouter
+    @EnvironmentObject var supabaseService: SupabaseService
 
     @FetchRequest(
         sortDescriptors: [NSSortDescriptor(keyPath: \Item.timestamp, ascending: true)],
         predicate: NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil"),
         animation: .default)
-    private var items: FetchedResults<Item>
+    private var allItems: FetchedResults<Item>
     
     @FetchRequest(
         sortDescriptors: [NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)],
         predicate: NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", "closet")
-    ) private var closets: FetchedResults<Wardrobe>
+    ) private var allClosets: FetchedResults<Wardrobe>
     
     @State private var navigationPath = NavigationPath()
     @State private var hasAppeared = false
+    
+    // Computed property for current user ID
+    private var currentUserId: String? {
+        supabaseService.currentUser?.id.uuidString
+    }
+    
+    // Filter items by userId (since @FetchRequest can't use dynamic predicates)
+    private var items: [Item] {
+        guard let userId = currentUserId else { return [] }
+        return allItems.filter { $0.userId == userId }
+    }
+    
+    // Filter closets by userId
+    private var closets: [Wardrobe] {
+        guard let userId = currentUserId else { return [] }
+        return allClosets.filter { $0.userId == userId }
+    }
 
     var body: some View {
         NavigationStack(path: $navigationPath) {

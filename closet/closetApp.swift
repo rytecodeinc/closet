@@ -21,13 +21,16 @@ struct closetApp: App {
     @StateObject private var userService = UserService.shared
     // Supabase service - initializes client and loads existing session on app startup
     @StateObject private var supabaseService = SupabaseService.shared
-
+    @StateObject private var syncService = SyncService.shared
+    @StateObject private var networkMonitor = NetworkMonitor.shared
+    
     init() {
         _ = Self.didPrint
-            print("App init: Seeding default colors")
-        
-
-        }
+        print("App init: Seeding default colors")
+        // ✅ Set Core Data context for sync service IMMEDIATELY
+        // This ensures context is available before any views appear
+        SyncService.shared.setContext(persistenceController.container.viewContext)
+    }
     
     var body: some Scene {
         WindowGroup {
@@ -36,6 +39,22 @@ struct closetApp: App {
                 .environmentObject(deepLinkRouter)
                 .environmentObject(userService)
                 .environmentObject(supabaseService)
+                .environmentObject(syncService)
+                .environmentObject(networkMonitor)
+                .onChange(of: networkMonitor.isConnected) { isConnected in
+                    // Auto-sync when connection is restored (if user is authenticated)
+                    if isConnected && supabaseService.isAuthenticated {
+                        Task {
+                            print("🌐 Network connection restored, triggering sync...")
+                            do {
+                                try await syncService.syncAllItems()
+                                print("✅ Auto-sync completed after network restoration")
+                            } catch {
+                                print("⚠️ Auto-sync failed after network restoration: \(error.localizedDescription)")
+                            }
+                        }
+                    }
+                }
                 .onOpenURL { url in
                     deepLinkRouter.handleURL(url)
                 }
