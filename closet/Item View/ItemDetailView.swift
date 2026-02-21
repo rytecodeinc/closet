@@ -993,6 +993,9 @@ struct ItemDetailView: View {
         do {
             try viewContext.save()
             
+            // Trigger sync for the soft-deleted item
+            SyncService.shared.syncItemIfNeeded(item)
+            
             // Cleanup brand if it's now orphaned (has 0 items)
             if let brand = itemBrand {
                 cleanupBrandIfOrphaned(brand)

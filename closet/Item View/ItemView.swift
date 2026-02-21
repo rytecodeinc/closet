@@ -84,9 +84,14 @@ struct ItemView: View {
         // Store the brand before deletion to check if cleanup is needed
         let itemBrand = item.brand
         
-        viewContext.delete(item)
+        // Soft delete the item (for sync)
+        softDelete(item)
+        
         do {
             try viewContext.save()
+            
+            // Trigger sync for the soft-deleted item
+            SyncService.shared.syncItemIfNeeded(item)
             
             // Cleanup brand if it's now orphaned (has 0 items)
             if let brand = itemBrand {
@@ -589,7 +594,7 @@ func migrateWishlistItems(context: NSManagedObjectContext) {
     // Fetch (or create) Closet wardrobe
     let closetWardrobe: Wardrobe = {
         let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
-        request.predicate = NSPredicate(format: "type == %@", "closet")
+        request.predicate = NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", "closet")
         if let existing = try? context.fetch(request).first {
             return existing
         } else {
@@ -597,7 +602,17 @@ func migrateWishlistItems(context: NSManagedObjectContext) {
             newWardrobe.id = UUID()
             newWardrobe.type = "closet"
             newWardrobe.name = "Closet"
-            newWardrobe.timestamp = Date()
+            
+            // Set userId for sync if authenticated
+            // Note: Migration runs synchronously, so userId may not be available yet
+            // Items will get userId set when synced or when user logs in
+            // For now, leave userId nil - it will be set on first sync
+            
+            // Set timestamps using helper
+            setCreatedAndUpdatedAt(newWardrobe)
+            let now = Date()
+            newWardrobe.timestamp = now
+            
             return newWardrobe
         }
     }()
@@ -605,7 +620,7 @@ func migrateWishlistItems(context: NSManagedObjectContext) {
     // Fetch (or create) Wishlist wardrobe
     let wishlistWardrobe: Wardrobe = {
         let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
-        request.predicate = NSPredicate(format: "type == %@", "wishlist")
+        request.predicate = NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", "wishlist")
         if let existing = try? context.fetch(request).first {
             return existing
         } else {
@@ -613,7 +628,17 @@ func migrateWishlistItems(context: NSManagedObjectContext) {
             newWardrobe.id = UUID()
             newWardrobe.type = "wishlist"
             newWardrobe.name = "Wishlist"
-            newWardrobe.timestamp = Date()
+            
+            // Set userId for sync if authenticated
+            // Note: Migration runs synchronously, so userId may not be available yet
+            // Items will get userId set when synced or when user logs in
+            // For now, leave userId nil - it will be set on first sync
+            
+            // Set timestamps using helper
+            setCreatedAndUpdatedAt(newWardrobe)
+            let now = Date()
+            newWardrobe.timestamp = now
+            
             return newWardrobe
         }
     }()
@@ -657,6 +682,137 @@ func migrateWishlistItems(context: NSManagedObjectContext) {
         
     } catch {
         print("❌ Wishlist items migration failed:", error)
+    }
+}
+
+// MARK: - Migrate User Weight from UserDefaults to CoreData
+func migrateUserWeightFromUserDefaults(context: NSManagedObjectContext) {
+    // Check if migration has already been completed
+    let migrationKey = "hasMigratedUserWeightToCoreData"
+    if UserDefaults.standard.bool(forKey: migrationKey) {
+        return
+    }
+    
+    let weightKg = UserDefaults.standard.double(forKey: "userWeightKg")
+    let weightUnit = UserDefaults.standard.string(forKey: "userWeightUnit") ?? "kg"
+    
+    // Only migrate if weight is set and valid
+    guard weightKg > 0, weightKg.isFinite && !weightKg.isNaN else {
+        // No weight to migrate, mark as completed
+        UserDefaults.standard.set(true, forKey: migrationKey)
+        return
+    }
+    
+    do {
+        let repository = UserProfileRepository(context: context)
+        try repository.updateWeight(weightKg: weightKg, unit: weightUnit)
+        
+        // Clear old UserDefaults values
+        UserDefaults.standard.removeObject(forKey: "userWeightKg")
+        UserDefaults.standard.removeObject(forKey: "userWeightUnit")
+        UserDefaults.standard.set(true, forKey: migrationKey)
+        
+        print("✅ Migrated user weight to CoreData: \(weightKg) kg (\(weightUnit))")
+    } catch {
+        print("❌ Failed to migrate user weight: \(error)")
+        // Don't mark as completed if migration failed, so it can retry
+    }
+}
+
+// MARK: - Migrate Timestamp to CreatedAt
+func migrateTimestampToCreatedAt(context: NSManagedObjectContext) {
+    // Check if migration has already been completed
+    let migrationKey = "hasMigratedTimestampToCreatedAt"
+    if UserDefaults.standard.bool(forKey: migrationKey) {
+        return
+    }
+    
+    var hasChanges = false
+    
+    do {
+        // Migrate Items
+        let itemsRequest: NSFetchRequest<Item> = Item.fetchRequest()
+        itemsRequest.predicate = NSPredicate(format: "createdAt == nil AND timestamp != nil")
+        let items = try context.fetch(itemsRequest)
+        for item in items {
+            if let timestamp = item.timestamp {
+                item.createdAt = timestamp
+                hasChanges = true
+            }
+        }
+        print("✅ Migrated \(items.count) Items: timestamp → createdAt")
+        
+        // Migrate Outfits
+        let outfitsRequest: NSFetchRequest<Outfit> = Outfit.fetchRequest()
+        outfitsRequest.predicate = NSPredicate(format: "createdAt == nil AND timestamp != nil")
+        let outfits = try context.fetch(outfitsRequest)
+        for outfit in outfits {
+            if let timestamp = outfit.timestamp {
+                outfit.createdAt = timestamp
+                hasChanges = true
+            }
+        }
+        print("✅ Migrated \(outfits.count) Outfits: timestamp → createdAt")
+        
+        // Migrate Wardrobes
+        let wardrobesRequest: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
+        wardrobesRequest.predicate = NSPredicate(format: "createdAt == nil AND timestamp != nil")
+        let wardrobes = try context.fetch(wardrobesRequest)
+        for wardrobe in wardrobes {
+            if let timestamp = wardrobe.timestamp {
+                wardrobe.createdAt = timestamp
+                hasChanges = true
+            }
+        }
+        print("✅ Migrated \(wardrobes.count) Wardrobes: timestamp → createdAt")
+        
+        // Migrate Events
+        let eventsRequest: NSFetchRequest<Event> = Event.fetchRequest()
+        eventsRequest.predicate = NSPredicate(format: "createdAt == nil AND timestamp != nil")
+        let events = try context.fetch(eventsRequest)
+        for event in events {
+            if let timestamp = event.timestamp {
+                event.createdAt = timestamp
+                hasChanges = true
+            }
+        }
+        print("✅ Migrated \(events.count) Events: timestamp → createdAt")
+        
+        // Migrate Collections
+        let collectionsRequest: NSFetchRequest<Collection> = Collection.fetchRequest()
+        collectionsRequest.predicate = NSPredicate(format: "createdAt == nil AND timestamp != nil")
+        let collections = try context.fetch(collectionsRequest)
+        for collection in collections {
+            if let timestamp = collection.timestamp {
+                collection.createdAt = timestamp
+                hasChanges = true
+            }
+        }
+        print("✅ Migrated \(collections.count) Collections: timestamp → createdAt")
+        
+        // Migrate Photos
+        let photosRequest: NSFetchRequest<Photo> = Photo.fetchRequest()
+        photosRequest.predicate = NSPredicate(format: "createdAt == nil AND timestamp != nil")
+        let photos = try context.fetch(photosRequest)
+        for photo in photos {
+            if let timestamp = photo.timestamp {
+                photo.createdAt = timestamp
+                hasChanges = true
+            }
+        }
+        print("✅ Migrated \(photos.count) Photos: timestamp → createdAt")
+        
+        if hasChanges {
+            try context.save()
+            print("✅ Timestamp to createdAt migration completed successfully!")
+        }
+        
+        // Mark migration as completed
+        UserDefaults.standard.set(true, forKey: migrationKey)
+        
+    } catch {
+        print("❌ Timestamp to createdAt migration failed: \(error)")
+        // Don't mark as completed if migration failed, so it can retry
     }
 }
 

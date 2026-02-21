@@ -73,7 +73,8 @@ struct ItemGridView: View {
         key += filterModel.selectedLocation?.objectID.uriRepresentation().absoluteString ?? ""
         if filterModel.filterByWeight {
             // Include user weight in key so it refreshes when user updates their weight
-            let userWeightKg = UserDefaults.standard.double(forKey: "userWeightKg")
+            let repository = UserProfileRepository(context: viewContext)
+            let userWeightKg = repository.getWeightKg()
             key += "weight:\(userWeightKg)"
         }
         return key
@@ -329,11 +330,23 @@ struct ItemGridView: View {
     
     // MARK: - Core Data fetch
     func fetchItems() {
+        // Require authentication - get userId
+        guard let userId = SupabaseService.shared.currentUser?.id.uuidString else {
+            DispatchQueue.main.async {
+                self.closetItems = []
+            }
+            return
+        }
+        
         let request = NSFetchRequest<Item>(entityName: "Item")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.timestamp, ascending: sortAscending)]
         
         // Build predicate from filterModel, but exclude wardrobe filter since we handle it separately below
         var subpredicates: [NSPredicate] = []
+        
+        // Add userId filter (CRITICAL: only show current user's items)
+        let userIdPredicate = NSPredicate(format: "userId == %@", userId)
+        subpredicates.append(userIdPredicate)
         
         // Add all filter predicates except wardrobe (we'll handle wardrobe separately)
         if !filterModel.selectedColors.isEmpty {
@@ -383,7 +396,8 @@ struct ItemGridView: View {
         
         // Weight filter - only show items that can support user's weight
         if filterModel.filterByWeight {
-            let userWeightKg = UserDefaults.standard.double(forKey: "userWeightKg")
+            let repository = UserProfileRepository(context: viewContext)
+            let userWeightKg = repository.getWeightKg()
             if userWeightKg > 0 {
                 // Show ONLY items where:
                 // - Item has weight set (weight != nil) AND
@@ -425,6 +439,10 @@ struct ItemGridView: View {
         let draftPredicate = NSPredicate(format: "isDraft != YES")
         subpredicates.append(draftPredicate)
         
+        // Exclude soft-deleted items
+        let softDeleteFilter = NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
+        subpredicates.append(softDeleteFilter)
+        
         // Combine all predicates
         let finalPredicate: NSPredicate
         if subpredicates.count == 1 {
@@ -444,7 +462,8 @@ struct ItemGridView: View {
             
             // Debug: Log results if weight filter is active
             if filterModel.filterByWeight {
-                let userWeightKg = UserDefaults.standard.double(forKey: "userWeightKg")
+                let repository = UserProfileRepository(context: viewContext)
+                let userWeightKg = repository.getWeightKg()
                 print("🔍 Fetched \(results.count) items with weight filter")
                 // Sample a few items to check their weights
                 for (index, item) in results.prefix(5).enumerated() {
@@ -471,21 +490,32 @@ struct ItemGridView: View {
     }
     
     func fetchOutfits() {
+        // Require authentication - get userId
+        guard let userId = SupabaseService.shared.currentUser?.id.uuidString else {
+            DispatchQueue.main.async {
+                self.outfits = []
+            }
+            return
+        }
+        
         let request = NSFetchRequest<Outfit>(entityName: "Outfit")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: sortAscending)]
         
         // Build predicate from outfit filter model
         let filterPredicate = makeOutfitPredicate(for: outfitFilterModel)
         
-        // Base predicate: exclude drafts
+        // Base predicate: exclude drafts and soft-deleted items, filter by userId
         let draftPredicate = NSPredicate(format: "isDraft != YES")
+        let softDeleteFilter = NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
+        let userIdPredicate = NSPredicate(format: "userId == %@", userId)
         
         // Combine predicates
+        let basePredicates = [draftPredicate, softDeleteFilter, userIdPredicate]
         let finalPredicate: NSPredicate
         if let filter = filterPredicate {
-            finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [draftPredicate, filter])
+            finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: basePredicates + [filter])
         } else {
-            finalPredicate = draftPredicate
+            finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: basePredicates)
         }
         
         request.predicate = finalPredicate
@@ -512,7 +542,10 @@ struct ItemGridView: View {
     private func createNewItem(with image: UIImage, in wardrobe: Wardrobe) {
         let item = Item(context: viewContext)
         item.id = UUID()
-        item.timestamp = Date()
+        let now = Date()
+        item.timestamp = now
+        item.createdAt = now
+        item.updatedAt = now // Set updatedAt for sync tracking
         
         // Process and compress image
         if let imageData = image.processForStorage() {
@@ -521,6 +554,7 @@ struct ItemGridView: View {
             photo.thumbnailData = image.generateThumbnail()
             photo.isPrimary = true
             photo.id = UUID()
+            photo.type = "front"
             photo.item = item
         }
 
@@ -532,6 +566,9 @@ struct ItemGridView: View {
             path.append(item)
             // Refresh items after adding new one
             fetchItems()
+            
+            // Trigger automatic sync for the new item
+            SyncService.shared.syncItemIfNeeded(item)
         } catch {
             print("❌ Failed to save new item: \(error.localizedDescription)")
         }
@@ -743,14 +780,22 @@ struct ItemGridView: View {
                 fetchItems()
                 fetchOutfits()
             } label: {
-                Label("Newest First", systemImage: !sortAscending ? "checkmark" : "")
+                if !sortAscending {
+                    Label("Newest First", systemImage: "checkmark")
+                } else {
+                    Text("Newest First")
+                }
             }
             Button {
                 sortAscending = true
                 fetchItems()
                 fetchOutfits()
             } label: {
-                Label("Oldest First", systemImage: sortAscending ? "checkmark" : "")
+                if sortAscending {
+                    Label("Oldest First", systemImage: "checkmark")
+                } else {
+                    Text("Oldest First")
+                }
             }
         } label: {
             Image(systemName: "arrow.up.arrow.down")
@@ -954,8 +999,8 @@ struct ItemGridView: View {
     
     private func fetchAllWardrobes() -> [Wardrobe] {
         let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
-        // Filter by wardrobeType (closet or wishlist)
-        request.predicate = NSPredicate(format: "type == %@", wardrobeType)
+        // Filter by wardrobeType (closet or wishlist) and exclude soft-deleted
+        request.predicate = NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", wardrobeType)
         request.sortDescriptors = [
             NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)
         ]
@@ -1004,14 +1049,19 @@ struct ItemGridView: View {
             }
         }
         
-        // Delete all selected items
+        // Soft delete all selected items (for sync)
         for item in selectedItems {
-            viewContext.delete(item)
+            softDelete(item)
         }
         
         do {
             try viewContext.save()
             print("✅ Deleted \(selectedItems.count) items")
+            
+            // Trigger sync for all soft-deleted items
+            for item in selectedItems {
+                SyncService.shared.syncItemIfNeeded(item)
+            }
             
             // Cleanup orphaned brands
             for brand in brandsToCheck {
@@ -1030,9 +1080,9 @@ struct ItemGridView: View {
     private func deleteSelectedOutfits() {
         guard !selectedOutfits.isEmpty else { return }
         
-        // Delete all selected outfits
+        // Soft delete all selected outfits (for sync)
         for outfit in selectedOutfits {
-            viewContext.delete(outfit)
+            softDelete(outfit)
         }
         
         do {
