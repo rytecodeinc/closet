@@ -24,6 +24,12 @@ struct EventOutfitSelectionView: View {
     
     private var squareSize = UIScreen.main.bounds.width / 2.0
     
+    // MARK: - Current user ID
+        private var currentUserID: String? {
+            SupabaseService.shared.currentUser?.id.uuidString
+        }
+
+    
     // MARK: - Explicit initializer
     init(event: Event) {
         self.event = event
@@ -111,9 +117,20 @@ struct EventOutfitSelectionView: View {
     // MARK: - Core Data fetch
     private func fetchOutfits() {
         let request = NSFetchRequest<Outfit>(entityName: "Outfit")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: false)]
-        // Exclude drafts from outfit selections
-        request.predicate = NSPredicate(format: "isDraft != YES")
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.createdAt, ascending: false)]
+        
+        // Show only user's outfits and exclude drafts from outfit selections
+        if let userID = currentUserID {
+            request.predicate = NSPredicate(
+                format: "isDraft != YES AND (isSoftDeleted != YES OR isSoftDeleted == nil) AND userId == %@", userID
+            )
+        } else {
+            // Not logged in — show nothing
+            print("⚠️ EventOutfitSelectionView: no logged-in user, showing no outfits")
+            DispatchQueue.main.async { self.outfits = [] }
+            return
+        }
+        
         do {
             let results = try viewContext.fetch(request)
             DispatchQueue.main.async { self.outfits = results }

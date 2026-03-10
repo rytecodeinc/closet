@@ -194,10 +194,7 @@ struct CreateEventView: View {
                                                 endDate = startDay
                                             }
                                         } else {
-                                            // For timed events, ensure end is at least 1 minute after start
-                                            if endDate <= newStartDate {
-                                                endDate = newStartDate.addingTimeInterval(60)
-                                            }
+                                            endDate = newStartDate.addingTimeInterval(3600)
                                         }
                                     }
                                 
@@ -206,6 +203,12 @@ struct CreateEventView: View {
                                     .frame(height: 34)
                             }
                         }
+                    }
+                    .onAppear {
+                        UIDatePicker.appearance().minuteInterval = 5 // set 5 minute increments
+                    }
+                    .onDisappear {
+                        UIDatePicker.appearance().minuteInterval = 1  // restore default
                     }
                     .padding(.horizontal)
                     

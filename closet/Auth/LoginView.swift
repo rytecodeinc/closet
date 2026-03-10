@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import CoreData
 
 struct LoginView: View {
     @EnvironmentObject var supabaseService: SupabaseService
@@ -26,6 +27,9 @@ struct LoginView: View {
     @State private var isCleaningUp = false
     @State private var cleanupMessage: String?
     @State private var refreshToken = UUID()
+    @State private var showPurgeOutfitsConfirmation = false
+    @State private var isPurgingOutfits = false
+    @State private var purgeOutfitsMessage: String?
     
     // Fetch user profile to observe changes
     @FetchRequest(
@@ -61,146 +65,131 @@ struct LoginView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                    // Header
-                    VStack(spacing: 8) {
-                        Image(systemName: "person.circle.fill")
+                // Header
+                VStack(spacing: 8) {
+                    Image(systemName: "person.circle.fill")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 80, height: 80)
+                        .foregroundColor(.accentColor)
+                    
+                    Text(supabaseService.isAuthenticated ? "Hello, \(supabaseService.currentUser?.email ?? "User")!" :"Login")
+                        .font(.largeTitle)
+                        .fontWeight(.bold)
+                    
+                    Text("Sign in to sync your closet")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.top, 40)
+                
+                if supabaseService.isAuthenticated {
+                    VStack(spacing: 16) {
+                        Image(systemName: "checkmark.circle.fill")
                             .resizable()
                             .scaledToFit()
-                            .frame(width: 80, height: 80)
-                            .foregroundColor(.accentColor)
+                            .frame(width: 60, height: 60)
+                            .foregroundColor(.green)
                         
-                        Text(supabaseService.isAuthenticated ? "Hello, \(supabaseService.currentUser?.email ?? "User")!" :"Login")
-                            .font(.largeTitle)
-                            .fontWeight(.bold)
+                        Text("Successfully Logged In")
+                            .font(.headline)
+                            .foregroundColor(.primary)
                         
-                        Text("Sign in to sync your closet")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.top, 40)
-                    
-                    // Show logged in status if authenticated
-                    if supabaseService.isAuthenticated {
-                        VStack(spacing: 16) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: 60, height: 60)
-                                .foregroundColor(.green)
+                        // Display Name with edit functionality
+                        HStack(spacing: 8) {
+                            Text("Display Name:")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
                             
-                            Text("Successfully Logged In")
-                                .font(.headline)
-                                .foregroundColor(.primary)
-                            
-                            // Display Name with edit functionality
-                            HStack(spacing: 8) {
-                                Text("Display Name:")
+                            if isEditingDisplayName {
+                                TextField("Display Name", text: $editedDisplayName)
+                                    .textFieldStyle(.roundedBorder)
+                                    .autocapitalization(.words)
+                                    .frame(maxWidth: 200)
+                            } else {
+                                Text(currentDisplayName ?? "Name")
                                     .font(.subheadline)
                                     .foregroundColor(.secondary)
-                                
-                                if isEditingDisplayName {
-                                    TextField("Display Name", text: $editedDisplayName)
-                                        .textFieldStyle(.roundedBorder)
-                                        .autocapitalization(.words)
-                                        .frame(maxWidth: 200)
-                                } else {
-                                    Text(currentDisplayName ?? "Name")
-                                        .font(.subheadline)
-                                        .foregroundColor(.secondary)
-                                }
-                                
-                                Button {
-                                    if isEditingDisplayName {
-                                        Task {
-                                            await saveDisplayName()
-                                        }
-                                    } else {
-                                        startEditingDisplayName()
-                                    }
-                                } label: {
-                                    if isSavingDisplayName {
-                                        ProgressView()
-                                            .progressViewStyle(CircularProgressViewStyle())
-                                            .scaleEffect(0.8)
-                                    } else if isEditingDisplayName {
-                                        Image(systemName: "checkmark")
-                                            .foregroundColor(.green)
-                                    } else {
-                                        Image(systemName: "pencil")
-                                            .foregroundColor(.accentColor)
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                                .disabled(isSavingDisplayName)
                             }
-                            .padding(.horizontal)
-                            
-                            // Username with edit functionality
-                            HStack(spacing: 8) {
-                                Text("Username:")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                                
-                                if isEditingUsername {
-                                    TextField("username", text: $editedUsername)
-                                        .textFieldStyle(.roundedBorder)
-                                        .autocapitalization(.none)
-                                        .autocorrectionDisabled(true)
-                                        .frame(maxWidth: 150)
-                                } else {
-                                    Text(currentUsername ?? "username")
-                                        .font(.subheadline)
-                                        .foregroundColor(.secondary)
-                                }
-                                
-                                Button {
-                                    if isEditingUsername {
-                                        Task {
-                                            await saveUsername()
-                                        }
-                                    } else {
-                                        startEditingUsername()
-                                    }
-                                } label: {
-                                    if isSavingUsername {
-                                        ProgressView()
-                                            .progressViewStyle(CircularProgressViewStyle())
-                                            .scaleEffect(0.8)
-                                    } else if isEditingUsername {
-                                        Image(systemName: "checkmark")
-                                            .foregroundColor(.green)
-                                    } else {
-                                        Image(systemName: "pencil")
-                                            .foregroundColor(.accentColor)
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                                .disabled(isSavingUsername)
-                            }
-                            .padding(.horizontal)
                             
                             Button {
-                                Task {
-                                    await signOut()
+                                if isEditingDisplayName {
+                                    Task { await saveDisplayName() }
+                                } else {
+                                    startEditingDisplayName()
                                 }
                             } label: {
-                                HStack {
-                                    Image(systemName: "rectangle.portrait.and.arrow.right")
-                                    Text("Sign Out")
-                                        .fontWeight(.semibold)
+                                if isSavingDisplayName {
+                                    ProgressView().progressViewStyle(CircularProgressViewStyle()).scaleEffect(0.8)
+                                } else if isEditingDisplayName {
+                                    Image(systemName: "checkmark").foregroundColor(.green)
+                                } else {
+                                    Image(systemName: "pencil").foregroundColor(.accentColor)
                                 }
                             }
-                            .buttonStyle(.bordered)
-                            .padding(.top, 8)
+                            .buttonStyle(.plain)
+                            .disabled(isSavingDisplayName)
+                        }
+                        .padding(.horizontal)
+                        
+                        // Username with edit functionality
+                        HStack(spacing: 8) {
+                            Text("Username:")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
                             
-                            // Cleanup Orphaned Data Button
+                            if isEditingUsername {
+                                TextField("username", text: $editedUsername)
+                                    .textFieldStyle(.roundedBorder)
+                                    .autocapitalization(.none)
+                                    .autocorrectionDisabled(true)
+                                    .frame(maxWidth: 150)
+                            } else {
+                                Text(currentUsername ?? "username")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            Button {
+                                if isEditingUsername {
+                                    Task { await saveUsername() }
+                                } else {
+                                    startEditingUsername()
+                                }
+                            } label: {
+                                if isSavingUsername {
+                                    ProgressView().progressViewStyle(CircularProgressViewStyle()).scaleEffect(0.8)
+                                } else if isEditingUsername {
+                                    Image(systemName: "checkmark").foregroundColor(.green)
+                                } else {
+                                    Image(systemName: "pencil").foregroundColor(.accentColor)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(isSavingUsername)
+                        }
+                        .padding(.horizontal)
+                        
+                        Button {
+                            Task { await signOut() }
+                        } label: {
+                            HStack {
+                                Image(systemName: "rectangle.portrait.and.arrow.right")
+                                Text("Sign Out").fontWeight(.semibold)
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .padding(.top, 8)
+                        
+                        // MARK: - Maintenance Buttons
+                        VStack(spacing: 10) {
+                            // Cleanup Orphaned Data (Supabase/R2)
                             Button {
                                 showCleanupConfirmation = true
                             } label: {
                                 HStack {
                                     Image(systemName: "trash.circle")
-                                    Text("Clean Up Orphaned Data")
-                                        .fontWeight(.semibold)
+                                    Text("Clean Up Orphaned Data").fontWeight(.semibold)
                                 }
                                 .foregroundColor(.orange)
                             }
@@ -213,53 +202,57 @@ struct LoginView: View {
                                     .foregroundColor(message.contains("✅") ? .green : .red)
                                     .padding(.horizontal)
                             }
+                            
+                            // Purge Soft-Deleted Outfits (local Core Data)
+                            Button {
+                                showPurgeOutfitsConfirmation = true
+                            } label: {
+                                HStack {
+                                    Image(systemName: "tshirt")
+                                    Text("Purge Deleted Outfits").fontWeight(.semibold)
+                                }
+                                .foregroundColor(.orange)
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(isPurgingOutfits)
+                            
+                            if let message = purgeOutfitsMessage {
+                                Text(message)
+                                    .font(.caption)
+                                    .foregroundColor(message.contains("✅") ? .green : .red)
+                                    .padding(.horizontal)
+                            }
                         }
-                        .padding(.vertical, 20)
-                        .task {
-                            // Check Core Data first - if data exists, use it
-                            // Only fetch from Supabase if data is missing
-                            if supabaseService.isAuthenticated {
-                                let needsUsername = currentUsername == nil
-                                let needsDisplayName = currentDisplayName == nil
-                                
-                                if needsUsername || needsDisplayName {
-                                    do {
-                                        // getUsername() loads both username and displayName and syncs to Core Data
-                                        _ = try await supabaseService.getUsername()
-                                        // Refresh after loading
-                                        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-                                        viewContext.refreshAllObjects()
-                                        refreshToken = UUID()
-                                    } catch {
-                                        // If Supabase fetch fails, data might already be in Core Data
-                                        // Don't show error - just use what's in Core Data
-                                        print("⚠️ Error loading profile from Supabase (may already be in Core Data): \(error.localizedDescription)")
-                                        viewContext.refreshAllObjects()
-                                        refreshToken = UUID()
-                                    }
+                    }
+                    .padding(.vertical, 20)
+                    .task {
+                        if supabaseService.isAuthenticated {
+                            let needsUsername = currentUsername == nil
+                            let needsDisplayName = currentDisplayName == nil
+                            
+                            if needsUsername || needsDisplayName {
+                                do {
+                                    _ = try await supabaseService.getUsername()
+                                    try? await Task.sleep(nanoseconds: 100_000_000)
+                                    viewContext.refreshAllObjects()
+                                    refreshToken = UUID()
+                                } catch {
+                                    print("⚠️ Error loading profile from Supabase: \(error.localizedDescription)")
+                                    viewContext.refreshAllObjects()
+                                    refreshToken = UUID()
                                 }
                             }
                         }
-                        .onChange(of: userProfiles.count) { _ in
-                            // Refresh when user profile changes
-                            refreshToken = UUID()
-                        }
-                        .onChange(of: userProfile?.displayName) { _ in
-                            // Refresh when displayName changes
-                            refreshToken = UUID()
-                        }
-                        .onChange(of: userProfile?.username) { _ in
-                            // Refresh when username changes
-                            refreshToken = UUID()
-                        }
-                        .id(refreshToken) // Force refresh when token changes
-                        .onChange(of: supabaseService.isAuthenticated) { isAuthenticated in
-                            // Username is automatically cleared in SupabaseService.signOut()
-                            // No local state to clear
-                        }
-                    } else {
-                        // Form
-                        VStack(spacing: 16) {
+                    }
+                    .onChange(of: userProfiles.count) { _ in refreshToken = UUID() }
+                    .onChange(of: userProfile?.displayName) { _ in refreshToken = UUID() }
+                    .onChange(of: userProfile?.username) { _ in refreshToken = UUID() }
+                    .id(refreshToken)
+                    .onChange(of: supabaseService.isAuthenticated) { _ in }
+                    
+                } else {
+                    // Login form
+                    VStack(spacing: 16) {
                         TextField("Email", text: $email)
                             .textFieldStyle(.roundedBorder)
                             .autocapitalization(.none)
@@ -281,16 +274,12 @@ struct LoginView: View {
                         }
                         
                         Button {
-                            Task {
-                                await signIn()
-                            }
+                            Task { await signIn() }
                         } label: {
                             if isLoading {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .white))
                             } else {
-                                Text("Sign In")
-                                    .fontWeight(.semibold)
+                                Text("Sign In").fontWeight(.semibold)
                             }
                         }
                         .buttonStyle(.borderedProminent)
@@ -298,51 +287,77 @@ struct LoginView: View {
                         .disabled(isLoading || email.isEmpty || password.isEmpty)
                         
                         Button {
-                            Task {
-                                await resetPassword()
-                            }
+                            Task { await resetPassword() }
                         } label: {
                             Text("Forgot Password?")
                                 .font(.caption)
                                 .foregroundColor(.accentColor)
                         }
-                        }
-                        .padding(.horizontal)
                     }
-                    
-                    // Sign Up Link
-                    HStack {
-                        Text("Don't have an account?")
-                            .foregroundColor(.secondary)
-                        Button {
-                            showSignUp = true
-                        } label: {
-                            Text("Sign Up")
-                                .fontWeight(.semibold)
-                                .foregroundColor(.accentColor)
-                        }
+                    .padding(.horizontal)
+                }
+                
+                HStack {
+                    Text("Don't have an account?").foregroundColor(.secondary)
+                    Button {
+                        showSignUp = true
+                    } label: {
+                        Text("Sign Up").fontWeight(.semibold).foregroundColor(.accentColor)
                     }
-                    .padding(.bottom, 20)
-                
-                
+                }
+                .padding(.bottom, 20)
             }
             .scrollDismissesKeyboard(.interactively)
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showSignUp) {
-                SignUpView()
-                    .environmentObject(supabaseService)
+                SignUpView().environmentObject(supabaseService)
             }
             .alert("Clean Up Orphaned Data", isPresented: $showCleanupConfirmation) {
                 Button("Cancel", role: .cancel) { }
                 Button("Clean Up", role: .destructive) {
-                    Task {
-                        await cleanupOrphanedData()
-                    }
+                    Task { await cleanupOrphanedData() }
                 }
             } message: {
-                Text("This will permanently delete orphaned data from Supabase and R2. Orphaned data includes items, photos, and relationships that exist in Supabase but not in your local Core Data. This action cannot be undone.")
+                Text("This will permanently delete orphaned data from Supabase and R2. This action cannot be undone.")
+            }
+            .alert("Purge Deleted Outfits", isPresented: $showPurgeOutfitsConfirmation) {
+                Button("Cancel", role: .cancel) { }
+                Button("Purge", role: .destructive) {
+                    purgeOrphanedOutfits()
+                }
+            } message: {
+                Text("This will permanently remove all soft-deleted outfits from local storage. Outfits are already removed from Supabase when soft-deleted, so this only cleans up local tombstone records.")
             }
         }
+    }
+    
+    // MARK: - Purge soft-deleted outfits from local Core Data
+    private func purgeOrphanedOutfits() {
+        isPurgingOutfits = true
+        purgeOutfitsMessage = nil
+
+        let request = NSFetchRequest<Outfit>(entityName: "Outfit")
+        request.predicate = NSPredicate(format: "isSoftDeleted == YES")
+
+        do {
+            let softDeleted = try viewContext.fetch(request)
+            let count = softDeleted.count
+            if softDeleted.isEmpty {
+                purgeOutfitsMessage = "✅ No soft-deleted outfits found."
+            } else {
+                for outfit in softDeleted {
+                    viewContext.delete(outfit)
+                }
+                try viewContext.save()
+                purgeOutfitsMessage = "✅ Deleted \(count) soft-deleted outfit\(count == 1 ? "" : "s")."
+                print("🧹 Purged \(count) soft-deleted outfit(s)")
+            }
+        } catch {
+            purgeOutfitsMessage = "❌ Failed: \(error.localizedDescription)"
+            print("❌ Failed to purge soft-deleted outfits: \(error)")
+        }
+
+        isPurgingOutfits = false
     }
     
     private func signIn() async {
