@@ -49,6 +49,7 @@ struct ItemGridView: View {
     @State private var showMultiImagePicker = false
     @State private var showCropperForQueue = false
     @State private var shouldNavigateToItemAdd = false
+    @State private var shouldNavigateToItemAddDirect = false
     @State private var queuedImages: [UIImage] = []
     @State private var showCropperCancelConfirmation = false
 
@@ -143,10 +144,11 @@ struct ItemGridView: View {
             fetchOutfits()
         }
         .onReceive(NotificationCenter.default.publisher(for: .NSManagedObjectContextDidSave)) { notification in
-            // Refresh items when context saves (items added/deleted/updated elsewhere)
+            // Refresh items AND outfits when context saves (added/deleted/updated elsewhere)
             if let context = notification.object as? NSManagedObjectContext,
                context === viewContext || context.parent === viewContext {
                 fetchItems()
+                fetchOutfits()
             }
         }
         .toolbar {
@@ -250,23 +252,7 @@ struct ItemGridView: View {
                 }
             }
         }
-        .background {
-            // Hidden NavigationLink that is programmatically triggered
-            NavigationLink(
-                destination: ItemAddView(
-                    parentContext: viewContext,
-                    selectedWardrobe: selectedWardrobe,
-                    queueCoordinator: queueCoordinator
-                )
-                .onDisappear {
-                    handleItemAddViewDismiss()
-                },
-                isActive: $shouldNavigateToItemAdd
-            ) {
-                EmptyView()
-            }
-            .hidden()
-        }
+        
         .sheet(isPresented: $showWardrobeSelectionSheet) {
             wardrobeSelectionSheet()
         }
@@ -304,6 +290,19 @@ struct ItemGridView: View {
         .navigationDestination(item: $selectedOutfitForNavigation) { outfit in
             OutfitDetailView(outfit: outfit)
         }
+        .navigationDestination(isPresented: $shouldNavigateToItemAdd) {
+            ItemAddView(
+                parentContext: viewContext,
+                selectedWardrobe: selectedWardrobe,
+                queueCoordinator: queueCoordinator
+            )
+            .onDisappear {
+                handleItemAddViewDismiss()
+            }
+        }
+        .navigationDestination(isPresented: $shouldNavigateToItemAddDirect) {
+            ItemAddView(parentContext: viewContext, selectedWardrobe: selectedWardrobe)
+        }
     }
 
 /*    private var ControlsBar: some View {
@@ -339,7 +338,7 @@ struct ItemGridView: View {
         }
         
         let request = NSFetchRequest<Item>(entityName: "Item")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.timestamp, ascending: sortAscending)]
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.createdAt, ascending: sortAscending)]
         
         // Build predicate from filterModel, but exclude wardrobe filter since we handle it separately below
         var subpredicates: [NSPredicate] = []
@@ -499,7 +498,7 @@ struct ItemGridView: View {
         }
         
         let request = NSFetchRequest<Outfit>(entityName: "Outfit")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: sortAscending)]
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.createdAt, ascending: sortAscending)]
         
         // Build predicate from outfit filter model
         let filterPredicate = makeOutfitPredicate(for: outfitFilterModel)
@@ -843,17 +842,19 @@ struct ItemGridView: View {
     private func nonSelectionModeTrailingToolbar() -> some View {
         HStack(spacing: 16) {
             if selectedTab == "Items" {
-                NavigationLink(destination: ItemDraftsView()) {
+               /* NavigationLink(destination: ItemDraftsView()) {
                     Image(systemName: "folder")
-                }
-                NavigationLink(destination: ItemAddView(parentContext: viewContext, selectedWardrobe: selectedWardrobe)) {
+                }*/
+                Button {
+                    shouldNavigateToItemAddDirect = true
+                } label: {
                     Image(systemName: "plus")
                 }
             } else {
-                NavigationLink(destination: OutfitDraftsView(wardrobeType: wardrobeType, selectedWardrobe: selectedWardrobe)) {
+              /*  NavigationLink(destination: OutfitDraftsView(wardrobeType: wardrobeType, selectedWardrobe: selectedWardrobe)) {
                     Image(systemName: "folder")
-                }
-                NavigationLink(destination: OutfitAddView(wardrobeType: wardrobeType, initialWardrobe: selectedWardrobe)) {
+                }*/
+                NavigationLink(destination: OutfitAddView(wardrobeType: wardrobeType)) {
                     Image(systemName: "plus")
                 }
             }
@@ -1002,7 +1003,7 @@ struct ItemGridView: View {
         // Filter by wardrobeType (closet or wishlist) and exclude soft-deleted
         request.predicate = NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", wardrobeType)
         request.sortDescriptors = [
-            NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)
+            NSSortDescriptor(keyPath: \Wardrobe.createdAt, ascending: true)
         ]
         
         do {

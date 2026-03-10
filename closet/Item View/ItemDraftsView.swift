@@ -11,17 +11,19 @@ import CoreData
 
 struct ItemDraftsView: View {
     @Environment(\.managedObjectContext) private var viewContext
-    
+
+    /// Called when the user taps a draft to continue editing it.
+    var onSelectDraft: ((Item) -> Void)? = nil
+
     @FetchRequest(
         entity: Item.entity(),
-        sortDescriptors: [NSSortDescriptor(keyPath: \Item.timestamp, ascending: false)],
+        sortDescriptors: [NSSortDescriptor(keyPath: \Item.createdAt, ascending: false)],
         predicate: NSPredicate(format: "isDraft == YES")
     ) private var drafts: FetchedResults<Item>
     
     // Selection mode state
     @State private var isInSelectionMode: Bool = false
     @State private var selectedItems: Set<Item> = []
-    @State private var selectedItemForNavigation: Item?
     
     @State private var draftToDelete: Item? = nil
     @State private var showingDeleteConfirmation: Bool = false
@@ -147,9 +149,6 @@ struct ItemDraftsView: View {
                 Text("Are you sure you want to delete this draft? This action cannot be undone.")
             }
         }
-        .navigationDestination(item: $selectedItemForNavigation) { item in
-            ItemDetailView(item: item)
-        }
     }
     
     // MARK: - Gesture Handlers
@@ -168,8 +167,8 @@ struct ItemDraftsView: View {
                 isInSelectionMode = false
             }
         } else {
-            // Navigate to detail view
-            selectedItemForNavigation = draft
+            // Open draft for editing
+            onSelectDraft?(draft)
         }
     }
     
