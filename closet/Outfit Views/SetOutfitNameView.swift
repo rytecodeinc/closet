@@ -12,6 +12,7 @@ struct SetOutfitNameView: View {
     @ObservedObject var outfit: Outfit
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var syncService: SyncService
     
     @State private var nameText: String = ""
     @FocusState private var isTextFieldFocused: Bool
@@ -51,9 +52,11 @@ struct SetOutfitNameView: View {
 
     private func saveName() {
         outfit.name = nameText.isEmpty ? nil : nameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        setUpdatedAt(outfit)
         
         do {
             try viewContext.save()
+            syncService.syncOutfitIfNeeded(outfit)
         } catch {
             print("❌ Failed to save name: \(error.localizedDescription)")
         }

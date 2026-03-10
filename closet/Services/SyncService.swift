@@ -156,6 +156,12 @@ class SyncService: ObservableObject {
                   let context = self.context else {
                 return
             }
+
+            // Drafts are local-only — never push to Supabase
+            guard !item.isDraft else {
+                print("⏭️ Skipping sync for draft item: \(item.name ?? "unnamed")")
+                return
+            }
             
             // Process pending changes to ensure newly added photos are included
             if context.hasChanges {
@@ -310,8 +316,53 @@ class SyncService: ObservableObject {
         syncStatus = "Sync complete!"
         
         print("✅ Successfully synced \(totalItems) items")
+        
+        // Sync any outfits that haven't been pushed to Supabase yet
+        try await syncAllOutfits(userId: userId)
     }
     
+    /// Syncs all outfits that have never been synced or have changed since last sync.
+    /// Called at the end of syncAllItems() so that pre-existing outfits created before
+    /// sync was implemented are pushed to Supabase automatically.
+    private func syncAllOutfits(userId: UUID) async throws {
+        guard let context = context else { return }
+        
+        let request: NSFetchRequest<Outfit> = Outfit.fetchRequest()
+        request.predicate = NSPredicate(
+            format: "userId == %@ AND isDraft != YES AND isSoftDeleted != YES AND (syncedAt == nil OR updatedAt > syncedAt)",
+            userId.uuidString
+        )
+        
+        let outfitsToSync: [Outfit]
+        do {
+            outfitsToSync = try context.fetch(request)
+        } catch {
+            print("⚠️ Failed to fetch outfits for sync: \(error.localizedDescription)")
+            return
+        }
+        
+        guard !outfitsToSync.isEmpty else {
+            print("ℹ️ No outfits need syncing")
+            return
+        }
+        
+        print("🔍 Found \(outfitsToSync.count) outfit(s) that need syncing")
+        
+        for outfit in outfitsToSync {
+            // Ensure userId is set (safety net for outfits created before userId was required)
+            if outfit.userId == nil || outfit.userId?.isEmpty == true {
+                outfit.userId = userId.uuidString
+                try? context.save()
+            }
+            do {
+                try await syncOutfit(outfit, userId: userId)
+                print("✅ Synced outfit: \(outfit.name ?? "unnamed")")
+            } catch {
+                print("⚠️ Failed to sync outfit '\(outfit.name ?? "unnamed")': \(error.localizedDescription)")
+            }
+        }
+    }
+
     /// One-time cleanup: Removes orphaned data from Supabase and R2
     /// Orphaned data = data in Supabase that references items that don't exist in Core Data
     func cleanupOrphanedData() async throws {
@@ -722,7 +773,10 @@ class SyncService: ObservableObject {
         }
         
         let request: NSFetchRequest<Item> = Item.fetchRequest()
-        request.predicate = NSPredicate(format: "userId == %@ AND (syncedAt == nil OR updatedAt > syncedAt)", userId.uuidString)
+        request.predicate = NSPredicate(
+            format: "userId == %@ AND isDraft != YES AND (syncedAt == nil OR updatedAt > syncedAt)",
+            userId.uuidString
+        )
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.createdAt, ascending: true)]
         
         return try context.fetch(request)
@@ -1098,6 +1152,252 @@ class SyncService: ObservableObject {
         try context.save()
     }
     
+    // MARK: - Outfit Sync
+
+    nonisolated func syncOutfitIfNeeded(_ outfit: Outfit) {
+        Task { @MainActor in
+            guard self.supabaseService.isAuthenticated,
+                  let userId = self.supabaseService.currentUser?.id,
+                  let outfitId = outfit.id,
+                  let context = self.context else {
+                return
+            }
+
+            // Fetch by ID to ensure latest state
+            let request: NSFetchRequest<Outfit> = Outfit.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", outfitId as CVarArg)
+            request.fetchLimit = 1
+
+            guard let refreshedOutfit = try? context.fetch(request).first else {
+                print("⚠️ Could not find outfit with ID \(outfitId) for sync")
+                return
+            }
+
+            // Drafts are local-only — never push to Supabase
+            guard !refreshedOutfit.isDraft else {
+                print("⏭️ Skipping sync for draft outfit: \(refreshedOutfit.name ?? "unnamed")")
+                return
+            }
+
+            // Set userId if missing (safety net)
+            if refreshedOutfit.userId == nil || refreshedOutfit.userId?.isEmpty == true {
+                refreshedOutfit.userId = userId.uuidString
+                try? context.save()
+            }
+
+            // Check if sync is needed
+            let needsSync: Bool
+            if refreshedOutfit.syncedAt == nil {
+                needsSync = true
+            } else if let updatedAt = refreshedOutfit.updatedAt, let syncedAt = refreshedOutfit.syncedAt {
+                needsSync = updatedAt >= syncedAt
+            } else {
+                needsSync = true // always sync if timestamps are missing
+            }
+
+            guard needsSync else { return }
+
+            do {
+                try await self.syncOutfit(refreshedOutfit, userId: userId)
+                print("✅ Auto-synced outfit: \(refreshedOutfit.name ?? "unnamed")")
+            } catch {
+                print("⚠️ Auto-sync failed for outfit '\(refreshedOutfit.name ?? "unnamed")': \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func syncOutfit(_ outfit: Outfit, userId: UUID) async throws {
+        guard let outfitId = outfit.id,
+              let context = context else { return }
+
+        // Soft-deleted: remove from R2 and Supabase
+        if outfit.isSoftDeleted {
+            print("🗑️ Deleting outfit from Supabase and R2: \(outfit.name ?? "unnamed")")
+
+            // Delete collage image from R2
+            do {
+                try await supabaseService.deleteOutfitImage(outfitId: outfitId, userId: userId)
+            } catch {
+                print("⚠️ Failed to delete outfit image from R2: \(error.localizedDescription)")
+            }
+
+            do {
+                try await supabaseService.supabaseClient.from("outfit_items")
+                    .delete()
+                    .eq("outfit_id", value: outfitId.uuidString)
+                    .execute()
+            } catch {
+                print("⚠️ Failed to delete outfit_items: \(error.localizedDescription)")
+            }
+
+            do {
+                try await supabaseService.supabaseClient.from("outfit_tags")
+                    .delete()
+                    .eq("outfit_id", value: outfitId.uuidString)
+                    .execute()
+            } catch {
+                print("⚠️ Failed to delete outfit_tags: \(error.localizedDescription)")
+            }
+
+            try await supabaseService.supabaseClient.from("outfits")
+                .delete()
+                .eq("id", value: outfitId.uuidString)
+                .execute()
+
+            outfit.syncedAt = Date()
+            try context.save()
+            print("✅ Deleted outfit from Supabase and R2")
+            return
+        }
+
+        // Upload collage image to R2 if available
+        var imageUrl: String? = nil
+        if let imageData = outfit.image {
+            do {
+                imageUrl = try await supabaseService.uploadOutfitImage(
+                    imageData: imageData,
+                    outfitId: outfitId,
+                    userId: userId
+                )
+                print("✅ Uploaded outfit image to R2: \(imageUrl ?? "")")
+            } catch {
+                print("⚠️ Failed to upload outfit image to R2: \(error.localizedDescription)")
+                // Continue syncing metadata even if image upload fails
+            }
+        }
+
+        // Serialize transformationData (portable UUID format) as JSON string for Supabase
+        var transformationJson: String? = nil
+        if let transformationData = outfit.transformationData {
+            transformationJson = String(data: transformationData, encoding: .utf8)
+        }
+
+        // Upsert outfit metadata
+        let outfitData = SyncOutfitData(
+            id: outfitId.uuidString,
+            userId: userId.uuidString,
+            name: outfit.name,
+            notes: outfit.notes,
+            isDraft: outfit.isDraft,
+            isSoftDeleted: outfit.isSoftDeleted,
+            category: outfit.category,
+            createdAt: outfit.createdAt?.ISO8601String,
+            updatedAt: outfit.updatedAt?.ISO8601String ?? outfit.createdAt?.ISO8601String,
+            imageUrl: imageUrl,
+            transformationJson: transformationJson
+        )
+
+        try await supabaseService.supabaseClient.from("outfits")
+            .upsert(outfitData, onConflict: "id")
+            .execute()
+        print("✅ Upserted outfit metadata: \(outfit.name ?? "unnamed")")
+
+        // Ensure every item in the outfit exists in Supabase before inserting outfit_items
+        // (outfit_items has a FK constraint: item_id → items.id).
+        // Only sync items that have never been synced (syncedAt == nil). Items that already
+        // have a syncedAt timestamp are guaranteed to exist in Supabase and must NOT be
+        // re-synced here — doing so risks running pair/relationship cleanup against an
+        // incompletely-loaded Core Data context, which would delete valid Supabase rows.
+        if let items = outfit.items as? Set<Item> {
+            for item in items {
+                guard item.id != nil else { continue }
+                guard item.syncedAt == nil else { continue }
+                if item.userId == nil || item.userId?.isEmpty == true {
+                    item.userId = userId.uuidString
+                    try? context.save()
+                }
+                do {
+                    try await ensureReferencedEntitiesSynced(for: item, userId: userId)
+                    try await syncItem(item, userId: userId)
+                } catch {
+                    print("⚠️ Failed to pre-sync outfit item '\(item.name ?? "unnamed")': \(error.localizedDescription)")
+                }
+            }
+        }
+
+        // Sync relationships
+        try await syncOutfitRelationships(outfit, outfitId: outfitId)
+
+        outfit.syncedAt = Date()
+        try context.save()
+    }
+
+    private func syncOutfitRelationships(_ outfit: Outfit, outfitId: UUID) async throws {
+        // --- outfit_items ---
+        let currentItemIds: Set<String>
+        if let items = outfit.items as? Set<Item> {
+            currentItemIds = Set(items.compactMap { $0.id?.uuidString })
+        } else {
+            currentItemIds = Set()
+        }
+
+        let existingItemsResponse = try await supabaseService.supabaseClient.from("outfit_items")
+            .select("item_id")
+            .eq("outfit_id", value: outfitId.uuidString)
+            .execute()
+
+        let existingItemIds: Set<String>
+        if let decoded = try? JSONDecoder().decode([OutfitItemResponse].self, from: existingItemsResponse.data) {
+            existingItemIds = Set(decoded.compactMap { $0.itemId })
+        } else {
+            existingItemIds = Set()
+        }
+
+        for idToDelete in existingItemIds.subtracting(currentItemIds) {
+            try? await supabaseService.supabaseClient.from("outfit_items")
+                .delete()
+                .eq("outfit_id", value: outfitId.uuidString)
+                .eq("item_id", value: idToDelete)
+                .execute()
+        }
+
+        for itemId in currentItemIds {
+            let junction = OutfitItemJunction(outfitId: outfitId.uuidString, itemId: itemId)
+            do {
+                try await supabaseService.supabaseClient.from("outfit_items")
+                    .upsert(junction, onConflict: "outfit_id,item_id")
+                    .execute()
+            } catch {
+                print("⚠️ Skipping outfit_items insert for item \(itemId): \(error.localizedDescription)")
+            }
+        }
+
+        // --- outfit_tags ---
+        let currentTagIds: Set<String>
+        if let tags = outfit.tags as? Set<Tag> {
+            currentTagIds = Set(tags.compactMap { $0.id?.uuidString })
+        } else {
+            currentTagIds = Set()
+        }
+
+        let existingTagsResponse = try await supabaseService.supabaseClient.from("outfit_tags")
+            .select("tag_id")
+            .eq("outfit_id", value: outfitId.uuidString)
+            .execute()
+
+        let existingTagIds: Set<String>
+        if let decoded = try? JSONDecoder().decode([OutfitTagResponse].self, from: existingTagsResponse.data) {
+            existingTagIds = Set(decoded.compactMap { $0.tagId })
+        } else {
+            existingTagIds = Set()
+        }
+
+        for idToDelete in existingTagIds.subtracting(currentTagIds) {
+            try? await supabaseService.supabaseClient.from("outfit_tags")
+                .delete()
+                .eq("outfit_id", value: outfitId.uuidString)
+                .eq("tag_id", value: idToDelete)
+                .execute()
+        }
+
+        for tagId in currentTagIds {
+            let junction = OutfitTagJunction(outfitId: outfitId.uuidString, tagId: tagId)
+            try await supabaseService.supabaseClient.from("outfit_tags")
+                .upsert(junction, onConflict: "outfit_id,tag_id")
+                .execute()
+        }
+    }
+
     /// Syncs username to Core Data (called from SupabaseService when username is loaded)
     @MainActor
     func syncUsernameToCoreData(_ username: String) {
@@ -2124,10 +2424,7 @@ class SyncService: ObservableObject {
     
     /// Syncs item price
     private func syncPrice(_ price: Price, itemId: UUID, userId: UUID) async throws {
-        // Price entity doesn't have an id, so we use item_id as the unique key
-        let priceId = UUID() // Generate a new ID for this price record
-        
-        // Convert NSDecimalNumber to Decimal
+        // item_id is the primary key — one price per item
         let amount: Decimal
         if let nsDecimal = price.amount {
             amount = nsDecimal as Decimal
@@ -2136,9 +2433,7 @@ class SyncService: ObservableObject {
         }
         
         let priceData = SyncPriceData(
-            id: priceId.uuidString,
             itemId: itemId.uuidString,
-           // userId: userId.uuidString,
             amount: amount,
             currency: price.currency ?? "USD"
         )
@@ -2440,16 +2735,12 @@ private struct ItemWardrobeResponse: Codable {
 }
 
 private struct SyncPriceData: Codable {
-    let id: String
-    let itemId: String
-   // let userId: String
+    let itemId: String      // Primary key — one price per item
     let amount: Decimal
     let currency: String
     
     enum CodingKeys: String, CodingKey {
-        case id
         case itemId = "item_id"
-      //  case userId = "user_id"
         case amount
         case currency
     }
@@ -2604,6 +2895,70 @@ private struct SyncWardrobeData: Codable {
         case isSoftDeleted = "is_soft_deleted"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+    }
+}
+
+private struct SyncOutfitData: Codable {
+    let id: String
+    let userId: String
+    let name: String?
+    let notes: String?
+    let isDraft: Bool
+    let isSoftDeleted: Bool
+    let category: String?
+    let createdAt: String?
+    let updatedAt: String?
+    let imageUrl: String?          // R2 CDN URL of the pre-rendered collage
+    let transformationJson: String? // JSON string of [SavedOutfitItem] with portable UUIDs
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userId = "user_id"
+        case name
+        case notes
+        case isDraft = "is_draft"
+        case isSoftDeleted = "is_soft_deleted"
+        case category
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case imageUrl = "image_url"
+        case transformationJson = "transformation_json"
+    }
+}
+
+private struct OutfitItemJunction: Codable {
+    let outfitId: String
+    let itemId: String
+
+    enum CodingKeys: String, CodingKey {
+        case outfitId = "outfit_id"
+        case itemId = "item_id"
+    }
+}
+
+private struct OutfitTagJunction: Codable {
+    let outfitId: String
+    let tagId: String
+
+    enum CodingKeys: String, CodingKey {
+        case outfitId = "outfit_id"
+        case tagId = "tag_id"
+    }
+}
+
+private struct OutfitItemResponse: Codable {
+    let itemId: String
+
+    enum CodingKeys: String, CodingKey {
+        case itemId = "item_id"
+    }
+}
+
+private struct OutfitTagResponse: Codable {
+    let tagId: String
+
+    enum CodingKeys: String, CodingKey {
+        case tagId = "tag_id"
     }
 }
 
