@@ -23,6 +23,7 @@ ALTER TABLE item_seasons ENABLE ROW LEVEL SECURITY;
 ALTER TABLE item_tags ENABLE ROW LEVEL SECURITY;
 ALTER TABLE item_collections ENABLE ROW LEVEL SECURITY;
 ALTER TABLE item_wardrobes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE item_pairs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE outfit_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE outfit_tags ENABLE ROW LEVEL SECURITY;
 ALTER TABLE event_items ENABLE ROW LEVEL SECURITY;
@@ -286,6 +287,26 @@ WITH CHECK (
     EXISTS (
         SELECT 1 FROM items 
         WHERE items.id = item_collections.item_id 
+        AND items.user_id::text = auth.uid()::text
+    )
+);
+
+-- Item Pairs (join with items table via item_id to check user_id)
+-- Both rows of a bidirectional pair share the same item_id owner, so checking item_id is sufficient.
+DROP POLICY IF EXISTS "Users can manage own item pairs" ON item_pairs;
+CREATE POLICY "Users can manage own item pairs"
+ON item_pairs FOR ALL
+USING (
+    EXISTS (
+        SELECT 1 FROM items
+        WHERE items.id = item_pairs.item_id
+        AND items.user_id::text = auth.uid()::text
+    )
+)
+WITH CHECK (
+    EXISTS (
+        SELECT 1 FROM items
+        WHERE items.id = item_pairs.item_id
         AND items.user_id::text = auth.uid()::text
     )
 );
