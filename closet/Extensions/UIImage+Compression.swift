@@ -8,12 +8,25 @@
 import UIKit
 
 extension UIImage {
-    /// Compresses image to target file size (default ~200KB for detail views)
+
+    /// Returns true when the image contains at least one non-opaque pixel.
+    /// Items with removed backgrounds are transparent; regular photos are fully opaque.
+    var hasTransparency: Bool {
+        guard let cgImage = self.cgImage else { return false }
+        let alphaInfo = cgImage.alphaInfo
+        return alphaInfo == .first
+            || alphaInfo == .last
+            || alphaInfo == .premultipliedFirst
+            || alphaInfo == .premultipliedLast
+            || alphaInfo == .alphaOnly
+    }
+
+    /// Compresses an opaque image to a target file size (default ~200 KB).
+    /// Transparent images are NOT passed through this path — use processForStorage() instead.
     func compressForStorage(maxFileSizeKB: Int = 200) -> Data? {
         var compression: CGFloat = 0.8
         var imageData = self.jpegData(compressionQuality: compression)
         
-        // Iteratively reduce compression quality until we hit target size
         while let data = imageData,
               data.count > maxFileSizeKB * 1024,
               compression > 0.1 {
@@ -24,11 +37,11 @@ extension UIImage {
         return imageData
     }
     
-    /// Resizes image to maximum dimension while maintaining aspect ratio
+    /// Resizes image to maximum dimension while maintaining aspect ratio.
+    /// Always renders with opaque=false so alpha is preserved if present.
     func resizeForStorage(maxDimension: CGFloat = 1200) -> UIImage? {
         let currentMaxDimension = max(size.width, size.height)
         
-        // If already smaller than max, return original
         guard currentMaxDimension > maxDimension else {
             return self
         }
@@ -36,9 +49,8 @@ extension UIImage {
         let scale = maxDimension / currentMaxDimension
         let newSize = CGSize(width: size.width * scale, height: size.height * scale)
         
-        // Use high-quality rendering
         let format = UIGraphicsImageRendererFormat()
-        format.opaque = false
+        format.opaque = false   // preserve alpha channel
         format.scale = 1.0
         format.preferredRange = .extended
         
@@ -51,21 +63,27 @@ extension UIImage {
         return resizedImage
     }
     
-    /// Generates a thumbnail for grid views (default 300px)
+    /// Generates a thumbnail for grid views (default 300 px).
+    /// Uses PNG when the source is transparent so background-removed items
+    /// render correctly anywhere a thumbnail is displayed.
     func generateThumbnail(size: CGFloat = 300) -> Data? {
-        return self.resizeForStorage(maxDimension: size)?
-            .jpegData(compressionQuality: 0.7)
+        guard let resized = self.resizeForStorage(maxDimension: size) else { return nil }
+        if resized.hasTransparency {
+            return resized.pngData()
+        }
+        return resized.jpegData(compressionQuality: 0.7)
     }
     
-    /// Optimized processing: resize first, then compress
-    /// This is more efficient than compressing a large image
+    /// Optimized processing: resize first, then encode.
+    /// Transparent images are encoded as PNG to preserve alpha;
+    /// opaque images are encoded as JPEG for smaller file size.
     func processForStorage(maxDimension: CGFloat = 1200, maxFileSizeKB: Int = 200) -> Data? {
-        // First resize to reduce pixel count
         guard let resized = self.resizeForStorage(maxDimension: maxDimension) else {
             return nil
         }
-        
-        // Then compress the resized image
+        if resized.hasTransparency {
+            return resized.pngData()
+        }
         return resized.compressForStorage(maxFileSizeKB: maxFileSizeKB)
     }
 }

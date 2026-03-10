@@ -183,6 +183,17 @@ func compressExistingPhotos(context: NSManagedObjectContext) {
                 continue
             }
             
+            // Skip transparent images — JPEG compression destroys the alpha channel.
+            // Background-removed items must stay as PNG.
+            if image.hasTransparency {
+                // Regenerate thumbnail in PNG if missing or was previously JPEG
+                if photo.thumbnailData == nil {
+                    photo.thumbnailData = image.generateThumbnail()
+                    hasChanges = true
+                }
+                continue
+            }
+
             let originalSize = Int64(data.count)
             totalOriginalSize += originalSize
             
