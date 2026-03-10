@@ -39,7 +39,7 @@ struct EventDrawerView: View {
         let endOfDay = Calendar.current.date(byAdding: .day, value: 1, to: startOfDay)!
 
         let request: NSFetchRequest<Event> = Event.fetchRequest()
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Event.timestamp, ascending: false)]
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Event.createdAt, ascending: false)]
 
         // Use startDate instead of date, and exclude soft-deleted events
         let datePredicate = NSPredicate(format: "startDate >= %@ AND startDate < %@", startOfDay as NSDate, endOfDay as NSDate)

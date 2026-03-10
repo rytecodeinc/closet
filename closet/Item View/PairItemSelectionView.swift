@@ -122,7 +122,7 @@ struct PairItemSelectionView: View {
             
             // Fetch items from closet wardrobe, excluding drafts and the current item
             let request: NSFetchRequest<Item> = Item.fetchRequest()
-            request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.timestamp, ascending: false)]
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.createdAt, ascending: false)]
             
             let wardrobePredicate = NSPredicate(format: "ANY wardrobes == %@", wardrobe)
             let draftPredicate = NSPredicate(format: "isDraft != YES")

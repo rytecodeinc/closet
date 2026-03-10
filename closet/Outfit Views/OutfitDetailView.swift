@@ -17,6 +17,8 @@ struct OutfitDetailView: View {
     @State private var attributesSheet: OutfitAttributesSectionView.Sheet?
     @State private var isFeaturedItemsExpanded = true
     
+    @State private var isEditingOutfit = false
+
     private var screenWidth: CGFloat { UIScreen.main.bounds.width }
     
     // Computed property to get ordered items array (preserves insertion order from canvas)
@@ -26,14 +28,16 @@ struct OutfitDetailView: View {
             let decoder = JSONDecoder()
             if let savedItems = try? decoder.decode([SavedOutfitItem].self, from: transformationData) {
                 let itemsSet = outfit.items as? Set<Item> ?? []
-                var itemsDict: [String: Item] = [:]
+                // Build lookup by both portable UUID and legacy Core Data ObjectID URI
+                var itemsByUUID: [String: Item] = [:]
+                var itemsByObjectID: [String: Item] = [:]
                 for item in itemsSet {
-                    let itemID = item.objectID.uriRepresentation().absoluteString
-                    itemsDict[itemID] = item
+                    if let uuid = item.id?.uuidString { itemsByUUID[uuid] = item }
+                    itemsByObjectID[item.objectID.uriRepresentation().absoluteString] = item
                 }
-                // Return items in the order they appear in transformationData
+                // Return items in canvas order; match UUID first, then legacy ObjectID
                 return savedItems.compactMap { savedItem in
-                    itemsDict[savedItem.itemID]
+                    itemsByUUID[savedItem.itemID] ?? itemsByObjectID[savedItem.itemID]
                 }
             }
         }
@@ -96,8 +100,15 @@ struct OutfitDetailView: View {
         .navigationTitle("Outfit Details")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            NavigationLink(destination: OutfitAddView(outfitToEdit: outfit)) {
+            Button {
+                isEditingOutfit = true
+            } label: {
                 Image(systemName: "paintbrush.pointed")
+            }
+        }
+        .fullScreenCover(isPresented: $isEditingOutfit) {
+            NavigationView {
+                OutfitAddView(outfitToEdit: outfit)
             }
         }
         .sheet(item: $attributesSheet) { sheet in

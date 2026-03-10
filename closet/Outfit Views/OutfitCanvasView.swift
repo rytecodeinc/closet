@@ -111,7 +111,7 @@ struct OutfitAddView: View {
         }
         
         let request: NSFetchRequest<Item> = Item.fetchRequest()
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.timestamp, ascending: sortAscending)]
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.createdAt, ascending: sortAscending)]
         
         // Use the helper function to build predicate from filterModel
         let filterPredicate = makePredicate(for: filterModel, context: viewContext)

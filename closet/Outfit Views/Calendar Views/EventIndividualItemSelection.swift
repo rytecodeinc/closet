@@ -26,7 +26,7 @@ struct EventIndividualItemSelection: View {
 
     // MARK: - FetchRequest for closet items only
     @FetchRequest(
-        sortDescriptors: [NSSortDescriptor(keyPath: \Item.timestamp, ascending: false)],
+        sortDescriptors: [NSSortDescriptor(keyPath: \Item.createdAt, ascending: false)],
         predicate: NSPredicate(format: "ANY wardrobes.type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", "closet")
     ) private var items: FetchedResults<Item>
 

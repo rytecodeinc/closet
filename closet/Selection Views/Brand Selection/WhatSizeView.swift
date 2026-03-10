@@ -139,7 +139,7 @@ struct BrandItemsView: View {
     private func fetchItems() {
         let request: NSFetchRequest<Item> = Item.fetchRequest()
         request.predicate = NSPredicate(format: "brand == %@", brand)
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.timestamp, ascending: true)]
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.createdAt, ascending: true)]
         
         do {
             items = try viewContext.fetch(request)

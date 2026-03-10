@@ -358,7 +358,7 @@ struct OutfitCalendarView: View {
     
     private func fetchEvents() {
         let request = NSFetchRequest<Event>(entityName: "Event")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Event.timestamp, ascending: false)]
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Event.createdAt, ascending: false)]
         do {
             let results = try viewContext.fetch(request)
             DispatchQueue.main.async { self.events = results }

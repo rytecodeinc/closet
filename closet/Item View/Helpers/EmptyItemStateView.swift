@@ -20,7 +20,7 @@ struct EmptyItemStateView: View {
     private var isDefaultWardrobe: Bool {
         let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
         request.predicate = NSPredicate(format: "type == %@", wardrobeType)
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)]
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Wardrobe.createdAt, ascending: true)]
         
         if let firstWardrobe = try? viewContext.fetch(request).first {
             return wardrobe.objectID == firstWardrobe.objectID

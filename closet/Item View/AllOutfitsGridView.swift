@@ -18,7 +18,7 @@ struct AllOutfitsGridView: View {
         // Fetch outfits that contain this item (excluding drafts)
         _outfits = FetchRequest(
             entity: Outfit.entity(),
-            sortDescriptors: [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: false)],
+            sortDescriptors: [NSSortDescriptor(keyPath: \Outfit.createdAt, ascending: false)],
             predicate: NSPredicate(format: "items CONTAINS %@ AND isDraft != YES", item)
         )
     }

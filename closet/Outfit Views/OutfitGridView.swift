@@ -119,7 +119,7 @@ struct OutfitGridView: View {
     // MARK: - Core Data fetch
      func fetchOutfits() {
         let request = NSFetchRequest<Outfit>(entityName: "Outfit")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: false)]
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.createdAt, ascending: false)]
         // Exclude drafts from regular outfit listings
         request.predicate = NSPredicate(format: "isDraft != YES")
         

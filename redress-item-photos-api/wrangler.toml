@@ -1,0 +1,17 @@
+# wrangler.toml - Cloudflare Worker Configuration
+name = "redress-item-photos-api"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+# R2 bucket binding
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "redress-item-photos"
+
+# Environment variables (non-sensitive only)
+[vars]
+SUPABASE_PROJECT_ID = "dqvguniitpahayaonvjj"
+WORKER_URL = "https://redress-item-photos-api.rytecode.workers.dev"
+
+# Secrets (set via CLI):
+# wrangler secret put SUPABASE_ANON_KEY

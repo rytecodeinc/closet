@@ -1,0 +1,22 @@
+{
+  "name": "redress-item-photos-api",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker for Redress Closet App photo storage",
+  "main": "worker.js",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "keywords": [
+    "cloudflare",
+    "worker",
+    "r2",
+    "storage"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}
+

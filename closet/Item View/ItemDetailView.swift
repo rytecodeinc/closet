@@ -889,7 +889,7 @@ struct ItemDetailView: View {
         let basePredicate = NSPredicate(format: "ANY items == %@ AND isDraft != YES", item)
         let softDeleteFilter = NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
         request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [basePredicate, softDeleteFilter])
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: false)]
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.createdAt, ascending: false)]
         
         do {
             outfits = try viewContext.fetch(request)

@@ -141,7 +141,7 @@ struct SetWardrobeView: View {
             // Fetch the default wardrobe
             let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
             request.predicate = NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", defaultType)
-            request.sortDescriptors = [NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)]
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \Wardrobe.createdAt, ascending: true)]
             
             if let defaultWardrobe = try? viewContext.fetch(request).first {
                 selectedWardrobes.insert(defaultWardrobe)

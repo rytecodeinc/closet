@@ -14,7 +14,7 @@ struct ClosetView: View {
     @StateObject var filterModel = ItemFilterModel()
     
     @FetchRequest(
-        sortDescriptors: [NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)],
+        sortDescriptors: [NSSortDescriptor(keyPath: \Wardrobe.createdAt, ascending: true)],
         predicate: NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", "closet")
     ) private var closets: FetchedResults<Wardrobe>
     

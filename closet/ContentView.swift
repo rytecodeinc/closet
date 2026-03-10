@@ -19,13 +19,13 @@ struct ContentView: View {
     @EnvironmentObject var supabaseService: SupabaseService
 
     @FetchRequest(
-        sortDescriptors: [NSSortDescriptor(keyPath: \Item.timestamp, ascending: true)],
+        sortDescriptors: [NSSortDescriptor(keyPath: \Item.createdAt, ascending: true)],
         predicate: NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil"),
         animation: .default)
     private var allItems: FetchedResults<Item>
     
     @FetchRequest(
-        sortDescriptors: [NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)],
+        sortDescriptors: [NSSortDescriptor(keyPath: \Wardrobe.createdAt, ascending: true)],
         predicate: NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", "closet")
     ) private var allClosets: FetchedResults<Wardrobe>
     
