@@ -10,6 +10,14 @@ import CoreData
 import Foundation
 import UIKit
 
+// MARK: - Category Size Weight
+/// Determines relative visual weight of a clothing item on the canvas.
+enum CategorySizeWeight: CGFloat {
+    case large  = 1.00   // dresses, coats, outerwear, suits, jumpsuits
+    case medium = 0.72   // tops, bottoms, activewear, swimwear
+    case small  = 0.46   // shoes, bags, accessories, jewelry, hats, belts
+}
+
 // MARK: - Smart Positioning System
 
 enum ClothingZone {
@@ -21,28 +29,216 @@ enum ClothingZone {
     case shoes         // bottom center
     case accessories   // bottom right
     case bag           // middle right
-    
+
     func basePosition(canvasSize: CGFloat) -> CGPoint {
         let third = canvasSize / 3
         let half = canvasSize / 2
-        
+
         switch self {
-        case .headwear:
-            return CGPoint(x: half, y: third * 0.5)
-        case .jewelry:
-            return CGPoint(x: third * 2.5, y: third * 0.7)
-        case .outerwear:
-            return CGPoint(x: third * 2.3, y: half)
-        case .top:
-            return CGPoint(x: third * 0.7, y: third * 0.8)
-        case .bottom:
-            return CGPoint(x: third * 0.7, y: third * 1.8)
-        case .shoes:
-            return CGPoint(x: half, y: third * 2.5)
-        case .accessories:
-            return CGPoint(x: third * 2.3, y: third * 2.3)
-        case .bag:
-            return CGPoint(x: third * 2.5, y: third * 1.5)
+        case .headwear:    return CGPoint(x: half,          y: third * 0.5)
+        case .jewelry:     return CGPoint(x: third * 2.5,   y: third * 0.7)
+        case .outerwear:   return CGPoint(x: third * 2.3,   y: half)
+        case .top:         return CGPoint(x: third * 0.7,   y: third * 0.8)
+        case .bottom:      return CGPoint(x: third * 0.7,   y: third * 1.8)
+        case .shoes:       return CGPoint(x: half,          y: third * 2.5)
+        case .accessories: return CGPoint(x: third * 2.3,   y: third * 2.3)
+        case .bag:         return CGPoint(x: third * 2.5,   y: third * 1.5)
+        }
+    }
+}
+
+// MARK: - Adaptive Layout Engine
+
+/// Computes positions and sizes for all items on the canvas so they
+/// fill the available space intelligently based on count and category.
+struct AdaptiveLayoutEngine {
+
+    struct LayoutResult {
+        let frame: CGRect   // position + size in canvas coordinates
+        let zIndex: Int
+    }
+
+    /// Returns a layout result for every item in `items`, ordered to match.
+    static func layout(items: [OutfitItem], canvasSize: CGFloat) -> [UUID: LayoutResult] {
+        guard !items.isEmpty else { return [:] }
+
+        let count = items.count
+
+        // Build raw weight for each item based on category
+        let weights = items.map { sizeWeight(for: $0.item).rawValue }
+        let totalWeight = weights.reduce(0, +)
+
+        // Choose a layout strategy
+        switch count {
+        case 1:
+            return singleItemLayout(items: items, canvasSize: canvasSize)
+        case 2:
+            return twoItemLayout(items: items, weights: weights, canvasSize: canvasSize)
+        case 3:
+            return threeItemLayout(items: items, weights: weights, canvasSize: canvasSize)
+        case 4:
+            return fourItemLayout(items: items, weights: weights, canvasSize: canvasSize)
+        default:
+            return gridLayout(items: items, weights: weights, canvasSize: canvasSize)
+        }
+    }
+
+    // MARK: Layout Strategies
+
+    private static func singleItemLayout(items: [OutfitItem], canvasSize: CGFloat) -> [UUID: LayoutResult] {
+        let item = items[0]
+        let weight = sizeWeight(for: item.item).rawValue
+        // Fill most of the canvas
+        let maxDim = canvasSize * 0.82 * weight
+        let size = CGSize(width: maxDim, height: maxDim)
+        let origin = CGPoint(x: (canvasSize - size.width) / 2,
+                             y: (canvasSize - size.height) / 2)
+        return [item.id: LayoutResult(frame: CGRect(origin: origin, size: size), zIndex: 0)]
+    }
+
+    private static func twoItemLayout(items: [OutfitItem], weights: [CGFloat], canvasSize: CGFloat) -> [UUID: LayoutResult] {
+        let padding: CGFloat = 8
+        let totalWeight = weights[0] + weights[1]
+
+        // Determine if they should be side-by-side (both horizontal) or stacked
+        // Prefer stacked (top/bottom) for outfit flow; side-by-side for accessories
+        let bothSmall = weights.allSatisfy { $0 <= CategorySizeWeight.small.rawValue }
+        let isHorizontal = bothSmall
+
+        var result: [UUID: LayoutResult] = [:]
+
+        if isHorizontal {
+            let availW = (canvasSize - padding * 3) / 2
+            let availH = canvasSize - padding * 2
+            for (i, item) in items.enumerated() {
+                let size = fitSize(weight: weights[i], availableSize: CGSize(width: availW, height: availH))
+                let x = padding + CGFloat(i) * (availW + padding) + (availW - size.width) / 2
+                let y = (canvasSize - size.height) / 2
+                result[item.id] = LayoutResult(frame: CGRect(x: x, y: y, width: size.width, height: size.height), zIndex: i)
+            }
+        } else {
+            // Stack vertically proportional to weight
+            let availH = canvasSize - padding * 3
+            let availW = canvasSize - padding * 2
+            var yOffset = padding
+            for (i, item) in items.enumerated() {
+                let proportion = weights[i] / totalWeight
+                let cellH = availH * proportion
+                let size = fitSize(weight: weights[i], availableSize: CGSize(width: availW, height: cellH))
+                let x = (canvasSize - size.width) / 2
+                let y = yOffset + (cellH - size.height) / 2
+                result[item.id] = LayoutResult(frame: CGRect(x: x, y: y, width: size.width, height: size.height), zIndex: i)
+                yOffset += cellH + padding
+            }
+        }
+        return result
+    }
+
+    private static func threeItemLayout(items: [OutfitItem], weights: [CGFloat], canvasSize: CGFloat) -> [UUID: LayoutResult] {
+        let padding: CGFloat = 8
+        // Sort items: large/medium go top, small go bottom row
+        let sorted = items.enumerated().sorted { sizeWeight(for: $0.element.item).rawValue > sizeWeight(for: $1.element.item).rawValue }
+        let top2 = sorted.prefix(2).map { items[$0.offset] }
+        let bottom1 = sorted.dropFirst(2).map { items[$0.offset] }
+
+        var result: [UUID: LayoutResult] = [:]
+
+        // Top row: 2 items side-by-side
+        let topH = canvasSize * 0.58
+        let colW = (canvasSize - padding * 3) / 2
+        for (i, item) in top2.enumerated() {
+            let w = weights[items.firstIndex(where: { $0.id == item.id })!]
+            let size = fitSize(weight: w, availableSize: CGSize(width: colW, height: topH - padding * 2))
+            let x = padding + CGFloat(i) * (colW + padding) + (colW - size.width) / 2
+            let y = padding + (topH - padding * 2 - size.height) / 2
+            result[item.id] = LayoutResult(frame: CGRect(x: x, y: y, width: size.width, height: size.height), zIndex: i)
+        }
+
+        // Bottom row: 1 item centered
+        let bottomStartY = topH
+        let bottomH = canvasSize - topH - padding
+        for item in bottom1 {
+            let w = weights[items.firstIndex(where: { $0.id == item.id })!]
+            let size = fitSize(weight: w, availableSize: CGSize(width: canvasSize - padding * 2, height: bottomH - padding))
+            let x = (canvasSize - size.width) / 2
+            let y = bottomStartY + (bottomH - size.height) / 2
+            result[item.id] = LayoutResult(frame: CGRect(x: x, y: y, width: size.width, height: size.height), zIndex: 2)
+        }
+        return result
+    }
+
+    private static func fourItemLayout(items: [OutfitItem], weights: [CGFloat], canvasSize: CGFloat) -> [UUID: LayoutResult] {
+        let padding: CGFloat = 8
+        let cols = 2
+        let rows = 2
+        let cellW = (canvasSize - padding * CGFloat(cols + 1)) / CGFloat(cols)
+        let cellH = (canvasSize - padding * CGFloat(rows + 1)) / CGFloat(rows)
+
+        var result: [UUID: LayoutResult] = [:]
+        for (i, item) in items.enumerated() {
+            let col = CGFloat(i % cols)
+            let row = CGFloat(i / cols)
+            let size = fitSize(weight: weights[i], availableSize: CGSize(width: cellW, height: cellH))
+            let x = padding + col * (cellW + padding) + (cellW - size.width) / 2
+            let y = padding + row * (cellH + padding) + (cellH - size.height) / 2
+            result[item.id] = LayoutResult(frame: CGRect(x: x, y: y, width: size.width, height: size.height), zIndex: i)
+        }
+        return result
+    }
+
+    private static func gridLayout(items: [OutfitItem], weights: [CGFloat], canvasSize: CGFloat) -> [UUID: LayoutResult] {
+        let padding: CGFloat = 6
+        let cols = items.count <= 6 ? 3 : 4
+        let rows = Int(ceil(Double(items.count) / Double(cols)))
+        let cellW = (canvasSize - padding * CGFloat(cols + 1)) / CGFloat(cols)
+        let cellH = (canvasSize - padding * CGFloat(rows + 1)) / CGFloat(rows)
+
+        var result: [UUID: LayoutResult] = [:]
+        for (i, item) in items.enumerated() {
+            let col = CGFloat(i % cols)
+            let row = CGFloat(i / cols)
+            let size = fitSize(weight: weights[i], availableSize: CGSize(width: cellW, height: cellH))
+            let x = padding + col * (cellW + padding) + (cellW - size.width) / 2
+            let y = padding + row * (cellH + padding) + (cellH - size.height) / 2
+            result[item.id] = LayoutResult(frame: CGRect(x: x, y: y, width: size.width, height: size.height), zIndex: i)
+        }
+        return result
+    }
+
+    // MARK: Helpers
+
+    /// Fit a square item into available space, scaled by weight
+    private static func fitSize(weight: CGFloat, availableSize: CGSize) -> CGSize {
+        let maxDim = min(availableSize.width, availableSize.height) * weight
+        // Clamp so items don't overflow their cell
+        let dim = min(maxDim, min(availableSize.width, availableSize.height) * 0.95)
+        return CGSize(width: dim, height: dim)
+    }
+
+    static func sizeWeight(for item: Item) -> CategorySizeWeight {
+        let categoryName = item.category?.name?.lowercased() ?? ""
+        let subcategoryName = item.subcategory?.name?.lowercased() ?? ""
+
+        switch subcategoryName {
+        case "hats": return .small
+        case "bags": return .small
+        case "belts", "scarves": return .small
+        case "jewelry": return .small
+        case "heels", "flats", "sneakers", "boots", "sandals": return .small
+        case "jackets", "coats", "blazers": return .large
+        case "t-shirts", "blouses", "sweaters", "tanks", "tops", "sports bras": return .medium
+        case "jeans", "trousers", "skirts", "shorts", "leggings": return .medium
+        case "mini", "midi", "maxi", "one-piece": return .large
+        case "skirt suits", "pant suits": return .large
+        case "bikini", "cover-ups": return .medium
+        default: break
+        }
+
+        switch categoryName {
+        case "tops", "bottoms", "activewear", "shoes", "swimwear": return .medium
+        case "outerwear", "dresses", "suits": return .large
+        case "accessories": return .small
+        default: return .medium
         }
     }
 }
@@ -50,24 +246,24 @@ enum ClothingZone {
 struct OutfitAddView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
-    
+
     // Optional outfit for editing
     let outfitToEdit: Outfit?
-    
+
     // Wardrobe type to filter by (closet or wishlist)
     let wardrobeType: String
-    
+
     // Fetch all wardrobes (we'll filter by type)
     @FetchRequest(
         entity: Wardrobe.entity(),
         sortDescriptors: [NSSortDescriptor(keyPath: \Wardrobe.name, ascending: true)]
     ) private var allWardrobes: FetchedResults<Wardrobe>
-    
+
     // Filter wardrobes by type
     private var wardrobes: [Wardrobe] {
         allWardrobes.filter { $0.type == wardrobeType }
     }
-    
+
     // Get wardrobes for the currently selected segment (when in wishlist mode)
     private var currentSegmentWardrobes: [Wardrobe] {
         if wardrobeType == "wishlist" {
@@ -77,21 +273,21 @@ struct OutfitAddView: View {
             return wardrobes
         }
     }
-    
+
     // Selected wardrobe for filtering items
     @State private var selectedWardrobe: Wardrobe?
     @State private var isWardrobeSelectionPresented = false
     @State private var closetItems: [Item] = []
     @StateObject private var filterModel = ItemFilterModel()
-    @State private var sortAscending: Bool = false // false = descending (newest first), true = ascending (oldest first)
-    
+    @State private var sortAscending: Bool = false
+
     // Segmented picker for switching between closet and wishlist items (only in wishlist mode)
     @State private var itemTypeSegment: ItemTypeSegment = .wishlist
     enum ItemTypeSegment: String, CaseIterable {
         case wishlist = "Wishlist"
         case closet = "Closet"
     }
-    
+
     // Computed property to track filter changes
     private var filterKey: String {
         var key = ""
@@ -107,65 +303,52 @@ struct OutfitAddView: View {
         key += filterModel.selectedLocation?.objectID.uriRepresentation().absoluteString ?? ""
         return key
     }
-    
+
     // Fetch items filtered by selected wardrobe
     private func fetchClosetItems() {
-        // When in wishlist mode, filter by the selected segment type
         let targetWardrobeType: String
         if wardrobeType == "wishlist" {
             targetWardrobeType = itemTypeSegment == .wishlist ? "wishlist" : "closet"
         } else {
-            // In closet mode, always use closet
             targetWardrobeType = "closet"
         }
-        
-        // Get wardrobes of the target type
+
         let targetWardrobes = allWardrobes.filter { $0.type == targetWardrobeType }
-        
+
         guard !targetWardrobes.isEmpty else {
             closetItems = []
             return
         }
-        
-        // If we have a selected wardrobe and it matches the target type, use it
-        // Otherwise, use the first wardrobe of the target type
+
         let wardrobeToUse: Wardrobe?
         if let selected = selectedWardrobe, selected.type == targetWardrobeType {
             wardrobeToUse = selected
         } else {
             wardrobeToUse = targetWardrobes.first
         }
-        
+
         guard let wardrobe = wardrobeToUse else {
             closetItems = []
             return
         }
-        
+
         let request: NSFetchRequest<Item> = Item.fetchRequest()
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.timestamp, ascending: sortAscending)]
-        
-        // Use the helper function to build predicate from filterModel
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.createdAt, ascending: sortAscending)]
+
         let filterPredicate = makePredicate(for: filterModel, context: viewContext)
-        
-        // Add wardrobe filter
         let wardrobePredicate = NSPredicate(format: "ANY wardrobes == %@", wardrobe)
-        
-        // Add soft delete filter
         let softDeleteFilter = NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
-        
-        // Combine predicates
+
         let finalPredicate: NSPredicate
         if let filter = filterPredicate {
             finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [filter, wardrobePredicate, softDeleteFilter])
         } else {
             finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [wardrobePredicate, softDeleteFilter])
         }
-        
+
         request.predicate = finalPredicate
-        
-        // Ensure we fetch all results, not just a batch
-        request.fetchBatchSize = 0 // 0 means no batching limit
-        
+        request.fetchBatchSize = 0
+
         do {
             closetItems = try viewContext.fetch(request)
         } catch {
@@ -173,7 +356,7 @@ struct OutfitAddView: View {
             closetItems = []
         }
     }
-    
+
     // State for outfit creation
     @State private var outfitItems: [OutfitItem] = []
     @State private var collageSize: CGFloat = 0
@@ -181,165 +364,189 @@ struct OutfitAddView: View {
     @State private var showingSaveAlert = false
     @State private var showingDraftSaveAlert = false
     @State private var showingSaveDraftConfirmation = false
+    @State private var showingDiscardChangesConfirmation = false
     @State private var selectedItemID: UUID?
-    
+
+    // Drafts folder — sheet-based to avoid navigation conflict
+    @State private var showingDraftsSheet = false
+    @State private var selectedDraftToEdit: Outfit? = nil
+    @State private var showingDraftEditor = false
+
+    // Manual override positions — when user drags, their position takes priority
+    @State private var manualOverrides: [UUID: CGPoint] = [:]
+
     // Undo/Redo state
     @State private var undoStack: [CanvasState] = []
     @State private var redoStack: [CanvasState] = []
     @State private var transformInProgress = false
-    
-    // Initialize with optional outfit to edit, wardrobe type, and initial wardrobe
+
     init(outfitToEdit: Outfit? = nil, wardrobeType: String = "closet", initialWardrobe: Wardrobe? = nil) {
         self.outfitToEdit = outfitToEdit
         self.wardrobeType = wardrobeType
         _selectedWardrobe = State(initialValue: initialWardrobe)
     }
-    
-    // Calculate square collage dimensions
+
     private var squareSize: CGFloat {
-        let screenWidth = UIScreen.main.bounds.width
-        let padding: CGFloat = 0
-        return screenWidth - padding
+        UIScreen.main.bounds.width
     }
-    
+
+    // MARK: - Adaptive Layout
+
+    /// Compute the current adaptive layout for all items.
+    private var adaptiveLayout: [UUID: AdaptiveLayoutEngine.LayoutResult] {
+        AdaptiveLayoutEngine.layout(items: outfitItems, canvasSize: squareSize)
+    }
+
     var body: some View {
+        sheetsContent
+            .onAppear {
+                if selectedWardrobe == nil {
+                    if wardrobeType == "wishlist" {
+                        selectedWardrobe = allWardrobes.first(where: { $0.type == "wishlist" })
+                    } else {
+                        selectedWardrobe = wardrobes.first
+                    }
+                }
+                loadOutfitIfEditing()
+                fetchClosetItems()
+            }
+            .onChange(of: selectedWardrobe) { _ in fetchClosetItems() }
+            .onChange(of: wardrobes) { newWardrobes in
+                if let current = selectedWardrobe, !newWardrobes.contains(current) {
+                    selectedWardrobe = newWardrobes.first
+                }
+            }
+            .onChange(of: filterKey) { _ in fetchClosetItems() }
+            .onChange(of: itemTypeSegment) { _ in
+                if wardrobeType == "wishlist" {
+                    let targetType = itemTypeSegment == .wishlist ? "wishlist" : "closet"
+                    let targetWardrobes = allWardrobes.filter { $0.type == targetType }
+                    if let firstWardrobe = targetWardrobes.first {
+                        selectedWardrobe = firstWardrobe
+                    }
+                }
+                fetchClosetItems()
+            }
+    }
+
+    // MARK: - Body Sub-expressions
+    // Split to keep the type-checker happy (too many chained modifiers in one expression).
+
+    private var sheetsContent: some View {
+        alertsContent
+            .sheet(isPresented: $isWardrobeSelectionPresented) {
+                NavigationView {
+                    SingleWardrobeSelectionView(
+                        selectedWardrobe: $selectedWardrobe,
+                        wardrobeType: wardrobeType == "wishlist" && itemTypeSegment == .closet ? "closet" : wardrobeType
+                    )
+                }
+                .presentationDetents([.medium, .large])
+            }
+            .sheet(isPresented: $showingDraftsSheet) {
+                NavigationView {
+                    OutfitDraftsView(
+                        wardrobeType: wardrobeType,
+                        selectedWardrobe: selectedWardrobe,
+                        onSelectDraft: { draft in
+                            showingDraftsSheet = false
+                            selectedDraftToEdit = draft
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                                showingDraftEditor = true
+                            }
+                        }
+                    )
+                }
+            }
+            .sheet(isPresented: $showingDraftEditor, onDismiss: { selectedDraftToEdit = nil }) {
+                if let draft = selectedDraftToEdit {
+                    NavigationView {
+                        OutfitAddView(outfitToEdit: draft, wardrobeType: wardrobeType)
+                    }
+                }
+            }
+    }
+
+    private var alertsContent: some View {
         VStack(spacing: 0) {
-            // Outfit Collage Area
             outfitCollageArea
-            
-            // Draft and Clear Buttons
             draftAndClearButtons
-            
-            // Divider
             Divider()
-            
-            // Closet Items Grid
             closetItemsGrid
-            
             Spacer()
         }
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(outfitToEdit == nil)
+        .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 wardrobeSelectionButton
             }
-            
             ToolbarItemGroup(placement: .navigationBarLeading) {
                 leadingToolbarItems
             }
-            
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button("Save") {
-                    saveOutfit()
+                HStack(spacing: 16) {
+                    if outfitToEdit == nil {
+                        Button {
+                            showingDraftsSheet = true
+                        } label: {
+                            Image(systemName: "folder")
+                        }
+                    }
+                    Button("Save") {
+                        saveOutfit()
+                    }
+                    .disabled(outfitItems.isEmpty)
                 }
-                .disabled(outfitItems.isEmpty)
             }
         }
         .alert("Outfit Saved", isPresented: $showingSaveAlert) {
-            Button("OK") {
-                dismiss()
-            }
+            Button("OK") { dismiss() }
         }
         .alert("Draft Saved", isPresented: $showingDraftSaveAlert) {
-            Button("OK") {
-                dismiss()
-            }
+            Button("OK") { dismiss() }
         }
         .alert("Save as draft?", isPresented: $showingSaveDraftConfirmation) {
-            Button("Yes") {
-                saveDraft()
-            }
-            Button("No", role: .cancel) {
-                dismiss()
-            }
+            Button("Yes") { saveDraft() }
+            Button("No", role: .cancel) { dismiss() }
         }
-        .sheet(isPresented: $isWardrobeSelectionPresented) {
-            NavigationView {
-                SingleWardrobeSelectionView(
-                    selectedWardrobe: $selectedWardrobe,
-                    wardrobeType: wardrobeType == "wishlist" && itemTypeSegment == .closet ? "closet" : wardrobeType
-                )
-            }
-            .presentationDetents([.medium, .large])
-        }
-        .onAppear {
-            // Set default wardrobe to first wardrobe of appropriate type
-            if selectedWardrobe == nil {
-                if wardrobeType == "wishlist" {
-                    // In wishlist mode, default to wishlist wardrobe
-                    if let firstWishlistWardrobe = allWardrobes.first(where: { $0.type == "wishlist" }) {
-                        selectedWardrobe = firstWishlistWardrobe
-                    }
-                } else {
-                    // In closet mode, default to closet wardrobe
-                    if let firstWardrobe = wardrobes.first {
-                        selectedWardrobe = firstWardrobe
-                    }
-                }
-            }
-            loadOutfitIfEditing()
-            fetchClosetItems()
-        }
-        .onChange(of: selectedWardrobe) { _ in
-            fetchClosetItems()
-        }
-        .onChange(of: wardrobes) { newWardrobes in
-            // If the selected wardrobe is no longer in the list (e.g., deleted), reset to first
-            if let current = selectedWardrobe, !newWardrobes.contains(current) {
-                selectedWardrobe = newWardrobes.first
-            }
-        }
-        .onChange(of: filterKey) { _ in
-            fetchClosetItems()
-        }
-        .onChange(of: itemTypeSegment) { _ in
-            // When segment changes, update selected wardrobe to match the segment type
-            if wardrobeType == "wishlist" {
-                let targetType = itemTypeSegment == .wishlist ? "wishlist" : "closet"
-                let targetWardrobes = allWardrobes.filter { $0.type == targetType }
-                if let firstWardrobe = targetWardrobes.first {
-                    selectedWardrobe = firstWardrobe
-                }
-            }
-            fetchClosetItems()
+        .alert("Discard Changes?", isPresented: $showingDiscardChangesConfirmation) {
+            Button("Discard", role: .destructive) { dismiss() }
+            Button("Keep Editing", role: .cancel) { }
+        } message: {
+            Text("Your changes to this outfit will not be saved.")
         }
     }
-    
+
     // MARK: - Toolbar Items
     @ViewBuilder
     private var leadingToolbarItems: some View {
-        // Custom back button when creating new outfit (always show to prevent UI jumping)
-        if outfitToEdit == nil {
-            Button {
-                if !outfitItems.isEmpty {
-                    showingSaveDraftConfirmation = true
-                } else {
-                    dismiss()
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.left")
-                    Text("Back")
-                }
+        Button {
+            if outfitToEdit != nil && !undoStack.isEmpty {
+                // Editing with unsaved changes — confirm discard
+                showingDiscardChangesConfirmation = true
+            } else if !outfitItems.isEmpty && outfitToEdit == nil {
+                // Creating with items on canvas — offer draft save
+                showingSaveDraftConfirmation = true
+            } else {
+                dismiss()
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.left")
+                Text(outfitToEdit != nil ? "Cancel" : "Back")
             }
         }
     }
-    
+
     // MARK: - Outfit Collage Area
     private var outfitCollageArea: some View {
         ZStack {
-            // Background
             RoundedRectangle(cornerRadius: 0)
                 .fill(Color(.systemGray6))
                 .frame(width: squareSize, height: squareSize)
-               /* .overlay(
-                    RoundedRectangle(cornerRadius: 0)
-                        .stroke(Color(.systemGray4), lineWidth: 1)
-                )*/
                 .onTapGesture { selectedItemID = nil }
-            
-            // Drop zone hint when empty
+
             if outfitItems.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "plus.circle.dashed")
@@ -351,80 +558,40 @@ struct OutfitAddView: View {
                         .multilineTextAlignment(.center)
                 }
             }
-            
-            // Outfit items
+
+            // Render items using adaptive layout
             ForEach(outfitItems.sorted(by: { $0.zIndex < $1.zIndex })) { outfitItem in
-                DraggableOutfitItemView(
-                    outfitItem: outfitItem,
-                    collageSize: squareSize,
-                    isSelected: selectedItemID == outfitItem.id,
-                    onPositionChanged: { newPosition in
-                        updateItemPosition(outfitItem, newPosition)
-                    },
-                    onScaleChanged: { newScale in
-                        updateItemScale(outfitItem, newScale)
-                    },
-                    onRotationChanged: { newRotation in
-                        updateItemRotation(outfitItem, newRotation)
-                    },
-                    onTransformStart: {
-                        onTransformStart()
-                    },
-                    onTransformEnd: {
-                        onTransformEnd()
-                    },
-                    onSelected: {
-                        selectItem(outfitItem)
-                    },
-                    onLongPress: {
-                        bringToFront(outfitItem)
-                    },
-                    onDelete: {
-                        removeItem(outfitItem)
-                    }
-                )
+                if let layoutResult = adaptiveLayout[outfitItem.id] {
+                    AdaptiveOutfitItemView(
+                        outfitItem: outfitItem,
+                        layoutFrame: layoutResult.frame,
+                        canvasSize: squareSize,
+                        isSelected: selectedItemID == outfitItem.id,
+                        onPositionChanged: { newPosition in
+                            updateItemPosition(outfitItem, newPosition)
+                        },
+                        onScaleChanged: { newScale in
+                            updateItemScale(outfitItem, newScale)
+                        },
+                        onRotationChanged: { newRotation in
+                            updateItemRotation(outfitItem, newRotation)
+                        },
+                        onTransformStart: { onTransformStart() },
+                        onTransformEnd: { onTransformEnd() },
+                        onSelected: { selectItem(outfitItem) },
+                        onLongPress: { bringToFront(outfitItem) },
+                        onDelete: { removeItem(outfitItem) }
+                    )
+                }
             }
         }
+        // Animate when items count changes — smoothly reflow
+        .animation(.spring(response: 0.42, dampingFraction: 0.78), value: outfitItems.count)
     }
-    
+
     // MARK: - Draft and Clear Buttons
     private var draftAndClearButtons: some View {
         VStack(spacing: 0) {
-            /* First row: Drafts and Save Draft buttons
-            if outfitToEdit == nil {
-                HStack(spacing: 0) {
-                    // Drafts Button
-                    Button {
-                        showingDraftsSheet = true
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "folder")
-                            Text("Drafts")
-                        }
-                        .foregroundColor(.primary)
-                        .frame(maxWidth: .infinity)
-                    }
-                    
-                    Divider()
-                        .frame(height: 20)
-                    
-                    // Save Draft Button
-                    Button {
-                        saveDraft()
-                    } label: {
-                        Text("Save Draft")
-                            .foregroundColor(.blue)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .disabled(outfitItems.isEmpty)
-                }
-            }
-            
-            // Second row: Undo, Redo, and Clear Buttons
-            if outfitToEdit == nil {
-                Divider()
-            }*/
-            
             HStack(spacing: 0) {
                 // Filter icon
                 NavigationLink(destination: ItemFilterView(filterModel: filterModel, wardrobeType: wardrobeType)) {
@@ -432,9 +599,9 @@ struct OutfitAddView: View {
                         .foregroundColor(.primary)
                         .frame(maxWidth: 50)
                 }
-                
+
                 Divider()
-                
+
                 // Sort menu
                 Menu {
                     Button {
@@ -462,10 +629,9 @@ struct OutfitAddView: View {
                         .foregroundColor(.primary)
                         .frame(maxWidth: 50)
                 }
-                
+
                 Divider()
-                
-                // Clear Button (in the center)
+
                 Button {
                     clearAllItems()
                 } label: {
@@ -474,11 +640,10 @@ struct OutfitAddView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .disabled(outfitItems.isEmpty)
-                
+
                 Divider()
-                
+
                 HStack(spacing: 2) {
-                    // Undo Button
                     Button {
                         undo()
                     } label: {
@@ -487,8 +652,7 @@ struct OutfitAddView: View {
                             .frame(maxWidth: 50)
                     }
                     .disabled(undoStack.isEmpty)
-                    
-                    // Redo Button (grouped with undo, right end)
+
                     Button {
                         redo()
                     } label: {
@@ -498,13 +662,12 @@ struct OutfitAddView: View {
                     }
                     .disabled(redoStack.isEmpty)
                 }
-                
             }
             .frame(height: 15)
             .padding(.vertical)
         }
     }
-    
+
     // MARK: - Wardrobe Selection Button
     private var wardrobeSelectionButton: some View {
         Button {
@@ -518,11 +681,10 @@ struct OutfitAddView: View {
             }
         }
     }
-    
+
     // MARK: - Closet Items Grid
     private var closetItemsGrid: some View {
         VStack(spacing: 0) {
-            // Segmented picker (only show in wishlist mode)
             if wardrobeType == "wishlist" {
                 Picker("Item Type", selection: $itemTypeSegment) {
                     ForEach(ItemTypeSegment.allCases, id: \.self) { segment in
@@ -533,7 +695,7 @@ struct OutfitAddView: View {
                 .padding(.horizontal)
                 .padding(.vertical, 8)
             }
-            
+
             ScrollView {
                 if selectedWardrobe == nil {
                     VStack {
@@ -547,12 +709,8 @@ struct OutfitAddView: View {
                             ClosetItemView(
                                 item: item,
                                 isOnCanvas: outfitItems.contains(where: { $0.item.objectID == item.objectID }),
-                                onTap: {
-                                    addItemToOutfit(item)
-                                },
-                                onRemove: {
-                                    removeItemFromCanvas(item)
-                                }
+                                onTap: { addItemToOutfit(item) },
+                                onRemove: { removeItemFromCanvas(item) }
                             )
                         }
                     }
@@ -560,29 +718,54 @@ struct OutfitAddView: View {
             }
         }
     }
-    
+
     // MARK: - Load Outfit for Editing
     private func loadOutfitIfEditing() {
-        guard let outfit = outfitToEdit,
-              let transformationData = outfit.transformationData else {
+        print("🔍 loadOutfitIfEditing called")
+        
+        guard let outfit = outfitToEdit else {
+            print("🔍 No outfit to edit — skipping load")
+            return
+        }
+        print("🔍 outfitToEdit id=\(outfit.id?.uuidString ?? "nil"), items count=\((outfit.items?.count ?? 0))")
+        
+        guard let transformationData = outfit.transformationData else {
+            print("🔍 No transformationData — will load items without position data")
+            // Fallback: load items at default positions so the canvas isn't empty
+            let items = outfit.items as? Set<Item> ?? []
+            print("🔍 Fallback: loading \(items.count) items without transformation data")
+            outfitItems = items.enumerated().map { i, item in
+                OutfitItem(item: item, position: CGPoint(x: squareSize / 2, y: squareSize / 2),
+                           scale: 1.0, rotation: 0.0, zIndex: i)
+            }
             return
         }
         
-        // Decode the transformation data
+        print("🔍 transformationData size=\(transformationData.count) bytes")
+        
         let decoder = JSONDecoder()
         guard let savedItems = try? decoder.decode([SavedOutfitItem].self, from: transformationData) else {
+            print("❌ Failed to decode transformationData")
+            if let raw = String(data: transformationData, encoding: .utf8) {
+                print("❌ Raw transformationData: \(raw)")
+            }
             return
         }
+        print("🔍 Decoded \(savedItems.count) saved items")
         
-        // Reconstruct outfit items
         let items = outfit.items as? Set<Item> ?? []
+        print("🔍 Outfit has \(items.count) items in Core Data")
         
         outfitItems = savedItems.compactMap { savedItem in
-            // Find the matching item
-            guard let item = items.first(where: { $0.objectID.uriRepresentation().absoluteString == savedItem.itemID }) else {
+            print("🔍   Looking for itemID=\(savedItem.itemID)")
+            guard let item = items.first(where: {
+                $0.id?.uuidString == savedItem.itemID ||
+                $0.objectID.uriRepresentation().absoluteString == savedItem.itemID
+            }) else {
+                print("⚠️   No matching item found for itemID=\(savedItem.itemID)")
                 return nil
             }
-            
+            print("🔍   Matched item: \(item.id?.uuidString ?? "no-uuid")")
             return OutfitItem(
                 item: item,
                 position: CGPoint(x: savedItem.positionX, y: savedItem.positionY),
@@ -591,78 +774,80 @@ struct OutfitAddView: View {
                 zIndex: savedItem.zIndex
             )
         }
+        print("🔍 Loaded \(outfitItems.count) outfitItems onto canvas")
     }
-    
+
     // MARK: - Undo/Redo Functions
+    /// Snapshots the current canvas state into the undo stack.
+    /// Resolves any nil (auto-layout) positions to their actual frame centers
+    /// so undo restores items to where they were visually displayed.
     private func saveState() {
-        let snapshots = outfitItems.map { outfitItem in
-            CanvasStateSnapshot(
+        let snapshotLayout = AdaptiveLayoutEngine.layout(items: outfitItems, canvasSize: squareSize)
+        let snapshots = outfitItems.map { outfitItem -> CanvasStateSnapshot in
+            let frame = snapshotLayout[outfitItem.id]?.frame
+            let pos = outfitItem.position ?? frame.map { CGPoint(x: $0.midX, y: $0.midY) } ?? CGPoint(x: squareSize / 2, y: squareSize / 2)
+            return CanvasStateSnapshot(
                 itemID: outfitItem.item.objectID.uriRepresentation().absoluteString,
                 outfitItemID: outfitItem.id,
-                positionX: outfitItem.position.x,
-                positionY: outfitItem.position.y,
+                positionX: pos.x,
+                positionY: pos.y,
                 scale: outfitItem.scale,
                 rotation: outfitItem.rotation,
                 zIndex: outfitItem.zIndex
             )
         }
         undoStack.append(CanvasState(snapshots: snapshots))
-        redoStack.removeAll() // Clear redo stack when new action is performed
+        redoStack.removeAll()
     }
-    
+
     private func undo() {
         guard !undoStack.isEmpty else { return }
-        
-        // Save current state to redo stack
-        let currentSnapshots = outfitItems.map { outfitItem in
-            CanvasStateSnapshot(
+        let undoLayout = AdaptiveLayoutEngine.layout(items: outfitItems, canvasSize: squareSize)
+        let currentSnapshots = outfitItems.map { outfitItem -> CanvasStateSnapshot in
+            let frame = undoLayout[outfitItem.id]?.frame
+            let pos = outfitItem.position ?? frame.map { CGPoint(x: $0.midX, y: $0.midY) } ?? CGPoint(x: squareSize / 2, y: squareSize / 2)
+            return CanvasStateSnapshot(
                 itemID: outfitItem.item.objectID.uriRepresentation().absoluteString,
                 outfitItemID: outfitItem.id,
-                positionX: outfitItem.position.x,
-                positionY: outfitItem.position.y,
+                positionX: pos.x,
+                positionY: pos.y,
                 scale: outfitItem.scale,
                 rotation: outfitItem.rotation,
                 zIndex: outfitItem.zIndex
             )
         }
         redoStack.append(CanvasState(snapshots: currentSnapshots))
-        
-        // Restore previous state
         let previousState = undoStack.removeLast()
         restoreState(previousState)
     }
-    
+
     private func redo() {
         guard !redoStack.isEmpty else { return }
-        
-        // Save current state to undo stack
-        let currentSnapshots = outfitItems.map { outfitItem in
-            CanvasStateSnapshot(
+        let redoLayout = AdaptiveLayoutEngine.layout(items: outfitItems, canvasSize: squareSize)
+        let currentSnapshots = outfitItems.map { outfitItem -> CanvasStateSnapshot in
+            let frame = redoLayout[outfitItem.id]?.frame
+            let pos = outfitItem.position ?? frame.map { CGPoint(x: $0.midX, y: $0.midY) } ?? CGPoint(x: squareSize / 2, y: squareSize / 2)
+            return CanvasStateSnapshot(
                 itemID: outfitItem.item.objectID.uriRepresentation().absoluteString,
                 outfitItemID: outfitItem.id,
-                positionX: outfitItem.position.x,
-                positionY: outfitItem.position.y,
+                positionX: pos.x,
+                positionY: pos.y,
                 scale: outfitItem.scale,
                 rotation: outfitItem.rotation,
                 zIndex: outfitItem.zIndex
             )
         }
         undoStack.append(CanvasState(snapshots: currentSnapshots))
-        
-        // Restore next state
         let nextState = redoStack.removeLast()
         restoreState(nextState)
     }
-    
+
     private func restoreState(_ state: CanvasState) {
-        // Reconstruct outfitItems from snapshots
         outfitItems = state.snapshots.compactMap { snapshot in
             guard let url = URL(string: snapshot.itemID),
                   let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url),
-                  let item = try? viewContext.existingObject(with: objectID) as? Item else {
-                return nil
-            }
-            
+                  let item = try? viewContext.existingObject(with: objectID) as? Item else { return nil }
+
             return OutfitItem(
                 item: item,
                 position: CGPoint(x: snapshot.positionX, y: snapshot.positionY),
@@ -672,182 +857,74 @@ struct OutfitAddView: View {
             )
         }
     }
-    
-    // MARK: - Smart Positioning System
-    
-    private func determineZone(for item: Item) -> ClothingZone {
-        let categoryName = item.category?.name?.lowercased() ?? ""
-        let subcategoryName = item.subcategory?.name?.lowercased() ?? ""
-        
-        // Check subcategory first for more specific mapping (matching seeded subcategories)
-        switch subcategoryName {
-        case "hats":
-            return .headwear
-        case "bags":
-            return .bag
-        case "belts", "scarves":
-            return .accessories
-        case "jewelry":
-            return .jewelry
-        case "heels", "flats", "sneakers", "boots", "sandals":
-            return .shoes
-        case "jackets", "coats", "blazers":
-            return .outerwear
-        case "t-shirts", "blouses", "sweaters", "tanks":
-            return .top
-        case "jeans", "trousers", "skirts", "shorts":
-            return .bottom
-        case "mini", "midi", "maxi":
-            return .top // Dresses occupy top zone, extend downward
-        case "skirt suits", "pant suits":
-            return .top // Suits start at top
-        case "one-piece", "bikini", "cover-ups":
-            return .top // Swimwear
-        case "leggings":
-            return .bottom
-        case "sports bras", "tops": // Activewear tops
-            return .top
-        default:
-            break
-        }
-        
-        // Fallback to category if subcategory didn't match
-        switch categoryName {
-        case "tops":
-            return .top
-        case "bottoms":
-            return .bottom
-        case "outerwear":
-            return .outerwear
-        case "shoes":
-            return .shoes
-        case "dresses":
-            return .top // Dresses occupy top zone, extend downward
-        case "suits":
-            return .top // Suits start at top
-        case "swimwear":
-            return .top // Swimwear
-        case "activewear":
-            // Activewear can be tops or bottoms, default to top
-            return .top
-        case "accessories":
-            // Accessories category includes multiple types, check subcategory
-            if subcategoryName == "bags" {
-                return .bag
-            } else if subcategoryName == "jewelry" {
-                return .jewelry
-            } else if subcategoryName == "hats" {
-                return .headwear
-            } else {
-                return .accessories
-            }
-        default:
-            // Fallback to accessories zone
-            return .accessories
-        }
-    }
-    
-    private func intelligentPosition(for item: Item) -> CGPoint {
-        let zone = determineZone(for: item)
-        let basePos = zone.basePosition(canvasSize: squareSize)
-        
-        // Check if zone already has items
-        let itemsInZone = outfitItems.filter { 
-            determineZone(for: $0.item) == zone 
-        }
-        
-        if itemsInZone.isEmpty {
-            return basePos
-        } else {
-            // Stack items vertically with slight offset
-            let offset = CGFloat(itemsInZone.count) * 25
-            return CGPoint(x: basePos.x + offset, y: basePos.y + offset)
-        }
-    }
-    
+
     // MARK: - Helper Functions
     private func addItemToOutfit(_ item: Item) {
-        // Check if item is already in outfit
-        guard !outfitItems.contains(where: { $0.item.objectID == item.objectID }) else {
-            return
-        }
-        
+        guard !outfitItems.contains(where: { $0.item.objectID == item.objectID }) else { return }
         saveState()
-        
-        // Use intelligent positioning instead of random
-        let smartPosition = intelligentPosition(for: item)
-        
-        // Ensure position is within bounds (account for item size)
-        let itemSize: CGFloat = 120
-        let halfItemSize = itemSize / 2
-        let boundedX = max(halfItemSize, min(squareSize - halfItemSize, smartPosition.x))
-        let boundedY = max(halfItemSize, min(squareSize - halfItemSize, smartPosition.y))
-        
+
+        // position is nil — AdaptiveLayoutEngine will place it on first render
         let outfitItem = OutfitItem(
             item: item,
-            position: CGPoint(x: boundedX, y: boundedY),
+            position: nil,
             scale: 1.0,
             rotation: 0.0,
             zIndex: outfitItems.count
         )
-        
-        withAnimation(.spring()) {
+
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.78)) {
             outfitItems.append(outfitItem)
         }
     }
-    
+
     private func updateItemPosition(_ outfitItem: OutfitItem, _ newPosition: CGPoint) {
         if let index = outfitItems.firstIndex(where: { $0.id == outfitItem.id }) {
             outfitItems[index].position = newPosition
         }
     }
-    
+
     private func updateItemScale(_ outfitItem: OutfitItem, _ newScale: CGFloat) {
         if let index = outfitItems.firstIndex(where: { $0.id == outfitItem.id }) {
             outfitItems[index].scale = newScale
         }
     }
-    
+
     private func updateItemRotation(_ outfitItem: OutfitItem, _ newRotation: Double) {
         if let index = outfitItems.firstIndex(where: { $0.id == outfitItem.id }) {
             outfitItems[index].rotation = newRotation
         }
     }
-    
-    // Called when transform gesture starts
+
     private func onTransformStart() {
         if !transformInProgress {
             transformInProgress = true
             saveState()
         }
     }
-    
-    // Called when transform gesture ends
+
     private func onTransformEnd() {
         transformInProgress = false
     }
-    
+
     private func selectItem(_ outfitItem: OutfitItem) {
         selectedItemID = outfitItem.id
     }
-    
+
     private func bringToFront(_ outfitItem: OutfitItem) {
         saveState()
         selectedItemID = nil
         let maxZIndex = outfitItems.map { $0.zIndex }.max() ?? 0
-        
         if let index = outfitItems.firstIndex(where: { $0.id == outfitItem.id }) {
             outfitItems[index].zIndex = maxZIndex + 1
         }
-        
         selectedItemID = outfitItem.id
     }
-    
+
     private func removeItem(_ outfitItem: OutfitItem) {
         saveState()
         outfitItems.removeAll { $0.id == outfitItem.id }
     }
-    
+
     private func clearAllItems() {
         saveState()
         selectedItemID = nil
@@ -855,7 +932,7 @@ struct OutfitAddView: View {
             outfitItems.removeAll()
         }
     }
-    
+
     private func removeItemFromCanvas(_ item: Item) {
         saveState()
         selectedItemID = nil
@@ -863,158 +940,164 @@ struct OutfitAddView: View {
             outfitItems.removeAll { $0.item.objectID == item.objectID }
         }
     }
-    
+
     private func saveOutfit() {
         selectedItemID = nil
-        
         guard let collageImage = captureCollageAsImage() else {
             print("Failed to capture collage image")
             return
         }
-        
-        // Use existing outfit if editing, or create new one
+
         let outfit = outfitToEdit ?? Outfit(context: viewContext)
-        
+
         if outfitToEdit == nil {
             outfit.id = UUID()
+            outfit.userId = SupabaseService.shared.currentUser?.id.uuidString
+            let now = Date()
+            outfit.timestamp = now
+            outfit.createdAt = now
         }
-        let now = Date()
-        outfit.timestamp = now
-        outfit.createdAt = now
-        
-        // Save the collage image (compressed)
+
         if let imageData = collageImage.processForStorage() {
             outfit.image = imageData
         }
-        
-        // Clear existing items if editing
+
         if outfitToEdit != nil {
             outfit.removeFromItems(outfit.items ?? NSSet())
         }
-        
-        // Add items to outfit
+
         for outfitItem in outfitItems {
             outfit.addToItems(outfitItem.item)
         }
-        
-        // Save transformation data
-        let savedItems = outfitItems.map { outfitItem in
-            SavedOutfitItem(
-                itemID: outfitItem.item.objectID.uriRepresentation().absoluteString,
-                positionX: outfitItem.position.x,
-                positionY: outfitItem.position.y,
+
+        let saveLayout = AdaptiveLayoutEngine.layout(items: outfitItems, canvasSize: squareSize)
+        let savedItems = outfitItems.map { outfitItem -> SavedOutfitItem in
+            let frame = saveLayout[outfitItem.id]?.frame
+            let resolvedPos = outfitItem.position ?? frame.map { CGPoint(x: $0.midX, y: $0.midY) } ?? CGPoint(x: squareSize / 2, y: squareSize / 2)
+            return SavedOutfitItem(
+                itemID: outfitItem.item.id?.uuidString ?? "",
+                positionX: resolvedPos.x,
+                positionY: resolvedPos.y,
                 scale: outfitItem.scale,
                 rotation: outfitItem.rotation,
                 zIndex: outfitItem.zIndex
             )
         }
-        
+
         let encoder = JSONEncoder()
         if let transformationData = try? encoder.encode(savedItems) {
             outfit.transformationData = transformationData
         }
-        
-        // Mark as not draft (explicitly set to false for regular outfits)
+
         outfit.isDraft = false
-        
-        // Set updatedAt if editing existing outfit
-        if outfitToEdit != nil {
-            setUpdatedAt(outfit)
-        }
-        
+        setUpdatedAt(outfit)
+
         do {
             try viewContext.save()
+            SyncService.shared.syncOutfitIfNeeded(outfit)
             showingSaveAlert = true
         } catch {
             print("Error saving outfit: \(error)")
         }
     }
-    
+
     private func saveDraft() {
         selectedItemID = nil
-        
         guard let collageImage = captureCollageAsImage() else {
             print("Failed to capture collage image")
             return
         }
-        
-        // Always create a new draft (don't edit existing outfits)
+
         let draft = Outfit(context: viewContext)
         draft.id = UUID()
+        draft.userId = SupabaseService.shared.currentUser?.id.uuidString
         let now = Date()
         draft.timestamp = now
         draft.createdAt = now
         draft.isDraft = true
-        
-        // Save the collage image
+
         if let imageData = collageImage.pngData() {
             draft.image = imageData
         }
-        
-        // Add items to draft
+
         for outfitItem in outfitItems {
             draft.addToItems(outfitItem.item)
         }
-        
-        // Save transformation data (positioning information)
-        let savedItems = outfitItems.map { outfitItem in
-            SavedOutfitItem(
-                itemID: outfitItem.item.objectID.uriRepresentation().absoluteString,
-                positionX: outfitItem.position.x,
-                positionY: outfitItem.position.y,
+
+        let draftLayout = AdaptiveLayoutEngine.layout(items: outfitItems, canvasSize: squareSize)
+        let savedItems = outfitItems.map { outfitItem -> SavedOutfitItem in
+            let frame = draftLayout[outfitItem.id]?.frame
+            let resolvedPos = outfitItem.position ?? frame.map { CGPoint(x: $0.midX, y: $0.midY) } ?? CGPoint(x: squareSize / 2, y: squareSize / 2)
+            return SavedOutfitItem(
+                itemID: outfitItem.item.id?.uuidString ?? "",
+                positionX: resolvedPos.x,
+                positionY: resolvedPos.y,
                 scale: outfitItem.scale,
                 rotation: outfitItem.rotation,
                 zIndex: outfitItem.zIndex
             )
         }
-        
+
         let encoder = JSONEncoder()
         if let transformationData = try? encoder.encode(savedItems) {
             draft.transformationData = transformationData
         }
-        
+
         do {
             try viewContext.save()
+            SyncService.shared.syncOutfitIfNeeded(draft)
             showingDraftSaveAlert = true
         } catch {
             print("Error saving draft: \(error)")
         }
     }
-    
+
     private func captureCollageAsImage() -> UIImage? {
-        let collageView = ZStack {
-            Color(red: 247/255, green: 247/255, blue: 247/255)
-                    .ignoresSafeArea()
-            // gray background color of outfits
-            ForEach(outfitItems.sorted(by: { $0.zIndex < $1.zIndex })) { outfitItem in
-                DraggableOutfitItemView(
-                    outfitItem: outfitItem,
-                    collageSize: squareSize,
-                    isSelected: false,
-                    onPositionChanged: { _ in },
-                    onScaleChanged: { _ in },
-                    onRotationChanged: { _ in },
-                    onTransformStart: {},
-                    onTransformEnd: {},
-                    onSelected: {},
-                    onLongPress: {},
-                    onDelete: {}
-                )
+        let layout = AdaptiveLayoutEngine.layout(items: outfitItems, canvasSize: squareSize)
+        let size = squareSize
+
+        // Build a capture-only view that mirrors the canvas exactly.
+        // IMPORTANT: No .ignoresSafeArea() — ImageRenderer has no window/safe-area context.
+        // Using Canvas rather than SwiftUI .position() avoids coordinate space
+        // discrepancies that occur when UIHostingController hosts views with .position().
+        let captureView = Canvas { ctx, _ in
+            for outfitItem in outfitItems.sorted(by: { $0.zIndex < $1.zIndex }) {
+                guard let layoutResult = layout[outfitItem.id] else { continue }
+
+                // Resolve the photo image
+                guard let primaryPhoto = (outfitItem.item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }),
+                      let photoData = primaryPhoto.data,
+                      let uiImage = UIImage(data: photoData) else { continue }
+
+                let frame = layoutResult.frame
+                // Use the manual position if the user moved the item; otherwise use auto-layout center
+                let center = outfitItem.position ?? CGPoint(x: frame.midX, y: frame.midY)
+                // Apply user scale on top of auto-layout frame dimensions
+                let scaledW = frame.width  * outfitItem.scale
+                let scaledH = frame.height * outfitItem.scale
+
+                ctx.translateBy(x: center.x, y: center.y)
+                ctx.rotate(by: Angle.degrees(outfitItem.rotation))
+
+                // Draw image scaled to fit the (possibly user-scaled) frame, preserving aspect ratio
+                let imgAspect = uiImage.size.height / uiImage.size.width
+                let drawW = scaledW
+                let drawH = drawW * imgAspect
+                let drawRect = CGRect(x: -drawW / 2, y: -drawH / 2, width: drawW, height: drawH)
+
+                ctx.draw(Image(uiImage: uiImage).resizable(), in: drawRect)
+
+                // Reset transform for next item
+                ctx.rotate(by: Angle.degrees(-outfitItem.rotation))
+                ctx.translateBy(x: -center.x, y: -center.y)
             }
         }
-        .frame(width: squareSize, height: squareSize)
+        .background(Color(red: 247/255, green: 247/255, blue: 247/255))
+        .frame(width: size, height: size)
 
-        let hostingController = UIHostingController(rootView: collageView)
-        hostingController.sizingOptions = .intrinsicContentSize
-        hostingController.view.insetsLayoutMarginsFromSafeArea = false
-        hostingController.view.frame = CGRect(origin: .zero, size: CGSize(width: squareSize, height: squareSize))
-        hostingController.view.backgroundColor = .clear
-        hostingController.view.layoutIfNeeded()
-
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: squareSize, height: squareSize))
-        return renderer.image { context in
-            hostingController.view.drawHierarchy(in: hostingController.view.bounds, afterScreenUpdates: true)
-        }
+        let renderer = ImageRenderer(content: captureView)
+        renderer.scale = UIScreen.main.scale  // render at full device resolution
+        return renderer.uiImage
     }
 }
 
@@ -1047,16 +1130,22 @@ struct CanvasState {
 struct OutfitItem: Identifiable {
     let id = UUID()
     let item: Item
-    var position: CGPoint
+    /// nil  = item hasn't been manually placed yet → use auto-layout position
+    /// non-nil = user dragged it, or position was restored from saved data
+    var position: CGPoint?
     var scale: CGFloat
     var rotation: Double
     var zIndex: Int
 }
 
-// MARK: - Draggable Outfit Item View
-struct DraggableOutfitItemView: View {
+// MARK: - Adaptive Outfit Item View
+/// Renders an outfit item using a layout frame provided by AdaptiveLayoutEngine.
+/// On first render the item snaps to the computed frame; after the user drags it,
+/// the position is tracked as a manual override but layout sizing still applies.
+struct AdaptiveOutfitItemView: View {
     let outfitItem: OutfitItem
-    let collageSize: CGFloat
+    let layoutFrame: CGRect      // computed by AdaptiveLayoutEngine
+    let canvasSize: CGFloat
     let isSelected: Bool
     let onPositionChanged: (CGPoint) -> Void
     let onScaleChanged: (CGFloat) -> Void
@@ -1066,21 +1155,29 @@ struct DraggableOutfitItemView: View {
     let onSelected: () -> Void
     let onLongPress: () -> Void
     let onDelete: () -> Void
-    
-    @State private var imageSize: CGSize = CGSize(width: 120, height: 120)
-    @State private var dragOffset = CGSize.zero
-    @State private var position: CGPoint
-    @State private var scale: CGFloat
-    @State private var baseScale: CGFloat
+
+    // Local gesture state
+    @State private var dragOffset: CGSize = .zero
+    @State private var manualCenter: CGPoint? = nil  // nil = use layoutFrame center
     @State private var rotation: Double
     @State private var baseRotation: Double
-    
-    private let itemSize: CGFloat = 120
+    @State private var scaleMultiplier: CGFloat = 1.0  // on top of layout size
+    @State private var baseScaleMultiplier: CGFloat = 1.0
+
     private let deleteButtonSize: CGFloat = 24
-    
-    init(outfitItem: OutfitItem, collageSize: CGFloat, isSelected: Bool, onPositionChanged: @escaping (CGPoint) -> Void, onScaleChanged: @escaping (CGFloat) -> Void, onRotationChanged: @escaping (Double) -> Void, onTransformStart: @escaping () -> Void, onTransformEnd: @escaping () -> Void, onSelected: @escaping () -> Void, onLongPress: @escaping () -> Void, onDelete: @escaping () -> Void) {
+
+    init(outfitItem: OutfitItem, layoutFrame: CGRect, canvasSize: CGFloat, isSelected: Bool,
+         onPositionChanged: @escaping (CGPoint) -> Void,
+         onScaleChanged: @escaping (CGFloat) -> Void,
+         onRotationChanged: @escaping (Double) -> Void,
+         onTransformStart: @escaping () -> Void,
+         onTransformEnd: @escaping () -> Void,
+         onSelected: @escaping () -> Void,
+         onLongPress: @escaping () -> Void,
+         onDelete: @escaping () -> Void) {
         self.outfitItem = outfitItem
-        self.collageSize = collageSize
+        self.layoutFrame = layoutFrame
+        self.canvasSize = canvasSize
         self.isSelected = isSelected
         self.onPositionChanged = onPositionChanged
         self.onScaleChanged = onScaleChanged
@@ -1090,155 +1187,130 @@ struct DraggableOutfitItemView: View {
         self.onSelected = onSelected
         self.onLongPress = onLongPress
         self.onDelete = onDelete
-        self._position = State(initialValue: outfitItem.position)
-        self._scale = State(initialValue: outfitItem.scale)
-        self._baseScale = State(initialValue: outfitItem.scale)
-        self._rotation = State(initialValue: outfitItem.rotation)
-        self._baseRotation = State(initialValue: outfitItem.rotation)
+        _rotation = State(initialValue: outfitItem.rotation)
+        _baseRotation = State(initialValue: outfitItem.rotation)
+        // Restore manual position and scale so editing displays the saved canvas state
+        _manualCenter = State(initialValue: outfitItem.position)
+        _scaleMultiplier = State(initialValue: outfitItem.scale)
+        _baseScaleMultiplier = State(initialValue: outfitItem.scale)
     }
-    
-    // Calculate the absolute position of the delete button (top-right corner after rotation)
+
+    private var effectiveCenter: CGPoint {
+        let base = manualCenter ?? CGPoint(x: layoutFrame.midX, y: layoutFrame.midY)
+        return CGPoint(x: base.x + dragOffset.width, y: base.y + dragOffset.height)
+    }
+
+    private var itemSize: CGSize { layoutFrame.size }
+
     private var deleteButtonPosition: CGPoint {
-        let halfWidth = (imageSize.width * scale) / 2
-        let halfHeight = (imageSize.height * scale) / 2
-        let rotationRadians = rotation * .pi / 180.0
-        
-        // Top-right corner before rotation
-        let x = halfWidth * cos(rotationRadians) - (-halfHeight) * sin(rotationRadians)
-        let y = halfWidth * sin(rotationRadians) + (-halfHeight) * cos(rotationRadians)
-        
-        return CGPoint(
-            x: position.x + dragOffset.width + x,
-            y: position.y + dragOffset.height + y
-        )
+        let halfW = (itemSize.width * scaleMultiplier) / 2
+        let halfH = (itemSize.height * scaleMultiplier) / 2
+        let rad = rotation * .pi / 180.0
+        let x = halfW * cos(rad) - (-halfH) * sin(rad)
+        let y = halfW * sin(rad) + (-halfH) * cos(rad)
+        return CGPoint(x: effectiveCenter.x + x, y: effectiveCenter.y + y)
     }
-    
+
     var body: some View {
         ZStack {
-            // Item image with border - wrapped together
-            Group {
-                if let primaryPhoto = (outfitItem.item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }),
-                   let photoData = primaryPhoto.data,
-                   let uiImage = UIImage(data: photoData) {
-                    Image(uiImage: uiImage)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: imageSize.width, height: imageSize.height)
-                        .overlay(
-                            isSelected ?
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.gray.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [5]))
-                            : nil
-                        )
-                        .onAppear {
-                            print("🖼️ Original UIImage size: width=\(uiImage.size.width), height=\(uiImage.size.height)")
-                            imageSize = calculateImageSize(for: uiImage)
-                            print("📐 Calculated imageSize for display: width=\(imageSize.width), height=\(imageSize.height)")
-                        }
-                } else {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color(.systemGray5))
-                        .frame(width: itemSize, height: itemSize)
-                        .overlay(
-                            Image(systemName: "photo")
-                                .foregroundColor(.secondary)
-                        )
-                        .overlay(
-                            isSelected ?
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.gray.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [5]))
-                            : nil
-                        )
-                }
-            }
-            .scaleEffect(scale)
-            .rotationEffect(Angle.degrees(rotation))
-            .position(x: position.x + dragOffset.width, y: position.y + dragOffset.height)
-            .onTapGesture {
-                onSelected()
-            }
-            .onLongPressGesture {
-                onLongPress()
-            }
-            .gesture(
-                isSelected ? DragGesture()
-                    .onChanged { value in
-                        if dragOffset == .zero && value.translation != .zero {
-                            onTransformStart()
-                        }
-                        dragOffset = value.translation
-                    }
-                    .onEnded { value in
-                        let scaledItemSize = itemSize * scale
-                        let newX = max(scaledItemSize/2, min(collageSize - scaledItemSize/2, position.x + value.translation.width))
-                        let newY = max(scaledItemSize/2, min(collageSize - scaledItemSize/2, position.y + value.translation.height))
-                        
-                        let newPosition = CGPoint(x: newX, y: newY)
-                        position = newPosition
-                        dragOffset = .zero
-                        
-                        onPositionChanged(newPosition)
-                        onTransformEnd()
-                    } : nil
-            )
-            .gesture(
-                isSelected ?
-                SimultaneousGesture(
-                    MagnificationGesture()
-                        .onChanged { value in
-                            if abs(value - 1.0) > 0.01 && abs(scale - baseScale) < 0.01 {
-                                onTransformStart()
-                            }
-                            scale = max(0.5, min(3.0, baseScale * value))
-                        }
-                        .onEnded { value in
-                            let finalScale = max(0.5, min(3.0, baseScale * value))
-                            scale = finalScale
-                            baseScale = finalScale
-                            onScaleChanged(finalScale)
-                            onTransformEnd()
-                        },
-                    RotationGesture()
-                        .onChanged { value in
-                            if abs(value.degrees) > 1.0 && abs(rotation - baseRotation) < 1.0 {
-                                onTransformStart()
-                            }
-                            rotation = baseRotation + value.degrees
-                        }
-                        .onEnded { value in
-                            let finalRotation = baseRotation + value.degrees
-                            rotation = finalRotation
-                            baseRotation = finalRotation
-                            onRotationChanged(finalRotation)
-                            onTransformEnd()
-                        }
-                ) : nil
-            )
-            
-            // Delete button - positioned independently in absolute coordinates
+            itemImage
+                .scaleEffect(scaleMultiplier)
+                .rotationEffect(Angle.degrees(rotation))
+                .position(effectiveCenter)
+                .onTapGesture { onSelected() }
+                .onLongPressGesture { onLongPress() }
+                .gesture(dragGesture)
+                .gesture(transformGesture)
+                .onChange(of: layoutFrame) { _ in }
+
             if isSelected {
                 Button(action: onDelete) {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.red)
-                        .background(
-                            Circle()
-                                .fill(Color.white)
-                                .frame(width: deleteButtonSize, height: deleteButtonSize)
-                        )
+                        .background(Circle().fill(Color.white).frame(width: deleteButtonSize, height: deleteButtonSize))
                         .font(.system(size: deleteButtonSize))
                 }
                 .frame(width: deleteButtonSize, height: deleteButtonSize)
                 .position(deleteButtonPosition)
             }
         }
-        .animation(.spring(), value: dragOffset)
+        .animation(.spring(response: 0.42, dampingFraction: 0.78), value: layoutFrame.origin)
+        .animation(.spring(response: 0.42, dampingFraction: 0.78), value: layoutFrame.size)
     }
-    
-    private func calculateImageSize(for image: UIImage) -> CGSize {
-        let aspectRatio = image.size.height / image.size.width
-        let width = itemSize
-        let height = width * aspectRatio
-        return CGSize(width: width, height: height)
+
+    @ViewBuilder
+    private var itemImage: some View {
+        let selectionOverlay = RoundedRectangle(cornerRadius: 8)
+            .stroke(Color.gray.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [5]))
+        if let primaryPhoto = (outfitItem.item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }),
+           let photoData = primaryPhoto.data,
+           let uiImage = UIImage(data: photoData) {
+            Image(uiImage: uiImage)
+                .resizable()
+                .scaledToFit()
+                .frame(width: itemSize.width, height: itemSize.height)
+                .overlay { if isSelected { selectionOverlay } }
+        } else {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(.systemGray5))
+                .frame(width: itemSize.width, height: itemSize.height)
+                .overlay { Image(systemName: "photo").foregroundColor(.secondary) }
+                .overlay { if isSelected { selectionOverlay } }
+        }
+    }
+
+    private var dragGesture: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                guard isSelected else { return }
+                if dragOffset == .zero && value.translation != .zero {
+                    onTransformStart()
+                }
+                dragOffset = value.translation
+            }
+            .onEnded { value in
+                guard isSelected else { return }
+                let base = manualCenter ?? CGPoint(x: layoutFrame.midX, y: layoutFrame.midY)
+                let halfW = (itemSize.width * scaleMultiplier) / 2
+                let halfH = (itemSize.height * scaleMultiplier) / 2
+                let newX = max(halfW, min(canvasSize - halfW, base.x + value.translation.width))
+                let newY = max(halfH, min(canvasSize - halfH, base.y + value.translation.height))
+                manualCenter = CGPoint(x: newX, y: newY)
+                dragOffset = .zero
+                onPositionChanged(manualCenter!)
+                onTransformEnd()
+            }
+    }
+
+    private var transformGesture: some Gesture {
+        SimultaneousGesture(
+            MagnificationGesture()
+                .onChanged { value in
+                    guard isSelected else { return }
+                    scaleMultiplier = max(0.3, min(4.0, baseScaleMultiplier * value))
+                }
+                .onEnded { value in
+                    guard isSelected else { return }
+                    let final = max(0.3, min(4.0, baseScaleMultiplier * value))
+                    scaleMultiplier = final
+                    baseScaleMultiplier = final
+                    onScaleChanged(final)
+                    onTransformEnd()
+                },
+            RotationGesture()
+                .onChanged { value in
+                    guard isSelected else { return }
+                    rotation = baseRotation + value.degrees
+                }
+                .onEnded { value in
+                    guard isSelected else { return }
+                    let final = baseRotation + value.degrees
+                    rotation = final
+                    baseRotation = final
+                    onRotationChanged(final)
+                    onTransformEnd()
+                }
+        )
     }
 }
 
@@ -1248,7 +1320,7 @@ struct ClosetItemView: View {
     let isOnCanvas: Bool
     let onTap: () -> Void
     let onRemove: () -> Void
-    
+
     var body: some View {
         ZStack {
             Button(action: onTap) {
@@ -1267,16 +1339,13 @@ struct ClosetItemView: View {
                     RoundedRectangle(cornerRadius: 8)
                         .fill(Color(.systemGray5))
                         .frame(height: 100)
-                        .overlay(
-                            Image(systemName: "photo")
-                                .foregroundColor(.secondary)
-                        )
+                        .overlay(Image(systemName: "photo").foregroundColor(.secondary))
                         .opacity(isOnCanvas ? 0.8 : 1.0)
                 }
             }
             .buttonStyle(PlainButtonStyle())
             .disabled(isOnCanvas)
-            
+
             if isOnCanvas {
                 VStack {
                     HStack {
@@ -1296,5 +1365,3 @@ struct ClosetItemView: View {
         }
     }
 }
-
-

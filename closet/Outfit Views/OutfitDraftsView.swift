@@ -10,13 +10,16 @@ import CoreData
 
 struct OutfitDraftsView: View {
     @Environment(\.managedObjectContext) private var viewContext
-    
+
     let wardrobeType: String
     let selectedWardrobe: Wardrobe?
+
+    /// Called when the user taps a draft to continue editing it.
+    var onSelectDraft: ((Outfit) -> Void)? = nil
     
     @FetchRequest(
         entity: Outfit.entity(),
-        sortDescriptors: [NSSortDescriptor(keyPath: \Outfit.timestamp, ascending: false)],
+        sortDescriptors: [NSSortDescriptor(keyPath: \Outfit.createdAt, ascending: false)],
         predicate: NSPredicate(format: "isDraft == YES AND (isSoftDeleted != YES OR isSoftDeleted == nil)")
     ) private var allDrafts: FetchedResults<Outfit>
     
@@ -45,9 +48,10 @@ struct OutfitDraftsView: View {
     @State private var draftToDelete: Outfit? = nil
     @State private var showingDeleteConfirmation: Bool = false
     
-    init(wardrobeType: String = "closet", selectedWardrobe: Wardrobe? = nil) {
+    init(wardrobeType: String = "closet", selectedWardrobe: Wardrobe? = nil, onSelectDraft: ((Outfit) -> Void)? = nil) {
         self.wardrobeType = wardrobeType
         self.selectedWardrobe = selectedWardrobe
+        self.onSelectDraft = onSelectDraft
     }
     
     private let gridColumns = [
@@ -77,12 +81,15 @@ struct OutfitDraftsView: View {
                     LazyVGrid(columns: gridColumns, spacing: 2) {
                         ForEach(drafts, id: \.objectID) { draft in
                             ZStack(alignment: .topTrailing) {
-                                NavigationLink(destination: OutfitAddView(outfitToEdit: draft, wardrobeType: wardrobeType)) {
+                                Button {
+                                    if !isEditing {
+                                        onSelectDraft?(draft)
+                                    }
+                                } label: {
                                     OutfitView(outfit: draft)
                                 }
                                 .buttonStyle(.plain)
-                                .disabled(isEditing)
-                                
+
                                 // Delete button overlay in edit mode
                                 if isEditing {
                                     Button {
