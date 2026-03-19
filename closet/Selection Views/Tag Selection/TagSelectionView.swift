@@ -81,6 +81,9 @@ struct TagSelectionView: View {
             item.addToTags(tag)
         }
         saveContext()
+        if (item.tags as? Set<Tag>)?.contains(tag) == false {
+            cleanupTagIfOrphaned(tag)
+        }
     }
 
     // MARK: - Save Context

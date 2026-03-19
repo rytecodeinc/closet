@@ -40,7 +40,9 @@ struct SetTagDisplayView: View {
 
             // Tag List
             if tags.isEmpty {
-                Text("Tags you add will appear in a list here.")
+                Text(wardrobeTypeForTags == "wishlist"
+                    ? "Tags used on wishlist items will appear here."
+                    : "Tags you add will appear in a list here.")
                     .foregroundColor(.gray)
                     .padding()
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -59,6 +61,15 @@ struct SetTagDisplayView: View {
                                 if (item.tags as? Set<Tag>)?.contains(tag) == true {
                                     Image(systemName: "checkmark")
                                         .foregroundColor(.blue)
+                                }
+                            }
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            if viewContext.parent == nil {
+                                Button(role: .destructive) {
+                                    deleteTag(tag)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
                                 }
                             }
                         }
@@ -94,9 +105,15 @@ struct SetTagDisplayView: View {
         return Text(before) + Text(match).bold() + Text(after)
     }
 
+    /// Derive wardrobe context from item: if item is in any wishlist wardrobe, use wishlist tags; else closet tags.
+    private var wardrobeTypeForTags: String {
+        (item.wardrobes as? Set<Wardrobe>)?.contains { $0.type?.lowercased() == "wishlist" } == true ? "wishlist" : "closet"
+    }
+
     // MARK: - Fetch Tags
     private func fetchTags() {
         let request: NSFetchRequest<Tag> = Tag.fetchRequest()
+        request.predicate = NSPredicate(format: "SUBQUERY(items, $i, ANY $i.wardrobes.type == %@).@count > 0", wardrobeTypeForTags)
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Tag.name, ascending: true)]
         do {
             tags = try viewContext.fetch(request)
@@ -118,6 +135,9 @@ struct SetTagDisplayView: View {
         if viewContext.parent == nil {
             do {
                 try viewContext.save()
+                if (item.tags as? Set<Tag>)?.contains(tag) == false {
+                    cleanupTagIfOrphaned(tag)
+                }
             } catch {
                 print("❌ Failed to save tag: \(error.localizedDescription)")
             }
@@ -156,5 +176,46 @@ struct SetTagDisplayView: View {
         newTagName = ""
         fetchTags()
         dismiss()
+    }
+
+    // MARK: - Delete Tag
+    /// Removes tag from all items and outfits, deletes from Core Data, and Supabase.
+    private func deleteTag(_ tag: Tag) {
+        guard let tagId = tag.id else { return }
+
+        // Collect affected items and outfits before modifying (relationships clear after delete)
+        let affectedItems: [Item] = (tag.items as? Set<Item>).map(Array.init) ?? []
+        let affectedOutfits: [Outfit] = (tag.outfits as? Set<Outfit>).map(Array.init) ?? []
+
+        // Remove tag from all items
+        for anItem in affectedItems {
+            anItem.removeFromTags(tag)
+            setUpdatedAt(anItem)
+        }
+        // Remove tag from all outfits
+        for outfit in affectedOutfits {
+            outfit.removeFromTags(tag)
+            setUpdatedAt(outfit)
+        }
+
+        viewContext.delete(tag)
+
+        if viewContext.parent == nil {
+            do {
+                try viewContext.save()
+                SyncService.shared.deleteTagFromSupabase(tagId: tagId)
+                for anItem in affectedItems {
+                    SyncService.shared.syncItemIfNeeded(anItem)
+                }
+                for outfit in affectedOutfits {
+                    SyncService.shared.syncOutfitIfNeeded(outfit)
+                }
+            } catch {
+                print("❌ Failed to delete tag: \(error.localizedDescription)")
+                return
+            }
+        }
+
+        fetchTags()
     }
 }

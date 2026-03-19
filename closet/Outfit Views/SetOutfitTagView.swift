@@ -87,6 +87,9 @@ struct SetOutfitTagView: View {
         
         do {
             try viewContext.save()
+            if (outfit.tags as? Set<Tag>)?.contains(tag) == false {
+                cleanupTagIfOrphaned(tag)
+            }
         } catch {
             print("❌ Failed to save tag: \(error.localizedDescription)")
         }

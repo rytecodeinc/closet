@@ -80,3 +80,23 @@ func notSoftDeletedPredicate() -> NSPredicate {
     return NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
 }
 
+/// Deletes a tag from Core Data and Supabase if it has no remaining items or outfits.
+/// Call after removing a tag from an item or outfit (main context only).
+func cleanupTagIfOrphaned(_ tag: Tag) {
+    guard let context = tag.managedObjectContext, context.parent == nil else { return }
+    context.refresh(tag, mergeChanges: true)
+    let itemsEmpty = (tag.items as? Set<Item>)?.isEmpty ?? true
+    let outfitsEmpty = (tag.outfits as? Set<Outfit>)?.isEmpty ?? true
+    guard itemsEmpty && outfitsEmpty else { return }
+    let tagName = tag.name ?? "unknown"
+    guard let tagId = tag.id else { return }
+    context.delete(tag)
+    do {
+        try context.save()
+        SyncService.shared.deleteTagFromSupabase(tagId: tagId)
+        print("✅ Cleaned up orphaned tag: \(tagName)")
+    } catch {
+        print("❌ Failed to cleanup orphaned tag: \(error)")
+    }
+}
+

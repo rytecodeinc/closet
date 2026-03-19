@@ -1032,6 +1032,31 @@ class SyncService: ObservableObject {
         try context.save()
     }
     
+    /// Deletes a tag from Supabase (item_tags, outfit_tags, tags). Call after removing the tag from Core Data.
+    nonisolated func deleteTagFromSupabase(tagId: UUID) {
+        Task { @MainActor in
+            guard self.supabaseService.isAuthenticated else { return }
+            let idString = tagId.uuidString
+            do {
+                try await self.supabaseService.supabaseClient.from("item_tags")
+                    .delete()
+                    .eq("tag_id", value: idString)
+                    .execute()
+                try await self.supabaseService.supabaseClient.from("outfit_tags")
+                    .delete()
+                    .eq("tag_id", value: idString)
+                    .execute()
+                try await self.supabaseService.supabaseClient.from("tags")
+                    .delete()
+                    .eq("id", value: idString)
+                    .execute()
+                print("✅ Deleted tag \(idString) from Supabase")
+            } catch {
+                print("⚠️ Failed to delete tag from Supabase: \(error.localizedDescription)")
+            }
+        }
+    }
+    
     /// Syncs a location to Supabase
     private func syncLocation(_ location: Location, userId: UUID) async throws {
         guard let context = context else { throw SyncError.noContext }
