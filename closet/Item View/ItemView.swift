@@ -38,7 +38,7 @@ struct ItemView: View {
                     .frame(minWidth: 120, minHeight: 120)
                     .clipped()
                   //  .border(.gray.opacity(0.3), width: 0.5)
-                    .background(Color(red: 247/255, green: 247/255, blue: 247/255))  
+                  //  .background(Color(red: 247/255, green: 247/255, blue: 247/255))  
                     .overlay(alignment: .bottomLeading) {
                         if item.isFavorite {
                             // Black gradient overlay fading from bottom-left corner
@@ -520,10 +520,27 @@ func migratePhotoTypes(context: NSManagedObjectContext) {
 }
 
 // MARK: - Deduplicate Wardrobes
-func deduplicateWardrobes(context: NSManagedObjectContext) {
+/// Pass the current user's ID string from the calling `@MainActor` context so this
+/// free function doesn't need to touch `SupabaseService.shared.currentUser` directly.
+func deduplicateWardrobes(context: NSManagedObjectContext, userId: String? = nil) {
     do {
-        // Fetch all wardrobes
+        // Only deduplicate wardrobes belonging to the current user.
+        // Scoping to userId prevents orphaned/unowned wardrobes from being
+        // merged with newly created user wardrobes that happen to share a name.
         let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
+        if let userId = userId {
+            // Only consider active (non-soft-deleted) wardrobes belonging to this user.
+            // Soft-deleted wardrobes are pending removal and should not be deduplicated
+            // against newly created wardrobes with the same name.
+            request.predicate = NSPredicate(
+                format: "userId == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)",
+                userId
+            )
+        } else {
+            // Not authenticated — skip deduplication entirely to avoid data loss.
+            print("⚠️ deduplicateWardrobes: skipping — no authenticated user")
+            return
+        }
         let allWardrobes = try context.fetch(request)
         
         print("🔍 Checking \(allWardrobes.count) wardrobes for duplicates...")

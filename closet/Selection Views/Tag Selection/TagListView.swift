@@ -13,13 +13,19 @@ import Foundation
 struct TagListView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Binding var selectedTags: Set<Tag>
+    /// When "wishlist", only tags from wishlist items. When "closet", only from closet items. When nil (e.g. outfit filter), all tags.
+    var wardrobeType: String? = "closet"
 
     @State private var tags: [Tag] = []
 
     var body: some View {
         List {
             if tags.isEmpty {
-                Text("Tags added to your closet will appear here.")
+                Text(wardrobeType == "wishlist"
+                    ? "Tags used on wishlist items will appear here."
+                    : wardrobeType == "closet"
+                    ? "Tags added to your closet will appear here."
+                    : "Tags will appear here.")
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
@@ -58,7 +64,9 @@ struct TagListView: View {
 
     private func fetchTags() {
         let request: NSFetchRequest<Tag> = Tag.fetchRequest()
-     //   request.predicate = NSPredicate(format: "isVisible == YES")
+        if let type = wardrobeType {
+            request.predicate = NSPredicate(format: "SUBQUERY(items, $i, ANY $i.wardrobes.type == %@).@count > 0", type)
+        }
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Tag.name, ascending: true)]
         do {
             tags = try viewContext.fetch(request)

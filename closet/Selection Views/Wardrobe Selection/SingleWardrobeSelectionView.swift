@@ -25,9 +25,14 @@ struct SingleWardrobeSelectionView: View {
         sortDescriptors: [NSSortDescriptor(keyPath: \Wardrobe.name, ascending: true)]
     ) private var allWardrobes: FetchedResults<Wardrobe>
     
-    // Filter wardrobes by type
+    // Filter wardrobes by type, excluding soft-deleted and unowned wardrobes
     private var wardrobes: [Wardrobe] {
-        allWardrobes.filter { $0.type == wardrobeType }
+        let userId = SupabaseService.shared.currentUser?.id.uuidString
+        return allWardrobes.filter {
+            $0.type == wardrobeType &&
+            $0.isSoftDeleted != true &&
+            (userId == nil || $0.userId == userId)
+        }
     }
 
     var body: some View {
@@ -56,7 +61,7 @@ struct SingleWardrobeSelectionView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             // Run deduplication to ensure no duplicates are shown
-            deduplicateWardrobes(context: viewContext)
+            deduplicateWardrobes(context: viewContext, userId: SupabaseService.shared.currentUser?.id.uuidString)
             if viewContext.hasChanges {
                 try? viewContext.save()
             }

@@ -28,7 +28,7 @@ struct WishlistView: View {
     @State private var isItemGridInSelectionMode = false
     
     var body: some View {
-        NavigationView {
+       // NavigationView {
             mainContent()
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { navigationBarToolbar() }
@@ -46,7 +46,7 @@ struct WishlistView: View {
                 .sheet(isPresented: $showWishlistSheet) {
                     wishlistSelectionSheet()
                 }
-        }
+       // }
     }
 }
 

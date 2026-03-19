@@ -28,7 +28,7 @@ struct ClosetView: View {
     @State private var isItemGridInSelectionMode = false
     
     var body: some View {
-        NavigationView {
+      //  NavigationView {
             mainContent()
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { navigationBarToolbar() }
@@ -46,7 +46,7 @@ struct ClosetView: View {
                 .sheet(isPresented: $showClosetSheet) {
                     closetSelectionSheet()
                 }
-        }
+       // }
     }
 }
 

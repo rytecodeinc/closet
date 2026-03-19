@@ -27,97 +27,95 @@ struct OutfitCalendarView: View {
     private let calendar = Calendar.current
     
     var body: some View {
-        NavigationView {
-            GeometryReader { geo in
-                ZStack(alignment: .top) {
+        GeometryReader { geo in
+            ZStack(alignment: .top) {
+                
+                VStack(spacing: 0) {
+                   // Divider()
+                    daysOfWeekHeader
                     
-                    VStack(spacing: 0) {
-                       // Divider()
-                        daysOfWeekHeader
-                        
-                        // Calendar grid with drag
-                        calendarGrid(for: currentMonth, geo: geo)
-                            .offset(y: dragOffset)
-                            .gesture(
-                                DragGesture()
-                                    .onChanged { value in
-                                        dragOffset = value.translation.height
-                                        isDragging = true
+                    // Calendar grid with drag
+                    calendarGrid(for: currentMonth, geo: geo)
+                        .offset(y: dragOffset)
+                        .gesture(
+                            DragGesture()
+                                .onChanged { value in
+                                    dragOffset = value.translation.height
+                                    isDragging = true
+                                }
+                                .onEnded { value in
+                                    let threshold = geo.size.height / 6
+                                    if value.translation.height < -threshold {
+                                        changeMonth(by: 1)
+                                    } else if value.translation.height > threshold {
+                                        changeMonth(by: -1)
                                     }
-                                    .onEnded { value in
-                                        let threshold = geo.size.height / 6
-                                        if value.translation.height < -threshold {
-                                            changeMonth(by: 1)
-                                        } else if value.translation.height > threshold {
-                                            changeMonth(by: -1)
-                                        }
-                                        withAnimation(.spring()) {
-                                            dragOffset = 0
-                                        }
-                                        isDragging = false
+                                    withAnimation(.spring()) {
+                                        dragOffset = 0
                                     }
-                            )
-                    }
-                  //  .padding(.top, 8)
-                    .padding(.bottom, geo.safeAreaInsets.bottom)
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        // Month/Year selector button
-                        ToolbarItem(placement: .principal) {
-                            Button(action: {
-                                pickerSelectedDate = currentMonth
-                                showingDatePicker = true
-                            }) {
-                                HStack(spacing: 4) {
-                                    Text(monthYearString(for: currentMonth))
-                                        .font(.headline)
-                                    Image(systemName: "chevron.down")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
+                                    isDragging = false
                                 }
-                            }
-                        }
-                        
-                        // jump to today
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            Button(action: {
-                                let today = Date()
-                                withAnimation(.spring()) {
-                                    currentMonth = startOfMonth(for: today) // set month to today's month
-                                    selectedDate = today                    // highlight today
-                                }
-                            }) {
-                                Image(systemName: "calendar")
-                            }
-                        }
-                        // create new event
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            Button(action: {
-                                showingCreateEvent = true
-                            }) {
-                                Image(systemName: "plus")
-                            }
-                        }
-                        
-                        ToolbarItem(placement: .navigationBarLeading) {
-                            
-                            // Arrow navigation
-                            HStack {
-                                Button(action: { changeMonth(by: -1) }) {
-                                    Image(systemName: "chevron.up")
-                                        .font(.footnote)
-                                        .foregroundColor(.secondary)
-                                }
-                                Button(action: { changeMonth(by: 1) }) {
-                                    Image(systemName: "chevron.down")
-                                        .font(.footnote)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                        }
-                    }
-                    
+                        )
                 }
+              //  .padding(.top, 8)
+                .padding(.bottom, geo.safeAreaInsets.bottom)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    // Month/Year selector button
+                    ToolbarItem(placement: .principal) {
+                        Button(action: {
+                            pickerSelectedDate = currentMonth
+                            showingDatePicker = true
+                        }) {
+                            HStack(spacing: 4) {
+                                Text(monthYearString(for: currentMonth))
+                                    .font(.headline)
+                                Image(systemName: "chevron.down")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                    
+                    // jump to today
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button(action: {
+                            let today = Date()
+                            withAnimation(.spring()) {
+                                currentMonth = startOfMonth(for: today) // set month to today's month
+                                selectedDate = today                    // highlight today
+                            }
+                        }) {
+                            Image(systemName: "calendar")
+                        }
+                    }
+                    // create new event
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button(action: {
+                            showingCreateEvent = true
+                        }) {
+                            Image(systemName: "plus")
+                        }
+                    }
+                    
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        
+                        // Arrow navigation
+                        HStack {
+                            Button(action: { changeMonth(by: -1) }) {
+                                Image(systemName: "chevron.up")
+                                    .font(.footnote)
+                                    .foregroundColor(.secondary)
+                            }
+                            Button(action: { changeMonth(by: 1) }) {
+                                Image(systemName: "chevron.down")
+                                    .font(.footnote)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
+                
             }
         }
         .onAppear { fetchEvents() }

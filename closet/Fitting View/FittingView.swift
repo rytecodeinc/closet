@@ -60,56 +60,54 @@ struct FittingView: View {
     @State private var selectedUIImage: UIImage?
     
     var body: some View {
-        NavigationView {
-            List {
-                ForEach(chats) { chat in
-                    ChatRow(chat: chat)
+        List {
+            ForEach(chats) { chat in
+                ChatRow(chat: chat)
+            }
+        }
+        .listStyle(.plain)
+        .navigationTitle("Fitting")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                HStack(spacing: 16) {
+                    Button {
+                        // Checkmark action
+                    } label: {
+                        Image(systemName: "checkmark.gobackward")
+                    }
+                    
+                    NavigationLink(destination: WhatSizeView()) {
+                        Image(systemName: "ruler")
+                            .rotationEffect(Angle(degrees: 135))
+                    }
                 }
             }
-            .listStyle(.plain)
-            .navigationTitle("Fitting")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    HStack(spacing: 16) {
-                        Button {
-                            // Checkmark action
-                        } label: {
-                            Image(systemName: "checkmark.gobackward")
-                        }
-                        
-                        NavigationLink(destination: WhatSizeView()) {
-                            Image(systemName: "ruler")
-                                .rotationEffect(Angle(degrees: 135))
-                        }
-                    }
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Menu {
-                        Button {
-                            if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                                imagePickerSource = .camera
-                                isImagePickerPresented = true
-                            }
-                        } label: {
-                            Label("Try On", systemImage: "camera")
-                        }
-                        
-                        Button {
-                            // Yes/No action
-                        } label: {
-                            Label("Yes/No", systemImage: "checkmark.bubble")
-                        }
-                        
-                        Button {
-                            // Rate 1-5 action
-                        } label: {
-                            Label("Rate 1-5", systemImage: "star")
+            
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Menu {
+                    Button {
+                        if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                            imagePickerSource = .camera
+                            isImagePickerPresented = true
                         }
                     } label: {
-                        Image(systemName: "plus")
+                        Label("Try On", systemImage: "camera")
                     }
+                    
+                    Button {
+                        // Yes/No action
+                    } label: {
+                        Label("Yes/No", systemImage: "checkmark.bubble")
+                    }
+                    
+                    Button {
+                        // Rate 1-5 action
+                    } label: {
+                        Label("Rate 1-5", systemImage: "star")
+                    }
+                } label: {
+                    Image(systemName: "plus")
                 }
             }
         }

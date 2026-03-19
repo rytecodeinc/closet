@@ -59,14 +59,16 @@ struct SetWardrobeView: View {
             WardrobeListView(
                 selectedWardrobes: $selectedWardrobes,
                 defaultWardrobeType: defaultWardrobeType,
-                excludeWardrobeType: excludeWardrobeType
+                excludeWardrobeType: excludeWardrobeType,
+                userId: SupabaseService.shared.currentUser?.id.uuidString
             )
         }
         .onAppear {
+            let currentUserId = SupabaseService.shared.currentUser?.id.uuidString
             // Run deduplication on the parent context to ensure no duplicates
             // Get the parent context from the child context
             if let parentContext = viewContext.parent {
-                deduplicateWardrobes(context: parentContext)
+                deduplicateWardrobes(context: parentContext, userId: currentUserId)
                 // Save parent context to persist deduplication
                 if parentContext.hasChanges {
                     try? parentContext.save()
@@ -77,7 +79,7 @@ struct SetWardrobeView: View {
                 viewContext.processPendingChanges()
             } else {
                 // If no parent, run on current context
-                deduplicateWardrobes(context: viewContext)
+                deduplicateWardrobes(context: viewContext, userId: currentUserId)
                 if viewContext.hasChanges {
                     try? viewContext.save()
                 }
@@ -186,6 +188,21 @@ struct SetWardrobeView: View {
             }
         }
         
+        // Safety net: ensure the primary wardrobe of the correct type is always present.
+        // This catches any case where the user somehow ended up with it deselected.
+        if let wardrobeType = selectedWardrobes.first?.type ?? (defaultWardrobeType) {
+            let primaryRequest: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
+            primaryRequest.predicate = NSPredicate(
+                format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)",
+                wardrobeType
+            )
+            primaryRequest.sortDescriptors = [NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)]
+            primaryRequest.fetchLimit = 1
+            if let primary = try? viewContext.fetch(primaryRequest).first {
+                selectedWardrobes.insert(primary)
+            }
+        }
+
         // Remove all existing wardrobes
         if let existingWardrobes = item.wardrobes as? Set<Wardrobe> {
             for wardrobe in existingWardrobes {

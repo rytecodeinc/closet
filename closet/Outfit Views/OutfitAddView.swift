@@ -259,16 +259,27 @@ struct OutfitAddView: View {
         sortDescriptors: [NSSortDescriptor(keyPath: \Wardrobe.name, ascending: true)]
     ) private var allWardrobes: FetchedResults<Wardrobe>
 
-    // Filter wardrobes by type
+    // Current user's id — used to filter wardrobe lists throughout this view
+    private var currentUserId: String? { SupabaseService.shared.currentUser?.id.uuidString }
+
+    // Filter wardrobes by type, excluding soft-deleted and unowned wardrobes
     private var wardrobes: [Wardrobe] {
-        allWardrobes.filter { $0.type == wardrobeType }
+        allWardrobes.filter {
+            $0.type == wardrobeType &&
+            $0.isSoftDeleted != true &&
+            (currentUserId == nil || $0.userId == currentUserId)
+        }
     }
 
     // Get wardrobes for the currently selected segment (when in wishlist mode)
     private var currentSegmentWardrobes: [Wardrobe] {
         if wardrobeType == "wishlist" {
             let segmentType = itemTypeSegment == .wishlist ? "wishlist" : "closet"
-            return allWardrobes.filter { $0.type == segmentType }
+            return allWardrobes.filter {
+                $0.type == segmentType &&
+                $0.isSoftDeleted != true &&
+                (currentUserId == nil || $0.userId == currentUserId)
+            }
         } else {
             return wardrobes
         }
@@ -313,7 +324,11 @@ struct OutfitAddView: View {
             targetWardrobeType = "closet"
         }
 
-        let targetWardrobes = allWardrobes.filter { $0.type == targetWardrobeType }
+        let targetWardrobes = allWardrobes.filter {
+            $0.type == targetWardrobeType &&
+            $0.isSoftDeleted != true &&
+            (currentUserId == nil || $0.userId == currentUserId)
+        }
 
         guard !targetWardrobes.isEmpty else {
             closetItems = []

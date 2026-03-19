@@ -10,18 +10,14 @@ import SwiftUI
 import CoreData
 
 struct ColorListView: View {
+    @Environment(\.managedObjectContext) private var viewContext
     @Binding var selectedColorNames: Set<String>
 
-    @FetchRequest(
-        entity: AppColor.entity(),
-        sortDescriptors: [NSSortDescriptor(keyPath: \AppColor.name, ascending: true)],
-        predicate: NSPredicate(format: "isVisible == YES")
-    ) private var visibleColors: FetchedResults<AppColor>
+    @State private var colors: [AppColor] = []
 
     var body: some View {
-       
             List {
-                ForEach(visibleColors, id: \.self) { color in
+                ForEach(colors, id: \.objectID) { color in
                     let name = color.name ?? ""
                     
                     HStack {
@@ -53,6 +49,18 @@ struct ColorListView: View {
             .listStyle(PlainListStyle())
             .navigationTitle("Select Colors")
             .navigationBarTitleDisplayMode(.inline)
-        
+            .onAppear(perform: fetchColors)
+    }
+    
+    private func fetchColors() {
+        let request = NSFetchRequest<AppColor>(entityName: "Color")
+        request.predicate = NSPredicate(format: "isVisible == YES")
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \AppColor.name, ascending: true)]
+        do {
+            colors = try viewContext.fetch(request)
+        } catch {
+            print("❌ Failed to fetch colors: \(error.localizedDescription)")
+            colors = []
+        }
     }
 }

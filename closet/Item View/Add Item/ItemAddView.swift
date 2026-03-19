@@ -807,6 +807,23 @@ final class ItemAddViewModel: ObservableObject {
                 let wardrobeInChild = try ctx.existingObject(with: wardrobeObjectID) as? Wardrobe
                 if let wardrobe = wardrobeInChild {
                     item.addToWardrobes(wardrobe)
+
+                    // Also ensure the primary wardrobe of the same type is always assigned.
+                    // "Primary" = oldest created wardrobe of the same type (timestamp ascending).
+                    // If selectedWardrobe IS the primary, addToWardrobes is a no-op (set semantics).
+                    if let wardrobeType = wardrobe.type {
+                        let primaryRequest: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
+                        primaryRequest.predicate = NSPredicate(
+                            format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)",
+                            wardrobeType
+                        )
+                        primaryRequest.sortDescriptors = [NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)]
+                        primaryRequest.fetchLimit = 1
+                        if let primaryInParent = try? parentContext.fetch(primaryRequest).first,
+                           let primaryInChild = try? ctx.existingObject(with: primaryInParent.objectID) as? Wardrobe {
+                            item.addToWardrobes(primaryInChild)
+                        }
+                    }
                 }
             } catch {
                 print("⚠️ Warning: Could not re-fetch wardrobe in child context during init: \(error.localizedDescription)")

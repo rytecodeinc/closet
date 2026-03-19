@@ -59,7 +59,8 @@ struct WardrobeSelectionView: View {
             WardrobeListView(
                 selectedWardrobes: $selectedWardrobes,
                 defaultWardrobeType: defaultWardrobeType,
-                excludeWardrobeType: excludeWardrobeType
+                excludeWardrobeType: excludeWardrobeType,
+                userId: SupabaseService.shared.currentUser?.id.uuidString
             )
         }
         .onAppear {

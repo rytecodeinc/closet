@@ -26,7 +26,7 @@ struct OutfitView: View {
                     .aspectRatio(1, contentMode: .fill)
                     .frame(minWidth: 120, minHeight: 120)
                     .clipped()
-                    .background(backgroundColor)
+                   // .background(backgroundColor)
             } else {
                 Rectangle()
                     .fill(backgroundColor)

@@ -30,8 +30,8 @@ struct OutfitFilterView: View {
                     }
                 }
                 
-                // Tag filter
-                NavigationLink(destination: TagListView(selectedTags: $filterModel.selectedTags)) {
+                // Tag filter (nil = show all tags, since outfits can use tags from items and outfits)
+                NavigationLink(destination: TagListView(selectedTags: $filterModel.selectedTags, wardrobeType: nil)) {
                     HStack {
                         Text("Tags")
                         Spacer()

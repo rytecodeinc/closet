@@ -5,21 +5,18 @@
 //  Created by Dan Warner on 7/20/25.
 //
 
-
 import SwiftUI
+import CoreData
 
 struct SeasonListView: View {
+    @Environment(\.managedObjectContext) private var viewContext
     @Binding var selectedSeasonNames: Set<String>
 
-    @FetchRequest(
-        entity: Season.entity(),
-        sortDescriptors: [NSSortDescriptor(keyPath: \Season.name, ascending: true)]
-    ) private var seasons: FetchedResults<Season>
+    @State private var seasons: [Season] = []
 
     var body: some View {
-       // Section(header: SelectionHeader(title: "Select a Season")) {
             List {
-                ForEach(seasons, id: \.self) { season in
+                ForEach(seasons, id: \.objectID) { season in
                     let name = season.name ?? ""
                     
                     HStack {
@@ -46,6 +43,17 @@ struct SeasonListView: View {
             .listStyle(.plain)
             .navigationTitle("Select Season")
             .navigationBarTitleDisplayMode(.inline)
-        //}
+            .onAppear(perform: fetchSeasons)
+    }
+    
+    private func fetchSeasons() {
+        let request = NSFetchRequest<Season>(entityName: "Season")
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Season.name, ascending: true)]
+        do {
+            seasons = try viewContext.fetch(request)
+        } catch {
+            print("❌ Failed to fetch seasons: \(error.localizedDescription)")
+            seasons = []
+        }
     }
 }

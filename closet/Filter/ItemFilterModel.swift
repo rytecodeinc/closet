@@ -9,6 +9,16 @@ import SwiftUI
 import CoreData
 import Foundation
 
+/// Sort order for items/outfits by date (createdAt).
+enum ItemSortOrder: String, CaseIterable {
+    case newestFirst = "New to Old"
+    case oldestFirst = "Old to New"
+    
+    var sortAscending: Bool {
+        self == .oldestFirst
+    }
+}
+
 class ItemFilterModel: ObservableObject {
     @Published var selectedWardrobes: Set<Wardrobe> = []
     @Published var selectedCategoryName: String?
@@ -22,7 +32,8 @@ class ItemFilterModel: ObservableObject {
     @Published var maxPrice: Decimal?
     @Published var selectedTags: Set<Tag> = []
     @Published var filterByWeight: Bool = false
-    
+    @Published var sortOrder: ItemSortOrder = .newestFirst
+
     func clearAll() {
         selectedWardrobes.removeAll()
         selectedCategoryName = nil

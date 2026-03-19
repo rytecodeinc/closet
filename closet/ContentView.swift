@@ -8,11 +8,6 @@
 import SwiftUI
 import CoreData
 
-// Navigation destination identifier for ItemAddView
-enum NavigationDestination: Hashable {
-    case itemAdd(url: URL?, hasImage: Bool) // Use boolean flag since UIImage isn't Hashable
-}
-
 struct ContentView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject var deepLinkRouter: DeepLinkRouter
@@ -29,8 +24,8 @@ struct ContentView: View {
         predicate: NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", "closet")
     ) private var allClosets: FetchedResults<Wardrobe>
     
-    @State private var navigationPath = NavigationPath()
     @State private var hasAppeared = false
+    @State private var showDeepLinkItemAdd = false
     
     // Computed property for current user ID
     private var currentUserId: String? {
@@ -50,54 +45,58 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $navigationPath) {
-            TabView() {
+        TabView() {
+            NavigationStack {
                 ClosetView()
-                    .tabItem {
-                        Image(systemName: "hanger")
-                        Text("Closet")
-                    }
-                FittingView()
-                    .tabItem {
-                        Label("Fitting", systemImage: "tshirt")
-                    }
-              /*  VirtualFittingView()
-                        .tabItem {
-                            Label("Fitting", systemImage: "tshirt")
-                        } */
-              /*  OutfitGridView()
-                    .tabItem {
-                        Image(systemName: "book")
-                        //    .environment(\.symbolVariants, .none)
-                        Text("Outfits")
-                    }*/
-                WishlistView()
-                    .tabItem {
-                        Image(systemName: "heart")
-                        Text("Wishlist")
-                    }
-                OutfitCalendarView()
-                    .tabItem {
-                        Image(systemName: "calendar")
-                        Text("Calendar")
-                    }
-                ProfileView()
-                    .tabItem {
-                        Image(systemName: "person")
-                        Text("Profile")
-                    }
-                LoginView()
-                    .tabItem {
-                        Image(systemName: "lock")
-                        Text("Login")
-                    }
             }
-            .onAppear {
+            .tabItem {
+                Image(systemName: "hanger")
+                Text("Closet")
+            }
+            NavigationStack {
+                FittingView()
+            }
+            .tabItem {
+                Label("Fitting", systemImage: "tshirt")
+            }
+            /*  VirtualFittingView()
+                      .tabItem {
+                          Label("Fitting", systemImage: "tshirt")
+                      } */
+            /*  OutfitGridView()
+                      .tabItem {
+                          Image(systemName: "book")
+                      //    .environment(\.symbolVariants, .none)
+                          Text("Outfits")
+                      }*/
+            NavigationStack {
+                WishlistView()
+            }
+            .tabItem {
+                Image(systemName: "heart")
+                Text("Wishlist")
+            }
+            NavigationStack {
+                OutfitCalendarView()
+            }
+            .tabItem {
+                Image(systemName: "calendar")
+                Text("Calendar")
+            }
+            NavigationStack {
+                ProfileView()
+            }
+            .tabItem {
+                Image(systemName: "person")
+                Text("Profile")
+            }
+        }
+        .onAppear {
                 print("-- ContentView appeared")
                 migrateItemImages(context: viewContext)
                 migratePhotoTypes(context: viewContext)
                 migrateWishlistItems(context: viewContext)
-                deduplicateWardrobes(context: viewContext)
+                deduplicateWardrobes(context: viewContext, userId: SupabaseService.shared.currentUser?.id.uuidString)
                 compressExistingPhotos(context: viewContext)
                 resolveSizeConstraintConflicts(context: viewContext)
                 migrateUserWeightFromUserDefaults(context: viewContext)
@@ -121,27 +120,26 @@ struct ContentView: View {
                         }
                     }
                 }
-            }
-            .navigationDestination(for: NavigationDestination.self) { destination in
-                switch destination {
-                case .itemAdd(let url, let hasImage):
-                    ItemAddView(
-                        parentContext: viewContext,
-                        selectedWardrobe: closets.first,
-                        initialURL: url,
-                        initialImage: hasImage ? deepLinkRouter.navigationIntent?.image : nil
-                    )
-                    .onDisappear {
-                        deepLinkRouter.clearIntent()
-                    }
+        }
+        .fullScreenCover(isPresented: $showDeepLinkItemAdd) {
+            if let intent = deepLinkRouter.navigationIntent, case .addItem(let image, let url) = intent {
+                ItemAddView(
+                    parentContext: viewContext,
+                    selectedWardrobe: closets.first,
+                    initialURL: url,
+                    initialImage: image
+                )
+                .onDisappear {
+                    deepLinkRouter.clearIntent()
+                    showDeepLinkItemAdd = false
                 }
             }
-            .onChange(of: deepLinkRouter.navigationIntent) { intent in
-                // Respond to navigation intent changes
-                if let intent = intent, hasAppeared {
-                    print("📱 ContentView: Navigation intent changed, navigating...")
-                    navigateToItemAdd(intent: intent)
-                }
+        }
+        .onChange(of: deepLinkRouter.navigationIntent) { intent in
+            // Respond to navigation intent changes — present ItemAddView for add-item deep links
+            if let intent = intent, hasAppeared, case .addItem = intent {
+                print("📱 ContentView: Navigation intent changed, presenting ItemAddView")
+                navigateToItemAdd(intent: intent)
             }
         }
     }
@@ -158,15 +156,12 @@ struct ContentView: View {
         }
     }
     
-    /// Navigates to ItemAddView based on navigation intent
+    /// Presents ItemAddView for add-item deep links (via fullScreenCover)
     private func navigateToItemAdd(intent: NavigationIntent) {
-        guard case .addItem(let image, let url) = intent else { return }
+        guard case .addItem = intent else { return }
         
-        let hasImage = image != nil
-        print("📱 ContentView: Navigating to ItemAddView - URL: \(url?.absoluteString ?? "nil"), hasImage: \(hasImage)")
-        
-        navigationPath.append(NavigationDestination.itemAdd(url: url, hasImage: hasImage))
-        // Don't clear intent here - let onDisappear handle it
+        print("📱 ContentView: Presenting ItemAddView for deep link")
+        showDeepLinkItemAdd = true
     }
 }
 

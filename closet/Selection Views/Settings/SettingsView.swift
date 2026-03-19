@@ -24,6 +24,15 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
+                NavigationLink {
+                    LoginView()
+                } label: {
+                    HStack {
+                        Image(systemName: "lock")
+                        Text("Login")
+                    }
+                }
+                
                 Button {
                     showWeightView = true
                 } label: {
