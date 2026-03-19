@@ -30,6 +30,9 @@ struct LoginView: View {
     @State private var showPurgeOutfitsConfirmation = false
     @State private var isPurgingOutfits = false
     @State private var purgeOutfitsMessage: String?
+    @State private var showPurgeOrphanedWardrobesConfirmation = false
+    @State private var isPurgingOrphanedWardrobes = false
+    @State private var purgeOrphanedWardrobesMessage: String?
     
     // Fetch user profile to observe changes
     @FetchRequest(
@@ -170,6 +173,14 @@ struct LoginView: View {
                         }
                         .padding(.horizontal)
                         
+                        if let error = errorMessage {
+                            Text(error)
+                                .foregroundColor(.red)
+                                .font(.caption)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal)
+                        }
+                        
                         Button {
                             Task { await signOut() }
                         } label: {
@@ -217,6 +228,26 @@ struct LoginView: View {
                             .disabled(isPurgingOutfits)
                             
                             if let message = purgeOutfitsMessage {
+                                Text(message)
+                                    .font(.caption)
+                                    .foregroundColor(message.contains("✅") ? .green : .red)
+                                    .padding(.horizontal)
+                            }
+
+                            // Purge Orphaned Wardrobes (local Core Data)
+                            Button {
+                                showPurgeOrphanedWardrobesConfirmation = true
+                            } label: {
+                                HStack {
+                                    Image(systemName: "folder.badge.minus")
+                                    Text("Purge Orphaned Wardrobes").fontWeight(.semibold)
+                                }
+                                .foregroundColor(.orange)
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(isPurgingOrphanedWardrobes)
+
+                            if let message = purgeOrphanedWardrobesMessage {
                                 Text(message)
                                     .font(.caption)
                                     .foregroundColor(message.contains("✅") ? .green : .red)
@@ -328,6 +359,14 @@ struct LoginView: View {
             } message: {
                 Text("This will permanently remove all soft-deleted outfits from local storage. Outfits are already removed from Supabase when soft-deleted, so this only cleans up local tombstone records.")
             }
+            .alert("Purge Orphaned Wardrobes", isPresented: $showPurgeOrphanedWardrobesConfirmation) {
+                Button("Cancel", role: .cancel) { }
+                Button("Purge", role: .destructive) {
+                    purgeOrphanedWardrobes()
+                }
+            } message: {
+                Text("This will permanently delete all local wardrobes that are not linked to your account (userId is nil or belongs to a different user). This cannot be undone.")
+            }
         }
     }
     
@@ -358,6 +397,47 @@ struct LoginView: View {
         }
 
         isPurgingOutfits = false
+    }
+
+    // MARK: - Purge orphaned wardrobes from local Core Data
+    private func purgeOrphanedWardrobes() {
+        isPurgingOrphanedWardrobes = true
+        purgeOrphanedWardrobesMessage = nil
+
+        guard let currentUserId = supabaseService.currentUser?.id.uuidString else {
+            purgeOrphanedWardrobesMessage = "❌ Not signed in."
+            isPurgingOrphanedWardrobes = false
+            return
+        }
+
+        let request = NSFetchRequest<Wardrobe>(entityName: "Wardrobe")
+        // Target:
+        //  • wardrobes with no userId or the wrong userId (truly orphaned)
+        //  • wardrobes that are soft-deleted (user's own but marked for removal)
+        request.predicate = NSPredicate(
+            format: "userId == nil OR userId != %@ OR isSoftDeleted == YES",
+            currentUserId
+        )
+
+        do {
+            let orphaned = try viewContext.fetch(request)
+            let count = orphaned.count
+            if orphaned.isEmpty {
+                purgeOrphanedWardrobesMessage = "✅ No orphaned wardrobes found."
+            } else {
+                for wardrobe in orphaned {
+                    viewContext.delete(wardrobe)
+                }
+                try viewContext.save()
+                purgeOrphanedWardrobesMessage = "✅ Deleted \(count) orphaned wardrobe\(count == 1 ? "" : "s")."
+                print("🧹 Purged \(count) orphaned wardrobe(s)")
+            }
+        } catch {
+            purgeOrphanedWardrobesMessage = "❌ Failed: \(error.localizedDescription)"
+            print("❌ Failed to purge orphaned wardrobes: \(error)")
+        }
+
+        isPurgingOrphanedWardrobes = false
     }
     
     private func signIn() async {
@@ -432,11 +512,13 @@ struct LoginView: View {
     
     private func startEditingUsername() {
         editedUsername = currentUsername ?? ""
+        errorMessage = nil
         isEditingUsername = true
     }
     
     private func saveUsername() async {
         isSavingUsername = true
+        errorMessage = nil
         
         do {
             try await supabaseService.updateUsername(editedUsername)

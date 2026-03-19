@@ -8,6 +8,80 @@
 import Foundation
 import Supabase
 
+struct PublicUserProfile: Decodable, Identifiable {
+    let userId: UUID
+    let username: String
+    let displayName: String?
+    
+    var id: UUID { userId }
+}
+
+struct FriendshipRecord: Decodable, Identifiable {
+    let id: UUID
+    let user_id: UUID
+    let friend_user_id: UUID
+    let status: String
+    let created_at: Date?
+    let updated_at: Date?
+}
+
+/// Model for decoding rows from the `notifications` table.
+/// Keys match the Supabase column names (id, user_id, type, title, body, payload, is_read, created_at).
+struct NotificationRecord: Decodable, Identifiable {
+    let id: UUID
+    let user_id: UUID
+    let type: String
+    let title: String
+    let body: String?
+    let payload: [String: String]?
+    let is_read: Bool
+    let created_at: Date
+    
+    enum CodingKeys: String, CodingKey {
+        case id, user_id, type, title, body, payload, is_read, created_at
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        
+        id = try container.decode(UUID.self, forKey: .id)
+        user_id = try container.decode(UUID.self, forKey: .user_id)
+        type = try container.decode(String.self, forKey: .type)
+        title = try container.decode(String.self, forKey: .title)
+        body = try container.decodeIfPresent(String.self, forKey: .body)
+        is_read = try container.decode(Bool.self, forKey: .is_read)
+        created_at = try container.decode(Date.self, forKey: .created_at)
+        
+        // jsonb comes back as a generic object — decode as [String: JSONValue] then convert
+        if let raw = try container.decodeIfPresent([String: JSONValue].self, forKey: .payload) {
+            payload = raw.compactMapValues { $0.stringValue }
+        } else {
+            payload = nil
+        }
+    }
+}
+
+/// Lightweight JSON value helper for decoding jsonb payloads.
+/// We only care about string values for now.
+enum JSONValue: Decodable {
+    case string(String)
+    case other
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let s = try? container.decode(String.self) {
+            self = .string(s)
+        } else {
+            self = .other
+        }
+    }
+    
+    var stringValue: String? {
+        if case .string(let s) = self { return s }
+        return nil
+    }
+}
+
 /// Singleton service for managing Supabase authentication and database operations
 @MainActor
 class SupabaseService: ObservableObject {
@@ -148,6 +222,257 @@ class SupabaseService: ObservableObject {
         }
     }
     
+    // MARK: - User Search
+    
+    /// Searches for users by username using a secure RPC function.
+    /// Returns only non-sensitive fields (user_id, username, display_name).
+    func searchUsers(byUsername query: String) async throws -> [PublicUserProfile] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        
+        let response = try await client
+            .rpc("search_profiles_by_username", params: ["p_query": trimmed])
+            .execute()
+        
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode([PublicUserProfile].self, from: response.data)
+    }
+    
+    /// Fetches accepted friends for the current user (public profile fields only).
+    /// Requires the `get_friends()` RPC to be installed in Supabase.
+    func fetchFriends() async throws -> [PublicUserProfile] {
+        guard currentUser != nil else {
+            throw NSError(domain: "SupabaseService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+        
+        let response = try await client
+            .rpc("get_friends")
+            .execute()
+        
+        struct FriendRow: Decodable {
+            let user_id: UUID
+            let username: String
+            let display_name: String?
+        }
+        
+        let decoder = JSONDecoder()
+        let rows = try decoder.decode([FriendRow].self, from: response.data)
+        return rows.map { row in
+            PublicUserProfile(userId: row.user_id, username: row.username, displayName: row.display_name)
+        }
+    }
+
+    // MARK: - Notifications
+    
+    /// Fetches notifications for the current user, ordered by newest first.
+    /// Relies on RLS to ensure users only see their own notifications.
+    func fetchNotifications() async throws -> [NotificationRecord] {
+        guard let userId = currentUser?.id else {
+            throw NSError(domain: "SupabaseService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+        
+        let response = try await client
+            .from("notifications")
+            .select("*")
+            .eq("user_id", value: userId.uuidString)
+            .order("created_at", ascending: false)
+            .execute()
+        
+        let decoder = JSONDecoder()
+        // decoder.keyDecodingStrategy = .convertFromSnakeCase
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let string = try container.decode(String.self)
+            
+            // Supabase/Postgres often returns timestamptz with fractional seconds.
+            let isoFormatterWithFraction = ISO8601DateFormatter()
+            isoFormatterWithFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = isoFormatterWithFraction.date(from: string) {
+                return date
+            }
+            
+            let isoFormatter = ISO8601DateFormatter()
+            isoFormatter.formatOptions = [.withInternetDateTime]
+            if let date = isoFormatter.date(from: string) {
+                return date
+            }
+            
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid date: \(string)")
+        }
+        return try decoder.decode([NotificationRecord].self, from: response.data)
+    }
+    
+    /// Marks a notification as read by id (sets is_read = true).
+    /// RLS on notifications ensures a user can only update their own notifications.
+    func markNotificationRead(id: UUID) async throws {
+        _ = try await client
+            .from("notifications")
+            .update(["is_read": true])
+            .eq("id", value: id.uuidString)
+            .execute()
+    }
+    
+    // MARK: - Friendships
+    
+    /// Sends a friend request from the current user to the specified user.
+    /// Creates a row in friendships (status = 'pending').
+    /// Notifications are created by a Postgres trigger on the friendships table.
+    func sendFriendRequest(toUserId: UUID, toUsername: String?, toDisplayName: String?) async throws {
+        guard let currentUser = currentUser else {
+            throw NSError(domain: "SupabaseService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+
+        do {
+            // Create friendship row; trigger will handle notifications.
+            _ = try await client
+                .from("friendships")
+                .insert([
+                    "user_id": currentUser.id.uuidString,
+                    "friend_user_id": toUserId.uuidString,
+                    "status": "pending"
+                ])
+                .execute()
+        } catch {
+            // If friendship already exists (unique constraint), treat as success.
+            let message = (error as NSError).userInfo[NSLocalizedDescriptionKey] as? String
+                ?? error.localizedDescription
+            if message.lowercased().contains("duplicate key")
+                || message.contains("idx_friendships_user_friend_unique") {
+                print("ℹ️ Friend request already exists for user_id=\(currentUser.id.uuidString), friend_user_id=\(toUserId.uuidString)")
+                return
+            }
+            throw error
+        }
+    }
+    
+    /// Responds to a friend request (accept or decline).
+    /// Updates the friendship status; caller is responsible for marking notifications as read.
+    func respondToFriendRequest(friendshipId: UUID, accept: Bool) async throws {
+        let newStatus = accept ? "accepted" : "declined"
+        
+        _ = try await client
+            .from("friendships")
+            .update(["status": newStatus])
+            .eq("id", value: friendshipId.uuidString)
+            .execute()
+    }
+    
+    /// Cancels (un-sends) a pending friend request from the current user to the target user.
+    /// Deletes the pending friendships row. RLS enforces the current user is the requester.
+    func cancelFriendRequest(toUserId: UUID) async throws {
+        guard let currentUser = currentUser else {
+            throw NSError(domain: "SupabaseService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+        
+        _ = try await client
+            .from("friendships")
+            .delete()
+            .eq("user_id", value: currentUser.id.uuidString)
+            .eq("friend_user_id", value: toUserId.uuidString)
+            .eq("status", value: "pending")
+            .execute()
+    }
+    
+    /// Fetches all friendship rows involving the current user (either side).
+    /// Uses RLS on friendships to restrict access.
+    func fetchFriendshipsForCurrentUser() async throws -> [FriendshipRecord] {
+        guard currentUser != nil else {
+            throw NSError(domain: "SupabaseService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+        
+        // RLS limits this to rows where current user is user_id OR friend_user_id.
+        let response = try await client
+            .from("friendships")
+            .select("id, user_id, friend_user_id, status, created_at, updated_at")
+            .execute()
+        
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let string = try container.decode(String.self)
+            
+            let isoFormatterWithFraction = ISO8601DateFormatter()
+            isoFormatterWithFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = isoFormatterWithFraction.date(from: string) {
+                return date
+            }
+            
+            let isoFormatter = ISO8601DateFormatter()
+            isoFormatter.formatOptions = [.withInternetDateTime]
+            if let date = isoFormatter.date(from: string) {
+                return date
+            }
+            
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid date: \(string)")
+        }
+        return try decoder.decode([FriendshipRecord].self, from: response.data)
+    }
+    
+    /// Unfriends (deletes) an accepted friendship between the current user and the other user.
+    /// Since the row could have been created in either direction, we delete both possible directions.
+    func unfriend(userId otherUserId: UUID) async throws {
+        guard let currentUser = currentUser else {
+            throw NSError(domain: "SupabaseService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+        
+        // Direction 1: current → other
+        _ = try await client
+            .from("friendships")
+            .delete()
+            .eq("user_id", value: currentUser.id.uuidString)
+            .eq("friend_user_id", value: otherUserId.uuidString)
+            .eq("status", value: "accepted")
+            .execute()
+        
+        // Direction 2: other → current
+        _ = try await client
+            .from("friendships")
+            .delete()
+            .eq("user_id", value: otherUserId.uuidString)
+            .eq("friend_user_id", value: currentUser.id.uuidString)
+            .eq("status", value: "accepted")
+            .execute()
+    }
+    
+    /// Returns the number of accepted friends for the current user.
+    /// Counts rows where the user is either the requester or recipient with status = 'accepted'.
+    func fetchFriendCount() async throws -> Int {
+        guard let userId = currentUser?.id else {
+            throw NSError(domain: "SupabaseService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+        
+        struct FriendshipRowId: Decodable { let id: UUID }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        
+        let asRequester = try await client
+            .from("friendships")
+            .select("id")
+            .eq("user_id", value: userId.uuidString)
+            .eq("status", value: "accepted")
+            .execute()
+        
+        let asRecipient = try await client
+            .from("friendships")
+            .select("id")
+            .eq("friend_user_id", value: userId.uuidString)
+            .eq("status", value: "accepted")
+            .execute()
+        
+        let requesterRows = try decoder.decode([FriendshipRowId].self, from: asRequester.data)
+        let recipientRows = try decoder.decode([FriendshipRowId].self, from: asRecipient.data)
+        
+        return requesterRows.count + recipientRows.count
+    }
+    
     /// Loads the existing session if available
     func loadSession() async {
         guard !hasLoadedSession else { return }
@@ -264,10 +589,11 @@ class SupabaseService: ObservableObject {
             
             print("✅ Username updated to: \(trimmedUsername)")
         } catch {
-            // Check if error is due to unique constraint violation
-            if let errorDescription = (error as NSError).userInfo[NSLocalizedDescriptionKey] as? String,
-               errorDescription.contains("unique") || errorDescription.contains("duplicate") {
-                throw NSError(domain: "SupabaseService", code: -1, 
+            // Check if error is due to unique constraint violation (message may be in userInfo or localizedDescription)
+            let message = (error as NSError).userInfo[NSLocalizedDescriptionKey] as? String
+                ?? error.localizedDescription
+            if message.lowercased().contains("unique") || message.lowercased().contains("duplicate") || message.contains("user_profiles_username_key") {
+                throw NSError(domain: "SupabaseService", code: -1,
                              userInfo: [NSLocalizedDescriptionKey: "Username is already taken"])
             }
             throw error

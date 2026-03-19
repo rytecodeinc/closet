@@ -19,6 +19,11 @@ struct ItemGridView: View {
     // Binding to communicate selection state to parent
     @Binding var isInSelectionMode: Bool
     
+    // Binding to show filter views
+    @State private var showItemFilter = false
+    @State private var showOutfitFilter = false
+
+    @EnvironmentObject var supabaseService: SupabaseService
     @Environment(\.managedObjectContext) private var viewContext
     @State private var closetItems: [Item] = []
     @State private var isImagePickerPresented = false
@@ -28,7 +33,6 @@ struct ItemGridView: View {
     @State private var selectedTab: String = "Items"
     
     @State private var outfits: [Outfit] = []
-    @State private var sortAscending: Bool = false // false = descending (newest first), true = ascending (oldest first)
     @StateObject private var outfitFilterModel = OutfitFilterModel()
     
     // Selection mode state
@@ -37,9 +41,19 @@ struct ItemGridView: View {
     @State private var selectedOutfitForNavigation: Outfit?
     @State private var selectedOutfits: Set<Outfit> = []
     @State private var showWardrobeSelectionSheet = false
+    @State private var showSharedUsersSheet = false
+    @State private var sharedUsersSearchText = ""
+    @State private var sharedUserResults: [PublicUserProfile] = []
+    @State private var isSearchingSharedUsers = false
+    @State private var sharedUsersError: String?
+    @State private var pendingFriendRequestUserIds: Set<UUID> = []
+    @State private var friendUserIds: Set<UUID> = []
+    @State private var showUnfriendAlert = false
+    @State private var unfriendTargetUserId: UUID?
     @State private var showDeleteConfirmation = false
     @State private var showOutfitDeleteConfirmation = false
     @State private var showTagSelectionSheet = false
+    @State private var showCategorySelectionSheet = false
     @State private var showTagAddedConfirmation = false
     @State private var addedTagName: String = ""
     @State private var addedTagItemCount: Int = 0
@@ -78,6 +92,7 @@ struct ItemGridView: View {
             let userWeightKg = repository.getWeightKg()
             key += "weight:\(userWeightKg)"
         }
+        key += filterModel.sortOrder.sortAscending ? "sortAsc" : "sortDesc"
         return key
     }
     
@@ -158,6 +173,46 @@ struct ItemGridView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 trailingToolbarContent()
             }
+            if isInSelectionMode {
+                ToolbarItemGroup(placement: .bottomBar) {
+                    if selectedTab == "Items" {
+                        Button {
+                            showTagSelectionSheet = true
+                        } label: {
+                            VStack {
+                                Image(systemName: "tag")
+                                Text("Tag")
+                                    .font(.caption)
+                            }
+                        }
+                        Button {
+                            showCategorySelectionSheet = true
+                        } label: {
+                            VStack {
+                                Image(systemName: "tshirt")
+                                Text("Category")
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                    Button {
+                        if selectedTab == "Items" {
+                            showDeleteConfirmation = true
+                        } else {
+                            showOutfitDeleteConfirmation = true
+                        }
+                    } label: {
+                        VStack {
+                            Image(systemName: "trash")
+                                .foregroundColor(.red)
+                            Text("Delete")
+                                .font(.caption)
+                                .foregroundColor(.red)
+                        }
+                    }
+                    .disabled(selectedTab == "Outfits" && selectedOutfits.isEmpty)
+                }
+            }
             ToolbarItem(placement: .principal) {
                 if selectedTab == "Items" && isInSelectionMode {
                     Button {
@@ -176,6 +231,7 @@ struct ItemGridView: View {
                 }
             }
         }
+        .toolbar(isInSelectionMode ? .hidden : .automatic, for: .tabBar)
         .sheet(isPresented: $isImagePickerPresented) {
             ImagePicker(
                 image: $pickedImage,
@@ -256,8 +312,14 @@ struct ItemGridView: View {
         .sheet(isPresented: $showWardrobeSelectionSheet) {
             wardrobeSelectionSheet()
         }
+        .sheet(isPresented: $showSharedUsersSheet) {
+            sharedUsersSheet()
+        }
         .sheet(isPresented: $showTagSelectionSheet) {
             tagSelectionSheet()
+        }
+        .sheet(isPresented: $showCategorySelectionSheet) {
+            categorySelectionSheet()
         }
         .alert("Delete Items", isPresented: $showDeleteConfirmation) {
             Button("Delete", role: .destructive) {
@@ -338,7 +400,7 @@ struct ItemGridView: View {
         }
         
         let request = NSFetchRequest<Item>(entityName: "Item")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.createdAt, ascending: sortAscending)]
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.createdAt, ascending: filterModel.sortOrder.sortAscending)]
         
         // Build predicate from filterModel, but exclude wardrobe filter since we handle it separately below
         var subpredicates: [NSPredicate] = []
@@ -498,7 +560,7 @@ struct ItemGridView: View {
         }
         
         let request = NSFetchRequest<Outfit>(entityName: "Outfit")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.createdAt, ascending: sortAscending)]
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.createdAt, ascending: filterModel.sortOrder.sortAscending)]
         
         // Build predicate from outfit filter model
         let filterPredicate = makeOutfitPredicate(for: outfitFilterModel)
@@ -594,16 +656,16 @@ struct ItemGridView: View {
                                 .overlay(
                                     // Show selection checkmark when in selection mode (on top of white overlay)
                                     Group {
-                                        if isInSelectionMode {
+                                        if isInSelectionMode && selectedItems.contains(item) {
                                             VStack {
                                                 Spacer()
                                                 HStack {
                                                     Spacer()
-                                                    Image(systemName: selectedItems.contains(item) ? "checkmark.circle" : "circle")
+                                                    Image(systemName: "checkmark.circle")
                                                         .foregroundColor(.white)
                                                         .background(
                                                             Circle()
-                                                                .fill(selectedItems.contains(item) ? Color.blue : Color.clear)
+                                                                .fill(Color.blue)
                                                                 .padding(2)
                                                         )
                                                         .font(.system(size: 22))
@@ -735,13 +797,6 @@ struct ItemGridView: View {
                 Text("All")
             }
         }
-        
-        // Tag button
-        Button {
-            showTagSelectionSheet = true
-        } label: {
-            Image(systemName: "tag")
-        }
     }
     
     @ViewBuilder
@@ -773,31 +828,10 @@ struct ItemGridView: View {
                 Image(systemName: "line.3.horizontal.decrease.circle")
             }
         }
-        Menu {
-            Button {
-                sortAscending = false
-                fetchItems()
-                fetchOutfits()
-            } label: {
-                if !sortAscending {
-                    Label("Newest First", systemImage: "checkmark")
-                } else {
-                    Text("Newest First")
-                }
-            }
-            Button {
-                sortAscending = true
-                fetchItems()
-                fetchOutfits()
-            } label: {
-                if sortAscending {
-                    Label("Oldest First", systemImage: "checkmark")
-                } else {
-                    Text("Oldest First")
-                }
-            }
+        Button {
+            showSharedUsersSheet = true
         } label: {
-            Image(systemName: "arrow.up.arrow.down")
+            Image(systemName: "person.2")
         }
     }
     
@@ -812,28 +846,12 @@ struct ItemGridView: View {
     
     @ViewBuilder
     private func selectionModeTrailingToolbar() -> some View {
-        HStack(spacing: 16) {
-            // Delete button
-            Button {
-                if selectedTab == "Items" {
-                    showDeleteConfirmation = true
-                } else {
-                    showOutfitDeleteConfirmation = true
-                }
-            } label: {
-                Image(systemName: "trash")
-                    .foregroundColor(.red)
-            }
-            .disabled(selectedTab == "Outfits" && selectedOutfits.isEmpty)
-            
-            // Cancel button
-            Button("Cancel") {
-                isInSelectionMode = false
-                if selectedTab == "Items" {
-                    selectedItems.removeAll()
-                } else {
-                    selectedOutfits.removeAll()
-                }
+        Button("Cancel") {
+            isInSelectionMode = false
+            if selectedTab == "Items" {
+                selectedItems.removeAll()
+            } else {
+                selectedOutfits.removeAll()
             }
         }
     }
@@ -842,19 +860,13 @@ struct ItemGridView: View {
     private func nonSelectionModeTrailingToolbar() -> some View {
         HStack(spacing: 16) {
             if selectedTab == "Items" {
-               /* NavigationLink(destination: ItemDraftsView()) {
-                    Image(systemName: "folder")
-                }*/
                 Button {
                     shouldNavigateToItemAddDirect = true
                 } label: {
                     Image(systemName: "plus")
                 }
             } else {
-              /*  NavigationLink(destination: OutfitDraftsView(wardrobeType: wardrobeType, selectedWardrobe: selectedWardrobe)) {
-                    Image(systemName: "folder")
-                }*/
-                NavigationLink(destination: OutfitAddView(wardrobeType: wardrobeType)) {
+                NavigationLink(destination: OutfitAddView(wardrobeType: wardrobeType, initialWardrobe: selectedWardrobe)) {
                     Image(systemName: "plus")
                 }
             }
@@ -989,6 +1001,218 @@ struct ItemGridView: View {
         .presentationDetents([.medium, .large])
     }
     
+    @ViewBuilder
+    private func sharedUsersSheet() -> some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                HStack {
+                    TextField("Search friends", text: $sharedUsersSearchText)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                
+                if isSearchingSharedUsers {
+                    ProgressView("Searching…")
+                        .padding()
+                } else if let error = sharedUsersError {
+                    Text(error)
+                        .foregroundColor(.red)
+                        .font(.caption)
+                        .padding()
+                } else if sharedUserResults.isEmpty && !sharedUsersSearchText.isEmpty {
+                    Text("No users found for “\(sharedUsersSearchText)”")
+                        .foregroundColor(.secondary)
+                        .padding()
+                } else if sharedUserResults.isEmpty {
+                    Text("Search by username to find other users.")
+                        .foregroundColor(.secondary)
+                        .padding()
+                } else {
+                    List(sharedUserResults) { profile in
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(profile.username)
+                                    .font(.headline)
+                                if let name = profile.displayName, !name.isEmpty {
+                                    Text(name)
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            Spacer()
+                            if friendUserIds.contains(profile.userId) {
+                                Button {
+                                    unfriendTargetUserId = profile.userId
+                                    showUnfriendAlert = true
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        Text("Friends")
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .font(.caption)
+                            } else if pendingFriendRequestUserIds.contains(profile.userId) {
+                                Button("Request Sent") {
+                                    Task {
+                                        do {
+                                            try await supabaseService.cancelFriendRequest(toUserId: profile.userId)
+                                            await MainActor.run {
+                                                pendingFriendRequestUserIds.remove(profile.userId)
+                                            }
+                                        } catch {
+                                            print("Failed to cancel friend request: \(error.localizedDescription)")
+                                        }
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .font(.caption)
+                            } else {
+                                Button("Add Friend") {
+                                    Task {
+                                        do {
+                                            try await supabaseService.sendFriendRequest(
+                                                toUserId: profile.userId,
+                                                toUsername: profile.username,
+                                                toDisplayName: profile.displayName
+                                            )
+                                            await MainActor.run {
+                                                pendingFriendRequestUserIds.insert(profile.userId)
+                                            }
+                                        } catch {
+                                            print("Failed to send friend request: \(error.localizedDescription)")
+                                        }
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .font(.caption)
+                            }
+                        }
+                    }
+                    .listStyle(.plain)
+                }
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .navigationTitle("Shared Users")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Color(UIColor.secondarySystemBackground), for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .task(id: sharedUsersSearchText) {
+                await searchSharedUsers()
+            }
+            .task(id: showSharedUsersSheet) {
+                if showSharedUsersSheet {
+                    await refreshFriendshipBadges()
+                }
+            }
+            .alert("Unfriend?", isPresented: $showUnfriendAlert) {
+                Button("Cancel", role: .cancel) {}
+                Button("Unfriend", role: .destructive) {
+                    guard let targetId = unfriendTargetUserId else { return }
+                    Task {
+                        do {
+                            try await supabaseService.unfriend(userId: targetId)
+                            await MainActor.run {
+                                friendUserIds.remove(targetId)
+                            }
+                        } catch {
+                            print("Failed to unfriend: \(error.localizedDescription)")
+                        }
+                    }
+                }
+            } message: {
+                Text("Are you sure you want to remove this friend?")
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func searchSharedUsers() async {
+        let query = sharedUsersSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if query.isEmpty {
+            sharedUserResults = []
+            sharedUsersError = nil
+            return
+        }
+        
+        isSearchingSharedUsers = true
+        sharedUsersError = nil
+        
+        do {
+            // simple debounce
+            try await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            
+            let results = try await supabaseService.searchUsers(byUsername: query)
+            let currentUserId = supabaseService.currentUser?.id
+            let filtered = results.filter { profile in
+                guard let currentUserId = currentUserId else { return true }
+                return profile.userId != currentUserId
+            }
+            await MainActor.run {
+                sharedUserResults = filtered
+            }
+            await refreshFriendshipBadges()
+        } catch {
+            await MainActor.run {
+                sharedUsersError = error.localizedDescription
+                sharedUserResults = []
+            }
+        }
+        
+        await MainActor.run {
+            isSearchingSharedUsers = false
+        }
+    }
+
+    private func refreshFriendshipBadges() async {
+        guard supabaseService.isAuthenticated else {
+            await MainActor.run {
+                friendUserIds = []
+            }
+            return
+        }
+        
+        do {
+            let rows = try await supabaseService.fetchFriendshipsForCurrentUser()
+            let currentId = supabaseService.currentUser?.id
+            let resultIds = Set(sharedUserResults.map(\.userId))
+            
+            var accepted: Set<UUID> = []
+            var outgoingPending: Set<UUID> = []
+            
+            for row in rows {
+                guard let currentId else { continue }
+                let otherId: UUID
+                if row.user_id == currentId {
+                    otherId = row.friend_user_id
+                } else if row.friend_user_id == currentId {
+                    otherId = row.user_id
+                } else {
+                    continue
+                }
+                
+                guard resultIds.contains(otherId) else { continue }
+                
+                if row.status == "accepted" {
+                    accepted.insert(otherId)
+                } else if row.status == "pending", row.user_id == currentId {
+                    // only show outgoing pending as "Request Sent"
+                    outgoingPending.insert(otherId)
+                }
+            }
+            
+            await MainActor.run {
+                friendUserIds = accepted
+                pendingFriendRequestUserIds.formUnion(outgoingPending)
+            }
+        } catch {
+            print("Failed to refresh friendships: \(error.localizedDescription)")
+        }
+    }
+    
     private func areAllSelectedItemsInWardrobe(_ wardrobe: Wardrobe) -> Bool {
         guard !selectedItems.isEmpty else { return false }
         
@@ -1120,9 +1344,17 @@ struct ItemGridView: View {
     
     @ViewBuilder
     private func tagSelectionSheet() -> some View {
-        NavigationView {
+        let tagsForContext = fetchAllTags()
+        return NavigationView {
             List {
-                ForEach(fetchAllTags(), id: \.self) { tag in
+                if tagsForContext.isEmpty {
+                    Text(wardrobeType == "wishlist"
+                        ? "Tags used on wishlist items will appear here."
+                        : "Tags added to your closet will appear here.")
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    ForEach(tagsForContext, id: \.self) { tag in
                     let allItemsHaveTag = doAllSelectedItemsHaveTag(tag)
                     
                     Button {
@@ -1141,6 +1373,7 @@ struct ItemGridView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .buttonStyle(.plain)
+                }
                 }
             }
             .listStyle(.plain)
@@ -1167,6 +1400,9 @@ struct ItemGridView: View {
     private func fetchAllTags() -> [Tag] {
         let request: NSFetchRequest<Tag> = Tag.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Tag.name, ascending: true)]
+        
+        // Restrict to tags used by items in the current wardrobe type (wishlist vs closet)
+        request.predicate = NSPredicate(format: "SUBQUERY(items, $i, ANY $i.wardrobes.type == %@).@count > 0", wardrobeType)
         
         do {
             return try viewContext.fetch(request)
@@ -1201,6 +1437,125 @@ struct ItemGridView: View {
         } catch {
             print("❌ Failed to add tag to items: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: - Category Selection Sheet
+
+    @ViewBuilder
+    private func categorySelectionSheet() -> some View {
+        NavigationView {
+            List {
+                ForEach(fetchAllCategories(), id: \.objectID) { category in
+                    let catName = category.name ?? ""
+                    let subs = sortedSubcategories(for: category)
+
+                    Button {
+                        addCategoryToSelectedItems(categoryName: catName, subcategoryName: nil)
+                        showCategorySelectionSheet = false
+                    } label: {
+                        HStack {
+                            Text(catName)
+                            Spacer()
+                            Image(systemName: "plus")
+                                .foregroundColor(.blue)
+                                .font(.system(size: 16, weight: .medium))
+                        }
+                    }
+                    .buttonStyle(.plain)
+
+                    ForEach(subs, id: \.objectID) { sub in
+                        let subName = sub.name ?? ""
+                        Button {
+                            addCategoryToSelectedItems(categoryName: catName, subcategoryName: subName)
+                            showCategorySelectionSheet = false
+                        } label: {
+                            HStack {
+                                Text(subName)
+                                    .padding(.leading, 20)
+                                Spacer()
+                                Image(systemName: "plus")
+                                    .foregroundColor(.blue)
+                                    .font(.system(size: 16, weight: .medium))
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .navigationTitle("Set Category")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Color(UIColor.secondarySystemBackground), for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func fetchAllCategories() -> [Category] {
+        let request = NSFetchRequest<Category>(entityName: "Category")
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Category.name, ascending: true)]
+        do {
+            return try viewContext.fetch(request)
+        } catch {
+            print("❌ Failed to fetch categories: \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    private func sortedSubcategories(for category: Category) -> [Subcategory] {
+        let set = (category.subcategories as? Set<Subcategory>) ?? []
+        return set.sorted {
+            if $0.sortOrder != $1.sortOrder { return $0.sortOrder < $1.sortOrder }
+            return ($0.name ?? "") < ($1.name ?? "")
+        }
+    }
+
+    private func addCategoryToSelectedItems(categoryName: String, subcategoryName: String?) {
+        guard !selectedItems.isEmpty, !categoryName.isEmpty else { return }
+
+        let category = fetchOrCreateCategory(named: categoryName)
+        var subcategory: Subcategory?
+        if let subName = subcategoryName, !subName.isEmpty {
+            subcategory = fetchSubcategory(named: subName, in: category)
+        }
+
+        for item in selectedItems {
+            item.category = category
+            item.subcategory = subcategory
+            setUpdatedAt(item)
+        }
+
+        do {
+            try viewContext.save()
+            for item in selectedItems {
+                SyncService.shared.syncItemIfNeeded(item)
+            }
+            print("✅ Set category '\(categoryName)' on \(selectedItems.count) items")
+        } catch {
+            print("❌ Failed to set category on items: \(error.localizedDescription)")
+        }
+    }
+
+    private func fetchOrCreateCategory(named name: String) -> Category {
+        let request = NSFetchRequest<Category>(entityName: "Category")
+        request.predicate = NSPredicate(format: "name ==[c] %@", name)
+        do {
+            if let match = try viewContext.fetch(request).first {
+                return match
+            }
+        } catch { print("❌ Fetch category: \(error)") }
+
+        let newCategory = Category(context: viewContext)
+        newCategory.name = name
+        newCategory.id = UUID()
+        return newCategory
+    }
+
+    private func fetchSubcategory(named name: String, in category: Category) -> Subcategory? {
+        let req = NSFetchRequest<Subcategory>(entityName: "Subcategory")
+        req.fetchLimit = 1
+        req.predicate = NSPredicate(format: "name ==[c] %@ AND category == %@", name, category)
+        return try? viewContext.fetch(req).first
     }
 
     private var outfitsTab: some View {

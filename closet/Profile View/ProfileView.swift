@@ -25,6 +25,17 @@ struct ProfileView: View {
         sortDescriptors: []
     ) private var allUserProfiles: FetchedResults<UserProfile>
     
+    @State private var notifications: [NotificationRecord] = []
+    @State private var isNotificationsSheetPresented = false
+    @State private var isLoadingNotifications = false
+    @State private var notificationsError: String?
+    @State private var respondingNotificationIds: Set<UUID> = []
+    @State private var friendCount: Int = 0
+    @State private var isFriendsSheetPresented = false
+    @State private var friends: [PublicUserProfile] = []
+    @State private var isLoadingFriends = false
+    @State private var friendsError: String?
+    
     // Filter user profiles by current user (if authenticated)
     private var userProfiles: [UserProfile] {
         guard let userId = supabaseService.currentUser?.id.uuidString else {
@@ -117,10 +128,15 @@ struct ProfileView: View {
     private var displayName: String? {
         userProfile?.displayName
     }
+    
+    private var friendsCount: Int { friendCount }
+    
+    private var unreadNotificationsCount: Int {
+        notifications.filter { !$0.is_read }.count
+    }
 
     var body: some View {
-        NavigationView {
-            List {
+        List {
                 // Profile Header Section
                 HStack(spacing: 16) {
                     // Profile Image
@@ -143,6 +159,16 @@ struct ProfileView: View {
                         Text("Lifestyle | Vintage | Fashion")
                             .font(.subheadline)
                             .foregroundColor(.gray)
+                        
+                        // Friends count (e.g., "123 friends")
+                        Button {
+                            isFriendsSheetPresented = true
+                        } label: {
+                            Text("\(friendsCount) friends")
+                                .font(.subheadline)
+                                .foregroundColor(.gray)
+                        }
+                        .buttonStyle(.plain)
                     }
                     
                     Spacer()
@@ -151,7 +177,7 @@ struct ProfileView: View {
                 .padding(.horizontal)
                 .listRowInsets(EdgeInsets())
                 .listRowSeparator(.hidden)
-                
+                /*
                 // Closet Value Row
                 HStack {
                     Text("Closet")
@@ -195,7 +221,7 @@ struct ProfileView: View {
                         Text("Reclaim Database Space")
                     }
                     .foregroundColor(.orange)
-                }
+                }*/
             }
             .listStyle(.plain)
             .navigationTitle(username ?? supabaseService.cachedUsername ?? "@username")
@@ -229,6 +255,11 @@ struct ProfileView: View {
                     }
                 }
             }
+            .task(id: supabaseService.currentUser?.id) {
+                // Preload notifications so the bell badge shows without opening the sheet
+                await loadNotifications()
+                await loadFriendCount()
+            }
             .onChange(of: userProfiles.count) { _ in
                 // Refresh when user profile changes
                 viewContext.refreshAllObjects()
@@ -243,24 +274,36 @@ struct ProfileView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        // Action not defined yet
+                    NavigationLink {
+                        SettingsView()
                     } label: {
-                        Image(systemName: "bell")
+                        Image(systemName: "gearshape")
                     }
                 }
-                ToolbarItem(placement: .navigationBarLeading) {
+              /*  ToolbarItem(placement: .navigationBarLeading) {
                     Button {
                         // Action not defined yet
                     } label: {
                         Image(systemName: "magnifyingglass")
                     }
-                }
+                }*/
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    NavigationLink {
-                        SettingsView()
+                    Button {
+                        isNotificationsSheetPresented = true
                     } label: {
-                        Image(systemName: "gearshape")
+                        ZStack(alignment: .topTrailing) {
+                            Image(systemName: "bell")
+                            if unreadNotificationsCount > 0 {
+                                Text("\(min(unreadNotificationsCount, 99))")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 2)
+                                    .background(Color.red)
+                                    .clipShape(Capsule())
+                                    .offset(x: 8, y: -8)
+                            }
+                        }
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -271,7 +314,249 @@ struct ProfileView: View {
                     }
                 }
             }
+            .sheet(isPresented: $isNotificationsSheetPresented) {
+                NavigationView {
+                    Group {
+                        if isLoadingNotifications {
+                            ProgressView("Loading notifications…")
+                        } else if let error = notificationsError {
+                            Text(error)
+                                .foregroundColor(.red)
+                                .padding()
+                        } else if notifications.isEmpty {
+                            Text("No new notifications")
+                                .foregroundColor(.secondary)
+                                .padding()
+                        } else {
+                            List(notifications) { notification in
+                                VStack(alignment: .leading, spacing: 8) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(notification.title)
+                                            .font(.headline)
+                                        if let body = notification.body, !body.isEmpty {
+                                            Text(body)
+                                                .font(.subheadline)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        Text(notification.created_at, style: .date)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    
+                                    if notification.type == "friend_request",
+                                       notification.is_read == false {
+                                        friendRequestActions(for: notification)
+                                    }
+                                }
+                                .padding(.vertical, 6)
+                            }
+                            .listStyle(.plain)
+                        }
+                    }
+                    .navigationTitle("Notifications")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") {
+                                isNotificationsSheetPresented = false
+                            }
+                        }
+                    }
+                    .task {
+                        await loadNotifications(markPassiveAsRead: true)
+                    }
+                }
+            }
+            .sheet(isPresented: $isFriendsSheetPresented) {
+                NavigationView {
+                    Group {
+                        if isLoadingFriends {
+                            ProgressView("Loading friends…")
+                        } else if let error = friendsError {
+                            Text(error)
+                                .foregroundColor(.red)
+                                .padding()
+                        } else if friends.isEmpty {
+                            Text("No friends yet")
+                                .foregroundColor(.secondary)
+                                .padding()
+                        } else {
+                            List(friends) { friend in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(friend.username)
+                                        .font(.headline)
+                                    if let name = friend.displayName, !name.isEmpty {
+                                        Text(name)
+                                            .font(.subheadline)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                            }
+                            .listStyle(.plain)
+                        }
+                    }
+                    .navigationTitle("Friends")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") {
+                                isFriendsSheetPresented = false
+                            }
+                        }
+                    }
+                    .task {
+                        await loadFriends()
+                    }
+                }
+            }
+        
+    }
+}
+
+extension ProfileView {
+    @ViewBuilder
+    private func friendRequestActions(for notification: NotificationRecord) -> some View {
+        let isBusy = respondingNotificationIds.contains(notification.id)
+        let friendshipIdString = notification.payload?["friendship_id"]
+        let friendshipId = friendshipIdString.flatMap { UUID(uuidString: $0) }
+        
+        if friendshipId == nil {
+            Text("Unable to respond to this request.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        } else {
+            HStack(spacing: 12) {
+                Button {
+                    Task { await respondToFriendRequest(notification: notification, accept: true) }
+                } label: {
+                    if isBusy {
+                        ProgressView().scaleEffect(0.8)
+                    } else {
+                        Text("Accept")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isBusy)
+                
+                Button(role: .destructive) {
+                    Task { await respondToFriendRequest(notification: notification, accept: false) }
+                } label: {
+                    Text("Decline")
+                }
+                .buttonStyle(.bordered)
+                .disabled(isBusy)
+            }
+        }
+    }
+    
+    private func loadNotifications(markPassiveAsRead: Bool = false) async {
+        guard supabaseService.isAuthenticated else {
+            notifications = []
+            return
         }
         
+        isLoadingNotifications = true
+        notificationsError = nil
+        
+        do {
+            var fetched = try await supabaseService.fetchNotifications()
+            
+            if markPassiveAsRead {
+                let idsToMarkRead = fetched
+                    .filter { !$0.is_read && !notificationRequiresAction($0) }
+                    .map(\.id)
+                
+                if !idsToMarkRead.isEmpty {
+                    for notificationId in idsToMarkRead {
+                        try await supabaseService.markNotificationRead(id: notificationId)
+                    }
+                    fetched = try await supabaseService.fetchNotifications()
+                }
+            }
+            
+            await MainActor.run {
+                notifications = fetched
+            }
+        } catch {
+            await MainActor.run {
+                notificationsError = error.localizedDescription
+                notifications = []
+            }
+        }
+        
+        await MainActor.run {
+            isLoadingNotifications = false
+        }
+    }
+    
+    private func notificationRequiresAction(_ notification: NotificationRecord) -> Bool {
+        notification.type == "friend_request"
+    }
+    
+    private func loadFriendCount() async {
+        guard supabaseService.isAuthenticated else {
+            await MainActor.run { friendCount = 0 }
+            return
+        }
+        
+        do {
+            let count = try await supabaseService.fetchFriendCount()
+            await MainActor.run { friendCount = count }
+        } catch {
+            // Keep UI resilient; default to 0 if fetch fails
+            await MainActor.run { friendCount = 0 }
+        }
+    }
+    
+    private func respondToFriendRequest(notification: NotificationRecord, accept: Bool) async {
+        guard let friendshipIdString = notification.payload?["friendship_id"],
+              let friendshipId = UUID(uuidString: friendshipIdString) else {
+            return
+        }
+        
+        await MainActor.run {
+            respondingNotificationIds.insert(notification.id)
+        }
+        
+        do {
+            try await supabaseService.respondToFriendRequest(friendshipId: friendshipId, accept: accept)
+            try await supabaseService.markNotificationRead(id: notification.id)
+            await loadNotifications()
+        } catch {
+            await MainActor.run {
+                notificationsError = error.localizedDescription
+            }
+        }
+        
+        await MainActor.run {
+            respondingNotificationIds.remove(notification.id)
+        }
+    }
+    
+    private func loadFriends() async {
+        guard supabaseService.isAuthenticated else {
+            await MainActor.run { friends = [] }
+            return
+        }
+        
+        await MainActor.run {
+            isLoadingFriends = true
+            friendsError = nil
+        }
+        
+        do {
+            let fetched = try await supabaseService.fetchFriends()
+            await MainActor.run {
+                friends = fetched
+                isLoadingFriends = false
+            }
+        } catch {
+            await MainActor.run {
+                friendsError = error.localizedDescription
+                friends = []
+                isLoadingFriends = false
+            }
+        }
     }
 }
