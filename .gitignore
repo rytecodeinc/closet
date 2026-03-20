@@ -16,4 +16,6 @@ build/
 closet/Services/SupabaseConfig.swift
 
 
-Models/
+# Core ML model artifacts (compiled - large binary weights, ~1GB total)
+*.mlmodelc/
+**/*.mlmodelc/
