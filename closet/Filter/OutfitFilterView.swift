@@ -58,6 +58,7 @@ struct OutfitFilterView: View {
                 }
             }
         }
+        .toolbar(.hidden, for: .tabBar)
     }
 }
 

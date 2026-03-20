@@ -223,6 +223,7 @@ struct ItemFilterView: View {
                 }
             }
         }
+        .toolbar(.hidden, for: .tabBar)
     }
 }
 
