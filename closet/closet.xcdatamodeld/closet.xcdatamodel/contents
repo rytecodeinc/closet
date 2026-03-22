@@ -96,6 +96,7 @@
         <relationship name="tags" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Tag" inverseName="items" inverseEntity="Tag"/>
         <relationship name="wardrobes" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Wardrobe" inverseName="items" inverseEntity="Wardrobe"/>
         <relationship name="pairedItems" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Item" inverseName="pairedItems" inverseEntity="Item"/>
+        <relationship name="packingAssignments" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="PackingAssignment" inverseName="item" inverseEntity="PackingAssignment"/>
     </entity>
     <entity name="Link" representedClassName="Link" syncable="YES" codeGenerationType="class">
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
@@ -110,6 +111,26 @@
         <attribute name="syncedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <relationship name="item" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Item" inverseName="location" inverseEntity="Item"/>
+    </entity>
+    <entity name="PackingStorageLocation" representedClassName="PackingStorageLocation" syncable="YES" codeGenerationType="class">
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="name" optional="YES" attributeType="String"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="userId" optional="YES" attributeType="String"/>
+        <attribute name="syncedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <relationship name="wardrobe" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Wardrobe" inverseName="packingStorageLocations" inverseEntity="Wardrobe"/>
+        <relationship name="packingAssignments" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="PackingAssignment" inverseName="storageLocation" inverseEntity="PackingAssignment"/>
+    </entity>
+    <entity name="PackingAssignment" representedClassName="PackingAssignment" syncable="YES" codeGenerationType="class">
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="userId" optional="YES" attributeType="String"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="syncedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <relationship name="item" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Item" inverseName="packingAssignments" inverseEntity="Item"/>
+        <relationship name="wardrobe" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Wardrobe" inverseName="packingAssignments" inverseEntity="Wardrobe"/>
+        <relationship name="storageLocation" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="PackingStorageLocation" inverseName="packingAssignments" inverseEntity="PackingStorageLocation"/>
     </entity>
     <entity name="Outfit" representedClassName=".Outfit" syncable="YES" codeGenerationType="class">
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
@@ -214,5 +235,7 @@
         <attribute name="syncedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="type" optional="YES" attributeType="String"/>
         <relationship name="items" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Item" inverseName="wardrobes" inverseEntity="Item"/>
+        <relationship name="packingStorageLocations" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="PackingStorageLocation" inverseName="wardrobe" inverseEntity="PackingStorageLocation"/>
+        <relationship name="packingAssignments" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="PackingAssignment" inverseName="wardrobe" inverseEntity="PackingAssignment"/>
     </entity>
 </model>
