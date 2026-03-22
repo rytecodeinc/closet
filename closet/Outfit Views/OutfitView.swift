@@ -29,7 +29,7 @@ struct OutfitView: View {
                    // .background(backgroundColor)
             } else {
                 Rectangle()
-                    .fill(backgroundColor)
+                  //  .fill(backgroundColor)
                     .aspectRatio(1, contentMode: .fill)
                     .frame(minWidth: 120, minHeight: 120)
                     .overlay(
