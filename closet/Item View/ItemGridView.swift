@@ -583,9 +583,30 @@ struct ItemGridView: View {
 
         do {
             let allOutfits = try viewContext.fetch(request)
-            // Filter by wardrobe (items must belong to selected wardrobe)
+            // Filter by wardrobe
+            let isWishlist = selectedWardrobe.type?.lowercased() == "wishlist"
             let filtered = allOutfits.filter { outfit in
-                (outfit.items as? Set<Item>)?.contains(where: { $0.wardrobes?.contains(selectedWardrobe) ?? false }) ?? false
+                guard let items = outfit.items as? Set<Item>, !items.isEmpty else { return false }
+                if isWishlist {
+                    // Wishlist: at least 1 item from this wardrobe; all wishlist items must be from it; closet items allowed
+                    let hasItemFromThisWishlist = items.contains { item in
+                        guard let wardrobes = item.wardrobes as? Set<Wardrobe> else { return false }
+                        return wardrobes.contains(selectedWardrobe)
+                    }
+                    guard hasItemFromThisWishlist else { return false }
+                    return items.allSatisfy { item in
+                        guard let wardrobes = item.wardrobes as? Set<Wardrobe> else { return false }
+                        let wishlistWardrobes = wardrobes.filter { $0.type?.lowercased() == "wishlist" }
+                        if wishlistWardrobes.isEmpty { return true } // Closet item, allowed
+                        return wishlistWardrobes.contains(selectedWardrobe)
+                    }
+                } else {
+                    // Closet: every item must be in the selected wardrobe
+                    return items.allSatisfy { item in
+                        guard let wardrobes = item.wardrobes as? Set<Wardrobe> else { return false }
+                        return wardrobes.contains(selectedWardrobe)
+                    }
+                }
             }
             DispatchQueue.main.async {
                 self.outfits = filtered
@@ -859,6 +880,9 @@ struct ItemGridView: View {
     @ViewBuilder
     private func nonSelectionModeTrailingToolbar() -> some View {
         HStack(spacing: 16) {
+            NavigationLink(destination: TravelPackingView(selectedWardrobe: selectedWardrobe, wardrobeType: wardrobeType)) {
+                Image(systemName: "airplane.circle")
+            }
             if selectedTab == "Items" {
                 Button {
                     shouldNavigateToItemAddDirect = true

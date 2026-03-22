@@ -26,18 +26,41 @@ struct OutfitDraftsView: View {
     // Filter drafts by selected wardrobe or wardrobe type
     private var drafts: [Outfit] {
         allDrafts.filter { outfit in
-            guard let items = outfit.items as? Set<Item> else { return false }
+            guard let items = outfit.items as? Set<Item>, !items.isEmpty else { return false }
             
-            // If a specific wardrobe is selected, filter by that wardrobe
+            // If a specific wardrobe is selected
             if let selectedWardrobe = selectedWardrobe {
-                return items.contains { item in
-                    guard let wardrobes = item.wardrobes as? Set<Wardrobe> else { return false }
-                    return wardrobes.contains(selectedWardrobe)
+                let isWishlist = selectedWardrobe.type?.lowercased() == "wishlist"
+                if isWishlist {
+                    // Wishlist: at least 1 item from this wardrobe; all wishlist items must be from it; closet items allowed
+                    let hasItemFromThisWishlist = items.contains { item in
+                        guard let wardrobes = item.wardrobes as? Set<Wardrobe> else { return false }
+                        return wardrobes.contains(selectedWardrobe)
+                    }
+                    guard hasItemFromThisWishlist else { return false }
+                    return items.allSatisfy { item in
+                        guard let wardrobes = item.wardrobes as? Set<Wardrobe> else { return false }
+                        let wishlistWardrobes = wardrobes.filter { $0.type?.lowercased() == "wishlist" }
+                        if wishlistWardrobes.isEmpty { return true }
+                        return wishlistWardrobes.contains(selectedWardrobe)
+                    }
+                } else {
+                    return items.allSatisfy { item in
+                        guard let wardrobes = item.wardrobes as? Set<Wardrobe> else { return false }
+                        return wardrobes.contains(selectedWardrobe)
+                    }
                 }
             }
             
             // Otherwise, filter by wardrobe type
-            return items.contains { item in
+            if wardrobeType.lowercased() == "wishlist" {
+                let hasWishlistItem = items.contains { item in
+                    guard let wardrobes = item.wardrobes as? Set<Wardrobe> else { return false }
+                    return wardrobes.contains { $0.type?.lowercased() == "wishlist" }
+                }
+                return hasWishlistItem
+            }
+            return items.allSatisfy { item in
                 guard let wardrobes = item.wardrobes as? Set<Wardrobe> else { return false }
                 return wardrobes.contains { $0.type == wardrobeType }
             }
