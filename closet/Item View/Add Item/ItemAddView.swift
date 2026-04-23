@@ -12,6 +12,7 @@ import CoreData
 // MARK: - ItemAddView (init with parentContext; child ctx ready before body)
 struct ItemAddView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var bulkItemImportCoordinator: BulkItemImportCoordinator
 
     @StateObject private var vm: ItemAddViewModel
     @ObservedObject private var queueCoordinator: ImageQueueCoordinator
@@ -25,6 +26,13 @@ struct ItemAddView: View {
     @State private var pendingImageType: ImageType?
     @State private var imageToEdit: UIImage?
     @State private var selectedImageType: ImageType = .front
+
+    // Match ItemDetailView: hero shows "Item(front)" + "Worn" with a segmented picker row.
+    @State private var heroCarouselPage: Int = 0 // 0 = item(front), 1 = worn
+    @State private var showHeroDisplayOptionsDialog: Bool = false
+    @State private var showAddMultipleDialog: Bool = false
+    @State private var showMultiImagePicker: Bool = false
+    @State private var multiPickedImages: [UIImage] = []
 
     // KEY FIX: Drafts is now a sheet, not a navigation push
     @State private var showingDraftsSheet = false
@@ -90,7 +98,7 @@ struct ItemAddView: View {
                 VStack(spacing: 0) {
                     itemImageDisplay()
                 }
-                imageThumbnailRow()
+                itemWornPickerRow()
             }
             .listRowInsets(EdgeInsets(.zero))
             .listRowSeparator(.hidden)
@@ -156,7 +164,7 @@ struct ItemAddView: View {
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "chevron.left")
-                        Text("Cancel")
+                        Text("Back")
                     }
                     .foregroundColor(queueCoordinator.hasMore ? .red : .primary)
                 }
@@ -194,6 +202,15 @@ struct ItemAddView: View {
                     pendingImageType = nil
                 }
                 isImagePickerPresented = false
+            }
+        }
+        .sheet(isPresented: $showMultiImagePicker) {
+            MultiImagePicker(selectedImages: $multiPickedImages, selectionLimit: 10) {
+                showMultiImagePicker = false
+                let picked = multiPickedImages
+                multiPickedImages.removeAll()
+                guard !picked.isEmpty else { return }
+                beginBulkLibraryImport(with: picked)
             }
         }
         .alert("Add Item?", isPresented: $showMissingWarning) {
@@ -255,39 +272,177 @@ struct ItemAddView: View {
         } else {
             selectedImageType = .front
         }
+
+        // Keep hero + segmented picker in sync (hero only supports front + worn like ItemDetailView).
+        if selectedImageType == .back { selectedImageType = .front }
+        heroCarouselPage = (selectedImageType == .worn) ? 1 : 0
+    }
+    
+    private func itemWornPickerRow() -> some View {
+        HStack(spacing: 24) {
+            Button {
+                showAddMultipleDialog = true
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "photo.stack")
+                        .imageScale(.large)
+                    Text("Add Multiple")
+                        .font(.subheadline)
+                }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.blue)
+
+            Spacer(minLength: 12)
+
+            Picker("", selection: Binding<SocialEngagementToolbarSegment>(
+                get: { heroCarouselPage == 0 ? .tshirt : .person },
+                set: { segment in
+                    withAnimation {
+                        heroCarouselPage = (segment == .tshirt) ? 0 : 1
+                        selectedImageType = (segment == .tshirt) ? .front : .worn
+                    }
+                }
+            )) {
+                ForEach(SocialEngagementToolbarSegment.allCases, id: \.self) { segment in
+                    Image(systemName: segment.systemImage)
+                        .tag(segment)
+                        .accessibilityLabel(segment.accessibilityLabel)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 140)
+        }
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 14)
+        .background(Color(.systemBackground))
+        .confirmationDialog("Add Multiple Images", isPresented: $showAddMultipleDialog, titleVisibility: .visible) {
+            Button("From Camera") {
+                pendingImageType = selectedImageType
+                imagePickerSource = .camera
+                isImagePickerPresented = true
+            }
+            Button("From Library") {
+                showMultiImagePicker = true
+            }
+            Button("Cancel", role: .cancel) {}
+        }
     }
     
     private func itemImageDisplay() -> some View {
-        var displayImage = getImage(for: selectedImageType)
-        if displayImage == nil && selectedImageType != .front {
-            displayImage = getImage(for: .front)
-        }
+        let side = UIScreen.main.bounds.width
+        let frontImage = getImage(for: .front)
+        let wornImage = getImage(for: .worn)
         
-        return Group {
-            if let uiImage = displayImage {
-                Image(uiImage: uiImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: UIScreen.main.bounds.width)
-                    .clipped()
-            } else {
-                Button {
-                    presentImagePicker(for: .front)
-                } label: {
-                    VStack(spacing: 8) {
-                        Image(systemName: "photo.badge.plus")
-                            .font(.system(size: 40, weight: .semibold))
-                        Text("Add Item Image")
-                            .font(.callout)
-                            .foregroundColor(.secondary)
+        return ZStack(alignment: .topTrailing) {
+            TabView(selection: $heroCarouselPage) {
+                Group {
+                    if let uiImage = frontImage {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: side)
+                            .clipped()
+                    } else {
+                        heroImagePlaceholder(for: .front)
                     }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: UIScreen.main.bounds.width)
                 }
-                .buttonStyle(.plain)
+                .tag(0)
+                
+                Group {
+                    if let uiImage = wornImage {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: side)
+                            .clipped()
+                    } else {
+                        heroImagePlaceholder(for: .worn)
+                    }
+                }
+                .tag(1)
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .frame(height: side)
+            
+            if (heroCarouselPage == 0 && frontImage != nil) || (heroCarouselPage == 1 && wornImage != nil) {
+                heroDisplayAreaOptionsButton
             }
         }
+        .frame(maxWidth: .infinity)
+        .frame(height: side)
+        .onChange(of: heroCarouselPage) { _, newPage in
+            selectedImageType = (newPage == 0) ? .front : .worn
+            _ = vm.draftItem.photos
+        }
+        .confirmationDialog("Photo", isPresented: $showHeroDisplayOptionsDialog, titleVisibility: .visible) {
+            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                Button("Retake Photo") {
+                    pendingImageType = selectedImageType
+                    imagePickerSource = .camera
+                    isImagePickerPresented = true
+                }
+            }
+            Button("Replace from Library") {
+                pendingImageType = selectedImageType
+                imagePickerSource = .photoLibrary
+                isImagePickerPresented = true
+            }
+            if getImage(for: selectedImageType) != nil {
+                Button("Edit Image") {
+                    presentCropperForImage(type: selectedImageType)
+                }
+            }
+            if selectedImageType == .worn, getImage(for: selectedImageType) != nil {
+                Button("Remove Image", role: .destructive) {
+                    deleteImage(type: selectedImageType)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    /// Top-trailing control on the hero image area.
+    private var heroDisplayAreaOptionsButton: some View {
+        Button {
+            showHeroDisplayOptionsDialog = true
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 36, height: 36)
+                .background(.ultraThinMaterial, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .padding(12)
+        .accessibilityLabel("More options")
+    }
+
+    private func heroImagePlaceholder(for type: ImageType) -> some View {
+        Rectangle()
+            .fill(Color.gray.opacity(0.2))
+            .frame(maxWidth: .infinity)
+            .frame(height: UIScreen.main.bounds.width)
+            .overlay {
+                VStack(spacing: 10) {
+                    Image(systemName: "photo")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: 40))
+                    Text(placeholderText(for: type))
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Text("Tap to add a photo")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                presentImagePicker(for: type)
+            }
     }
     
     private func imageThumbnailRow() -> some View {
@@ -771,6 +926,29 @@ struct ItemAddView: View {
         if (item.location?.name?.isEmpty ?? true) { blanks.append("Location") }
         if (item.tags as? Set<Tag>)?.isEmpty ?? true { blanks.append("Tags") }
         return blanks
+    }
+
+    /// Add Multiple → From Library: dismiss add UI, then process on the grid tab (progress overlay + cancel).
+    private func beginBulkLibraryImport(with images: [UIImage]) {
+        guard let parentContext = vm.childContext.parent,
+              let wardrobeOID = vm.selectedWardrobeObjectID,
+              let userIdStr = SupabaseService.shared.currentUser?.id.uuidString else {
+            print("⚠️ Bulk import: missing parent context, wardrobe, or auth")
+            return
+        }
+
+        vm.discard()
+        queueCoordinator.clear()
+        dismiss()
+
+        DispatchQueue.main.async {
+            bulkItemImportCoordinator.startImport(
+                images: images,
+                context: parentContext,
+                wardrobeObjectID: wardrobeOID,
+                userId: userIdStr
+            )
+        }
     }
 }
 

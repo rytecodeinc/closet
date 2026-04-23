@@ -55,17 +55,20 @@ private extension ClosetView {
     
     @ViewBuilder
     func mainContent() -> some View {
-        if let selected = selectedWardrobe {
-            ItemGridView(
-                filterModel: filterModel,
-                wardrobeType: "closet",
-                selectedWardrobe: selected,
-                isInSelectionMode: $isItemGridInSelectionMode
-            )
-            .id(selected.objectID)
-        } else {
-            Text("No Closet Selected")
-                .foregroundColor(.secondary)
+        ZStack(alignment: .bottom) {
+            if let selected = selectedWardrobe {
+                ItemGridView(
+                    filterModel: filterModel,
+                    wardrobeType: "closet",
+                    selectedWardrobe: selected,
+                    isInSelectionMode: $isItemGridInSelectionMode
+                )
+                .id(selected.objectID)
+            } else {
+                Text("No Closet Selected")
+                    .foregroundColor(.secondary)
+            }
+            BulkImportProgressOverlay()
         }
     }
     

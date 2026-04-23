@@ -23,6 +23,7 @@ struct closetApp: App {
     @StateObject private var supabaseService = SupabaseService.shared
     @StateObject private var syncService = SyncService.shared
     @StateObject private var networkMonitor = NetworkMonitor.shared
+    @StateObject private var bulkItemImportCoordinator = BulkItemImportCoordinator()
     
     init() {
         _ = Self.didPrint
@@ -41,6 +42,7 @@ struct closetApp: App {
                 .environmentObject(supabaseService)
                 .environmentObject(syncService)
                 .environmentObject(networkMonitor)
+                .environmentObject(bulkItemImportCoordinator)
                 .onChange(of: networkMonitor.isConnected) { isConnected in
                     // Auto-sync when connection is restored (if user is authenticated)
                     if isConnected && supabaseService.isAuthenticated {

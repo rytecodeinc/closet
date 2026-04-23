@@ -55,16 +55,19 @@ private extension WishlistView {
     
     @ViewBuilder
     func mainContent() -> some View {
-        if let selected = selectedWishlist {
-            ItemGridView(
-                filterModel: filterModel,
-                wardrobeType: "wishlist",
-                selectedWardrobe: selected,
-                isInSelectionMode: $isItemGridInSelectionMode
-            )
-        } else {
-            Text("No Wishlist Selected")
-                .foregroundColor(.secondary)
+        ZStack(alignment: .bottom) {
+            if let selected = selectedWishlist {
+                ItemGridView(
+                    filterModel: filterModel,
+                    wardrobeType: "wishlist",
+                    selectedWardrobe: selected,
+                    isInSelectionMode: $isItemGridInSelectionMode
+                )
+            } else {
+                Text("No Wishlist Selected")
+                    .foregroundColor(.secondary)
+            }
+            BulkImportProgressOverlay()
         }
     }
     

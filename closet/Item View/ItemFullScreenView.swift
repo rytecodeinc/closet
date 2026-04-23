@@ -11,30 +11,11 @@ struct ItemFullScreenView: View {
     let frontImage: UIImage?
     let backImage: UIImage?
     let wornImage: UIImage?
-    let initialIndex: Int
+    @Binding var selectedPageIndex: Int
     @Binding var isPresented: Bool
-    @State private var currentIndex: Int
     @State private var dragOffset: CGSize = .zero
     @State private var currentScale: CGFloat = 1.0
     @GestureState private var gestureScale: CGFloat = 1.0
-    
-    init(frontImage: UIImage?, backImage: UIImage?, wornImage: UIImage?, initialIndex: Int, isPresented: Binding<Bool>) {
-        self.frontImage = frontImage
-        self.backImage = backImage
-        self.wornImage = wornImage
-        self.initialIndex = initialIndex
-        self._isPresented = isPresented
-        
-        // Calculate available images to determine valid initial index
-        var imageCount = 0
-        if frontImage != nil { imageCount += 1 }
-        if backImage != nil { imageCount += 1 }
-        if wornImage != nil { imageCount += 1 }
-        
-        // Clamp initial index to valid range
-        let clampedIndex = min(max(0, initialIndex), max(0, imageCount - 1))
-        self._currentIndex = State(initialValue: clampedIndex)
-    }
     
     // Computed property to get available images in order
     private var availableImages: [(image: UIImage, label: String)] {
@@ -74,7 +55,7 @@ struct ItemFullScreenView: View {
                 }
             } else {
                 // Image gallery with TabView for swiping
-                TabView(selection: $currentIndex) {
+                TabView(selection: $selectedPageIndex) {
                     ForEach(Array(availableImages.enumerated()), id: \.offset) { index, imageData in
                         GeometryReader { geometry in
                             ZStack(alignment: .bottom) {
@@ -89,16 +70,7 @@ struct ItemFullScreenView: View {
                                             .updating($gestureScale) { value, state, _ in
                                                 state = value
                                             }
-                                            .onEnded { value in
-                                                // Use transaction to ensure smooth animation when gestureScale resets
-                                                var transaction = Transaction(animation: .spring(response: 0.3, dampingFraction: 0.8))
-                                                transaction.disablesAnimations = false
-                                                withTransaction(transaction) {
-                                                    // gestureScale will automatically reset to 1.0 with smooth animation
-                                                }
-                                            }
                                     )
-                                    .animation(.spring(response: 0.3, dampingFraction: 0.8), value: gestureScale)
                                 
                                 // Caption label at bottom
                                 Text(imageData.label)
@@ -120,9 +92,26 @@ struct ItemFullScreenView: View {
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 .indexViewStyle(.page(backgroundDisplayMode: .never))
-                .onChange(of: currentIndex) { _ in
-                    // Reset scale when switching images
-                    currentScale = 1.0
+                .animation(nil, value: selectedPageIndex)
+                .onChange(of: selectedPageIndex) { _, _ in
+                    var t = Transaction()
+                    t.disablesAnimations = true
+                    withTransaction(t) {
+                        currentScale = 1.0
+                    }
+                }
+                .onAppear {
+                    let n = availableImages.count
+                    guard n > 0 else { return }
+                    if selectedPageIndex < 0 || selectedPageIndex >= n {
+                        selectedPageIndex = min(max(0, selectedPageIndex), n - 1)
+                    }
+                }
+                .onChange(of: availableImages.count) { _, newCount in
+                    guard newCount > 0 else { return }
+                    if selectedPageIndex >= newCount {
+                        selectedPageIndex = newCount - 1
+                    }
                 }
                 
                 // Subtle dismiss button in top-right corner
@@ -149,7 +138,7 @@ struct ItemFullScreenView: View {
                         HStack(spacing: 8) {
                             ForEach(0..<availableImages.count, id: \.self) { index in
                                 Circle()
-                                    .fill(currentIndex == index ? Color.black : Color.gray.opacity(0.4))
+                                    .fill(selectedPageIndex == index ? Color.black : Color.gray.opacity(0.4))
                                     .frame(width: 8, height: 8)
                             }
                         }
@@ -196,4 +185,3 @@ struct ItemFullScreenView: View {
         }
     }
 }
-

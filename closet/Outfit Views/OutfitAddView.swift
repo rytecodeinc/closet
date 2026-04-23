@@ -1107,7 +1107,7 @@ struct OutfitAddView: View {
                 ctx.translateBy(x: -center.x, y: -center.y)
             }
         }
-        .background(Color(red: 247/255, green: 247/255, blue: 247/255))
+       // .background(Color(red: 247/255, green: 247/255, blue: 247/255))
         .frame(width: size, height: size)
 
         let renderer = ImageRenderer(content: captureView)

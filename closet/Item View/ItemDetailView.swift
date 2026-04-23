@@ -14,6 +14,7 @@ struct ItemDetailView: View {
     @ObservedObject var item: Item
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var supabaseService: SupabaseService
     
     @State private var outfits: [Outfit] = []
     @State private var isEditingAttributes = false
@@ -31,17 +32,35 @@ struct ItemDetailView: View {
     
     @State private var isCropperPresented = false
     @State private var imageToEdit: UIImage? // Store the image to edit directly
+    @State private var isImagePickerPresentedForCropReplace = false
+    @State private var cropEditorSessionID = UUID()
     @State private var showShareSheet = false
     @State private var shareItems: [Any] = []
     @State private var showShareSelectionSheet = false
     @State private var selectedShareAttributes: Set<ShareableAttribute> = []
     @State private var pendingShareText: String?
     @State private var pendingShareImage: UIImage?
+    @State private var showShareFriendsSheet = false
     @State private var selectedImageType: ImageType = .front
+    /// Inline hero carousel: 0 = front, 1 = worn (fixed slots; fullscreen still skips empty slots).
+    @State private var heroCarouselPage: Int = 0
     @State private var showThumbnailActionSheet: Bool = false
     @State private var thumbnailActionSheetType: ImageType?
     @State private var showDeleteConfirmation = false
+    @State private var showHeroDisplayOptionsDialog = false
     @State private var showPairItemSelection = false
+    @State private var selectedPairedItemForNavigation: Item?
+    
+    private enum AllOutfitsGridNavigation: Hashable {
+        case grid
+    }
+
+    private enum CreateOutfitNavigation: Hashable {
+        case create
+    }
+
+    @State private var allOutfitsGridNavigation: AllOutfitsGridNavigation?
+    @State private var createOutfitNavigation: CreateOutfitNavigation?
     
     // Computed property to get paired items, sorted by date/time added (oldest first)
     // Note: We use updatedAt as a proxy for when pairs were added, since Core Data doesn't
@@ -75,23 +94,37 @@ struct ItemDetailView: View {
         }
         return []
     }
+
+    private var preferredWardrobeForNewOutfit: Wardrobe? {
+        guard let set = item.wardrobes as? Set<Wardrobe> else { return nil }
+        let closets = set.filter { ($0.type ?? "").lowercased() == "closet" }
+        return closets.first ?? set.first
+    }
     
     enum ImageType {
         case front
         case back
         case worn
     }
+
+    private var pairsSectionHeaderIconName: String {
+        isSetsExpanded ? "minus" : "plus"
+    }
     
     private func initializeSelectedImageType() {
-        // Default to front if it exists, otherwise try back, then worn
-        let photos = item.photos as? Set<Photo> ?? []
-        if photos.contains(where: { $0.type == "front" || ($0.isPrimary && $0.type == nil) }) {
-            selectedImageType = .front
-        } else if photos.contains(where: { $0.type == "back" }) {
-            selectedImageType = .back
-        } else if photos.contains(where: { $0.type == "worn" }) {
-            selectedImageType = .worn
-        } else {
+        selectedImageType = .front
+        heroCarouselPage = 0
+    }
+
+    /// Hero carousel only has front + worn; map `.back` (e.g. after fullscreen swipe) back to a valid slot.
+    private func syncHeroCarouselAfterFullscreenOrBackSelection() {
+        switch selectedImageType {
+        case .front:
+            heroCarouselPage = 0
+        case .worn:
+            heroCarouselPage = 1
+        case .back:
+            heroCarouselPage = 0
             selectedImageType = .front
         }
     }
@@ -106,7 +139,27 @@ struct ItemDetailView: View {
                         itemImageDisplay()
                         
                         // Row of 3 square images
-                        imageThumbnailRow()
+                        // imageThumbnailRow()
+
+                        SocialEngagementActionsRow(
+                            segmentSelection: Binding(
+                                get: { heroCarouselPage == 0 ? .tshirt : .person },
+                                set: { segment in
+                                    withAnimation {
+                                        heroCarouselPage = segment == .tshirt ? 0 : 1
+                                        selectedImageType = segment == .tshirt ? .front : .worn
+                                    }
+                                    _ = item.photos
+                                }
+                            ),
+                            favoriteSelection: item.isFavorite,
+                            onLike: {
+                                withAnimation {
+                                    toggleFavorite()
+                                }
+                            },
+                            onShare: { showShareFriendsSheet = true }
+                        )
                     }
                     .listRowInsets(EdgeInsets(.zero))
                     .listRowSeparator(.hidden)
@@ -138,53 +191,55 @@ struct ItemDetailView: View {
                     }
                     //  .listRowInsets(EdgeInsets(.zero))
                     
-                    // Show Sets section only if there are paired items
-                    if !pairedItems.isEmpty {
-                        Section {
-                            if isSetsExpanded {
-                                SetsSection(pairedItems: pairedItems)
-                            }
-                        } header: {
-                            HStack {
-                                Text("PAIRS")
-                                    .fontWeight(.semibold)
-                                Spacer()
-                                Image(systemName: isSetsExpanded ? "minus" : "plus")
-                                    .foregroundColor(.gray)
-                                    .font(.caption)
-                            }
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                withAnimation {
-                                    isSetsExpanded.toggle()
-                                }
+                    Section {
+                        if isSetsExpanded {
+                            PairsSection(
+                                pairedItems: pairedItems,
+                                onManagePairs: { showPairItemSelection = true },
+                                onSelectPairedItem: { selectedPairedItemForNavigation = $0 }
+                            )
+                        }
+                    } header: {
+                        HStack {
+                            Text("PAIRS")
+                                .fontWeight(.semibold)
+                            Spacer()
+                            Image(systemName: pairsSectionHeaderIconName)
+                                .foregroundColor(.gray)
+                                .font(.caption)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation {
+                                isSetsExpanded.toggle()
                             }
                         }
-                        .listRowInsets(EdgeInsets(.zero))
-                        .listSectionSpacing(0)
-                        .padding(.horizontal)
                     }
+                    .listRowInsets(EdgeInsets(.zero))
+                    .listSectionSpacing(0)
+                    .padding(.horizontal)
                     
-                    // Show outfits section only if there are results
-                    if !outfits.isEmpty {
-                        Section {
-                            FeaturedOutfitsSection(outfits: outfits)
-                        } header: {
-                            HStack {
-                                Text("FEATURED OUTFITS")
-                                    .fontWeight(.semibold)
-                                Spacer()
-                                NavigationLink(destination: AllOutfitsGridView(item: item)) {
-                                    Image(systemName: "arrow.right")
-                                        .font(.subheadline)
-                                }
-                            }
+                    Section {
+                        FeaturedOutfitsSection(outfits: outfits) {
+                            createOutfitNavigation = .create
                         }
-                        .listRowInsets(EdgeInsets(.zero))
-                     //   .listRowSeparator(.hidden)
-                        .listSectionSpacing(0)
-                        .padding(.horizontal)
+                    } header: {
+                        HStack {
+                            Text("OUTFITS")
+                                .fontWeight(.semibold)
+                            Spacer()
+                            Button {
+                                allOutfitsGridNavigation = .grid
+                            } label: {
+                                Image(systemName: "arrow.right")
+                                    .font(.subheadline)
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
+                    .listRowInsets(EdgeInsets(.zero))
+                    .listSectionSpacing(0)
+                    .padding(.horizontal)
                 }
                 .listStyle(.plain)
                // .listSectionSpacing(.compact)
@@ -194,58 +249,53 @@ struct ItemDetailView: View {
         .onAppear {
             fetchOutfits()
             initializeSelectedImageType()
+            if pairedItems.isEmpty {
+                isSetsExpanded = false
+            }
+        }
+        .onChange(of: pairedItems.count) { oldCount, newCount in
+            if newCount == 0 {
+                isSetsExpanded = false
+            } else if oldCount == 0 && newCount > 0 {
+                isSetsExpanded = true
+            }
         }
 
         .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Menu {
-                    // Add to or Remove from Wardrobe button
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                if getImage(for: .front) != nil {
                     Button {
-                        attributesSheet = .wardrobe
+                        let available = getAvailableAttributes()
+                        let defaults = DefaultShareAttributes.load().intersection(available)
+                        selectedShareAttributes = defaults.isEmpty ? available : defaults
+                        showShareSelectionSheet = true
                     } label: {
-                        Label("Manage Wardrobes", systemImage: "hanger")
+                        Image(systemName: "square.and.arrow.up")
                     }
-                    
-                    // Favorite button - first option
-                    Button {
-                        toggleFavorite()
-                    } label: {
-                        Label(
-                            item.isFavorite ? "Remove Favorite" : "Favorite Item",
-                            systemImage: item.isFavorite ? "heart.slash" : "heart"
-                        )
-                    }
-                    
-                    // Share button - only show if front image exists
-                    if let frontImage = getImage(for: .front) {
-                        Button {
-                            // Initialize with defaults if they exist, otherwise all available attributes
-                            let available = getAvailableAttributes()
-                            let defaults = DefaultShareAttributes.load().intersection(available)
-                            selectedShareAttributes = defaults.isEmpty ? available : defaults
-                            showShareSelectionSheet = true
-                        } label: {
-                            Label("Share Item", systemImage: "square.and.arrow.up")
-                        }
-                    }
-                    
-                    // Pair Item button
-                    Button {
-                        showPairItemSelection = true
-                    } label: {
-                        Label(pairedItems.isEmpty ? "Pair Item" : "Manage Pairs", systemImage: "link")
-                    }
-                    
-                    Button(role: .destructive) {
-                        showDeleteConfirmation = true
-                    } label: {
-                        Label("Delete Item", systemImage: "trash")
-                    }
-                } label: {
-                    Label("Options", systemImage: "ellipsis")
+                    .accessibilityLabel("Share item")
                 }
-
+                Button(role: .destructive) {
+                    showDeleteConfirmation = true
+                } label: {
+                    Image(systemName: "trash")
+                        .foregroundStyle(.red)
+                }
+                .accessibilityLabel("Delete item")
             }
+        }
+        // fix this later
+       /* .navigationDestination(item: $allOutfitsGridNavigation) { _ in
+            AllOutfitsGridView(item: item)
+        }
+        .navigationDestination(item: $createOutfitNavigation) { _ in
+            OutfitAddView(
+                outfitToEdit: nil,
+                wardrobeType: "closet",
+                initialWardrobe: preferredWardrobeForNewOutfit
+            )
+        }*/
+        .navigationDestination(item: $selectedPairedItemForNavigation) { pairedItem in
+            ItemDetailView(item: pairedItem)
         }
         .sheet(isPresented: $isImagePickerPresented) {
             ImagePicker(
@@ -267,28 +317,55 @@ struct ItemDetailView: View {
                 isImagePickerPresented = false
             }
         }
-        .sheet(isPresented: $isCropperPresented) {
-            if let imageType = pendingImageType, let image = imageToEdit {
-                NavigationView {
-                    ImageCropperView(
-                        originalImage: image,
-                        onCrop: { croppedImage in
-                            switch imageType {
-                            case .front:
-                                replaceFrontImage(with: croppedImage)
-                            case .back:
-                                replaceBackImage(with: croppedImage)
-                            case .worn:
-                                replaceWornImage(with: croppedImage)
+        .sheet(isPresented: $isCropperPresented, onDismiss: {
+            isImagePickerPresentedForCropReplace = false
+        }) {
+            Group {
+                if let imageType = pendingImageType, let image = imageToEdit {
+                    NavigationView {
+                        ImageCropperView(
+                            originalImage: image,
+                            onCrop: { croppedImage in
+                                switch imageType {
+                                case .front:
+                                    replaceFrontImage(with: croppedImage)
+                                case .back:
+                                    replaceBackImage(with: croppedImage)
+                                case .worn:
+                                    replaceWornImage(with: croppedImage)
+                                }
+                                pendingImageType = nil
+                                imageToEdit = nil
+                            },
+                            isEditing: true,
+                            onReplaceFromCamera: {
+                                presentImagePickerReplacingCurrentEditSlot(source: .camera)
+                            },
+                            onReplaceFromLibrary: {
+                                presentImagePickerReplacingCurrentEditSlot(source: .photoLibrary)
+                            },
+                            isCameraAvailable: UIImagePickerController.isSourceTypeAvailable(.camera)
+                        )
+                        .id(cropEditorSessionID)
+                    }
+                    .sheet(isPresented: $isImagePickerPresentedForCropReplace) {
+                        ImagePicker(
+                            image: $selectedUIImage,
+                            sourceType: $imagePickerSource,
+                            allowsEditing: true,
+                            skipEmbeddedCrop: true
+                        ) { image in
+                            if let newImage = image {
+                                cropEditorSessionID = UUID()
+                                imageToEdit = newImage
                             }
-                            pendingImageType = nil
-                            imageToEdit = nil
-                        }, isEditing: true
-                    )
+                            isImagePickerPresentedForCropReplace = false
+                        }
+                    }
+                } else {
+                    Text("No image found to edit.")
+                        .padding()
                 }
-            } else {
-                Text("No image found to edit.")
-                    .padding()
             }
         }
         .sheet(isPresented: $showShareSelectionSheet, onDismiss: {
@@ -330,6 +407,11 @@ struct ItemDetailView: View {
         .fullScreenCover(isPresented: $isImageFullScreen) {
             fullScreenImageView()
         }
+        .onChange(of: isImageFullScreen) { _, isOpen in
+            if !isOpen {
+                syncHeroCarouselAfterFullscreenOrBackSelection()
+            }
+        }
         .overlay {
             if showShareSheet {
                 ActivityViewController(activityItems: shareItems, isPresented: $showShareSheet)
@@ -346,6 +428,10 @@ struct ItemDetailView: View {
         }
         .sheet(isPresented: $showPairItemSelection) {
             PairItemSelectionView(item: item)
+        }
+        .sheet(isPresented: $showShareFriendsSheet) {
+            ShareItemFriendsSheet()
+                .environmentObject(supabaseService)
         }
     }
     
@@ -379,6 +465,7 @@ struct ItemDetailView: View {
             try viewContext.save()
             print("✅ Replaced front photo.")
             selectedImageType = .front
+            heroCarouselPage = 0
             
             // Trigger automatic sync for the modified item
             SyncService.shared.syncItemIfNeeded(item)
@@ -411,7 +498,9 @@ struct ItemDetailView: View {
         do {
             try viewContext.save()
             print("✅ Replaced back photo.")
-            selectedImageType = .back
+            // Back is not shown in the hero carousel (front + worn only).
+            selectedImageType = .front
+            heroCarouselPage = 0
             
             // Trigger automatic sync for the modified item
             SyncService.shared.syncItemIfNeeded(item)
@@ -445,6 +534,7 @@ struct ItemDetailView: View {
             try viewContext.save()
             print("✅ Replaced worn photo.")
             selectedImageType = .worn
+            heroCarouselPage = 1
             
             // Trigger automatic sync for the modified item
             SyncService.shared.syncItemIfNeeded(item)
@@ -478,6 +568,7 @@ struct ItemDetailView: View {
                 // Reset to front if we deleted the currently selected image
                 if selectedImageType == type {
                     selectedImageType = .front
+                    heroCarouselPage = 0
                 }
                 
                 // Trigger automatic sync for the modified item
@@ -491,61 +582,174 @@ struct ItemDetailView: View {
 
     // MARK: - Image Display
     
+    /// Order matches `ItemFullScreenView` pager: only slots that have an image.
+    private func orderedAvailableImageTypes(front: UIImage?, back: UIImage?, worn: UIImage?) -> [ImageType] {
+        var types: [ImageType] = []
+        if front != nil { types.append(.front) }
+        if back != nil { types.append(.back) }
+        if worn != nil { types.append(.worn) }
+        return types
+    }
+    
+    private func fullscreenPageIndex(for imageType: ImageType, front: UIImage?, back: UIImage?, worn: UIImage?) -> Int {
+        let order = orderedAvailableImageTypes(front: front, back: back, worn: worn)
+        return order.firstIndex(of: imageType) ?? 0
+    }
+    
+    private func imageType(forFullscreenPageIndex index: Int, front: UIImage?, back: UIImage?, worn: UIImage?) -> ImageType {
+        let order = orderedAvailableImageTypes(front: front, back: back, worn: worn)
+        guard !order.isEmpty else { return .front }
+        let clamped = min(max(0, index), order.count - 1)
+        return order[clamped]
+    }
+    
+    private func fullscreenSelectedPageIndexBinding(frontImage: UIImage?, backImage: UIImage?, wornImage: UIImage?) -> Binding<Int> {
+        Binding(
+            get: { self.fullscreenPageIndex(for: self.selectedImageType, front: frontImage, back: backImage, worn: wornImage) },
+            set: { newIndex in
+                let newType = self.imageType(forFullscreenPageIndex: newIndex, front: frontImage, back: backImage, worn: wornImage)
+                if self.selectedImageType != newType {
+                    self.selectedImageType = newType
+                    _ = self.item.photos
+                }
+            }
+        )
+    }
+    
     private func fullScreenImageView() -> some View {
         let frontImage = getImage(for: .front)
         let backImage = getImage(for: .back)
         let wornImage = getImage(for: .worn)
         
-        // Calculate initial index based on selected image type
-        // Images are always in order: front, back, worn (if available)
-        var initialIndex = 0
-        switch selectedImageType {
-        case .front:
-            initialIndex = 0
-        case .back:
-            initialIndex = frontImage != nil ? 1 : 0
-        case .worn:
-            var index = 0
-            if frontImage != nil { index += 1 }
-            if backImage != nil { index += 1 }
-            initialIndex = index
-        }
-        
         return ItemFullScreenView(
             frontImage: frontImage,
             backImage: backImage,
             wornImage: wornImage,
-            initialIndex: initialIndex,
+            selectedPageIndex: fullscreenSelectedPageIndexBinding(frontImage: frontImage, backImage: backImage, wornImage: wornImage),
             isPresented: $isImageFullScreen
         )
     }
     
     private func itemImageDisplay() -> some View {
-        // Try to get the selected image, fall back to front if not available
-        var displayImage = getImage(for: selectedImageType)
-        if displayImage == nil && selectedImageType != .front {
-            displayImage = getImage(for: .front)
-        }
-        
-        return Group {
-            if let uiImage = displayImage {
-                Image(uiImage: uiImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: UIScreen.main.bounds.width)
-                    .clipped()
-                    .onTapGesture { isImageFullScreen = true }
-            } else {
-                Image(systemName: "photo")
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: UIScreen.main.bounds.width)
-                    .foregroundColor(.gray)
-                    .clipped()
+        let side = UIScreen.main.bounds.width
+        let frontImage = getImage(for: .front)
+        let wornImage = getImage(for: .worn)
+
+        return ZStack(alignment: .topTrailing) {
+            TabView(selection: $heroCarouselPage) {
+                Group {
+                    if let uiImage = frontImage {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: side)
+                            .clipped()
+                            .onTapGesture { isImageFullScreen = true }
+                    } else {
+                        heroImagePlaceholder(for: .front)
+                    }
+                }
+                .tag(0)
+
+                Group {
+                    if let uiImage = wornImage {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: side)
+                            .clipped()
+                            .onTapGesture { isImageFullScreen = true }
+                    } else {
+                        heroImagePlaceholder(for: .worn)
+                    }
+                }
+                .tag(1)
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .frame(height: side)
+
+            if heroCarouselPage == 0, frontImage != nil {
+                heroDisplayAreaOptionsButton
+            } else if heroCarouselPage == 1, wornImage != nil {
+                heroDisplayAreaOptionsButton
             }
         }
+        .frame(maxWidth: .infinity)
+        .frame(height: side)
+        .onChange(of: heroCarouselPage) { _, newPage in
+            selectedImageType = newPage == 0 ? .front : .worn
+            _ = item.photos
+        }
+        .confirmationDialog("Photo", isPresented: $showHeroDisplayOptionsDialog, titleVisibility: .visible) {
+            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                Button("Retake Photo") {
+                    pendingImageType = selectedImageType
+                    imagePickerSource = .camera
+                    isImagePickerPresented = true
+                }
+            }
+            Button("Replace from Library") {
+                pendingImageType = selectedImageType
+                imagePickerSource = .photoLibrary
+                isImagePickerPresented = true
+            }
+            if getImage(for: selectedImageType) != nil {
+                Button("Edit Image") {
+                    presentCropperForImage(type: selectedImageType)
+                }
+                Button("Share Image") {
+                    shareImage(type: selectedImageType)
+                }
+            }
+            if (selectedImageType == .back || selectedImageType == .worn), getImage(for: selectedImageType) != nil {
+                Button("Remove Image", role: .destructive) {
+                    deleteImage(type: selectedImageType)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    /// Top-trailing control on the hero image area.
+    private var heroDisplayAreaOptionsButton: some View {
+        Button {
+            showHeroDisplayOptionsDialog = true
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 36, height: 36)
+                .background(.ultraThinMaterial, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .padding(12)
+        .accessibilityLabel("More options")
+    }
+
+    private func heroImagePlaceholder(for type: ImageType) -> some View {
+        Rectangle()
+            .fill(Color.gray.opacity(0.2))
+            .frame(maxWidth: .infinity)
+            .frame(height: UIScreen.main.bounds.width)
+            .overlay {
+                VStack(spacing: 10) {
+                    Image(systemName: "photo")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: 40))
+                    Text(placeholderText(for: type))
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Text("Tap to add a photo")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                presentImagePicker(for: type)
+            }
     }
     
     private func shareActiveImage() {
@@ -778,6 +982,13 @@ struct ItemDetailView: View {
             imageToEdit = image
             isCropperPresented = true
         }
+    }
+
+    /// Presents camera/library on top of the crop sheet (crop stays mounted). Uses `skipEmbeddedCrop` so the existing cropper edits the new photo.
+    private func presentImagePickerReplacingCurrentEditSlot(source: UIImagePickerController.SourceType) {
+        guard pendingImageType != nil else { return }
+        imagePickerSource = source
+        isImagePickerPresentedForCropReplace = true
     }
     
     // MARK: - Helper Functions

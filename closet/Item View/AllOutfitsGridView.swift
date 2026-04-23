@@ -39,7 +39,7 @@ struct AllOutfitsGridView: View {
                 }
             }
         }
-        .navigationTitle("Featured Outfits")
+        .navigationTitle("Outfits")
         .navigationBarTitleDisplayMode(.inline)
     }
 }

@@ -12,6 +12,7 @@ struct ContentView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject var deepLinkRouter: DeepLinkRouter
     @EnvironmentObject var supabaseService: SupabaseService
+    @EnvironmentObject var bulkItemImportCoordinator: BulkItemImportCoordinator
 
     @FetchRequest(
         sortDescriptors: [NSSortDescriptor(keyPath: \Item.createdAt, ascending: true)],
@@ -129,6 +130,7 @@ struct ContentView: View {
                     initialURL: url,
                     initialImage: image
                 )
+                .environmentObject(bulkItemImportCoordinator)
                 .onDisappear {
                     deepLinkRouter.clearIntent()
                     showDeepLinkItemAdd = false
@@ -167,5 +169,7 @@ struct ContentView: View {
 
 
 #Preview {
-    ContentView().environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
+    ContentView()
+        .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
+        .environmentObject(BulkItemImportCoordinator())
 }

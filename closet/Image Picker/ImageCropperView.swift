@@ -17,6 +17,12 @@ struct ImageCropperView: View {
     let originalImage: UIImage
     let onCrop: (UIImage) -> Void
     let isEditing: Bool // true when editing existing image, false when adding new
+    /// When set (with `isEditing`), shows replace actions like ItemDetailView’s thumbnail menu.
+    let onReplaceFromCamera: (() -> Void)?
+    let onReplaceFromLibrary: (() -> Void)?
+    let isCameraAvailable: Bool
+    /// When non-`nil`, Cancel calls this instead of `dismiss()` (e.g. queue flows with confirmation).
+    let onCancel: (() -> Void)?
 
     // The image currently shown/edited
     @State private var currentImage: UIImage
@@ -50,17 +56,50 @@ struct ImageCropperView: View {
 
     @Environment(\.dismiss) private var dismiss
     
-    init(originalImage: UIImage, onCrop: @escaping (UIImage) -> Void, isEditing: Bool = false) {
+    init(
+        originalImage: UIImage,
+        onCrop: @escaping (UIImage) -> Void,
+        isEditing: Bool = false,
+        onReplaceFromCamera: (() -> Void)? = nil,
+        onReplaceFromLibrary: (() -> Void)? = nil,
+        isCameraAvailable: Bool = true,
+        onCancel: (() -> Void)? = nil
+    ) {
         self.originalImage = originalImage
         self.onCrop = onCrop
         self.isEditing = isEditing
-        // Initialize the current image and undo image to original
+        self.onReplaceFromCamera = onReplaceFromCamera
+        self.onReplaceFromLibrary = onReplaceFromLibrary
+        self.isCameraAvailable = isCameraAvailable
+        self.onCancel = onCancel
         _currentImage = State(initialValue: originalImage)
         _originalForUndo = State(initialValue: originalImage)
     }
 
+    private var showsReplaceSourceButtons: Bool {
+        isEditing && onReplaceFromCamera != nil && onReplaceFromLibrary != nil
+    }
+
     var body: some View {
-        VStack {
+        VStack(spacing: 0) {
+            if showsReplaceSourceButtons {
+                HStack(spacing: 12) {
+                    if isCameraAvailable {
+                        Button("Retake Photo") {
+                            onReplaceFromCamera?()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    Button("Replace from Library") {
+                        onReplaceFromLibrary?()
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity)
+                .background(Color(.secondarySystemGroupedBackground))
+            }
             ZStack {
                 Color.black
 
@@ -78,7 +117,7 @@ struct ImageCropperView: View {
                                 // BACKING IMAGE LAYER with gestures
                                 Image(uiImage: currentImage)
                                     .resizable()
-                                    .aspectRatio(contentMode: .fit)
+                                    .aspectRatio(contentMode: .fill)
                                     .scaleEffect(scale)
                                     .offset(offset)
                                     .gesture(
@@ -187,6 +226,15 @@ struct ImageCropperView: View {
         .navigationTitle("Crop")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") {
+                    if let onCancel {
+                        onCancel()
+                    } else {
+                        dismiss()
+                    }
+                }
+            }
             ToolbarItem(placement: .bottomBar) {
                 HStack {
                     Button {
@@ -332,24 +380,16 @@ struct ImageCropperView: View {
     }
     
     func convertToImageCoordinates(touchPoint: CGPoint, side: CGFloat) -> CGPoint {
-        let imageSize = originalImage.size
-
-        // Aspect-fit scale
-        let fitScale = min(side / imageSize.width, side / imageSize.height)
-
-        let fittedSize = CGSize(
-            width: imageSize.width * fitScale,
-            height: imageSize.height * fitScale
-        )
-
-        // Image is centered *by SwiftUI*, so compute letterbox offset
-        let xInset = (side - fittedSize.width) / 2
-        let yInset = (side - fittedSize.height) / 2
-
-        // Convert touch → image-local
-        let x = (touchPoint.x - xInset) / fitScale
-        let y = (touchPoint.y - yInset) / fitScale
-
+        let imageSize = currentImage.size
+        // Match `cropAndSaveImage`: center aspect-fill, then user scale + offset
+        let baseScale = max(side / imageSize.width, side / imageSize.height)
+        let effectiveScale = baseScale * scale
+        let drawnW = imageSize.width * effectiveScale
+        let drawnH = imageSize.height * effectiveScale
+        let originX = (side - drawnW) / 2 + offset.width
+        let originY = (side - drawnH) / 2 + offset.height
+        let x = (touchPoint.x - originX) / effectiveScale
+        let y = (touchPoint.y - originY) / effectiveScale
         return CGPoint(
             x: max(0, min(imageSize.width, x)),
             y: max(0, min(imageSize.height, y))
@@ -478,10 +518,10 @@ struct ImageCropperView: View {
     let canvasSize = cropViewSize
     let imageSize = currentImage.size
 
-    // 1. Base scale used to fit image inside the square view (mimics .aspectRatio(.fit))
-    let baseScale = min(canvasSize.width / imageSize.width, canvasSize.height / imageSize.height)
+    // 1. Base scale to cover the square view (mimics .aspectRatio(.fill), centered)
+    let baseScale = max(canvasSize.width / imageSize.width, canvasSize.height / imageSize.height)
 
-    // 2. User gesture scale applied on top of base fit
+    // 2. User gesture scale applied on top of base fill
     let finalScale = baseScale * scale
 
     // 3. Calculate how big the image will be when drawn

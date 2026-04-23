@@ -86,5 +86,75 @@ extension UIImage {
         }
         return resized.compressForStorage(maxFileSizeKB: maxFileSizeKB)
     }
+
+    /// Square viewport with SwiftUI-style **aspect ratio fill** (centered crop), matching `ItemDetailView`’s hero image framing.
+    /// This is the same geometric model as `Image(uiImage:).resizable().aspectRatio(contentMode: .fill)` in a square frame.
+    func squareAspectFillCenterCropped(side: CGFloat) -> UIImage {
+        let s = max(side, 1)
+        let w = max(size.width, 1)
+        let h = max(size.height, 1)
+        let scale = max(s / w, s / h)
+        let drawnW = w * scale
+        let drawnH = h * scale
+        let originX = (s - drawnW) / 2
+        let originY = (s - drawnH) / 2
+
+        let format = UIGraphicsImageRendererFormat()
+        format.opaque = false
+        format.scale = 1.0
+        format.preferredRange = .extended
+
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: s, height: s), format: format)
+        return renderer.image { _ in
+            UIColor.clear.setFill()
+            UIBezierPath(rect: CGRect(origin: .zero, size: CGSize(width: s, height: s))).fill()
+            self.draw(in: CGRect(x: originX, y: originY, width: drawnW, height: drawnH))
+        }
+    }
+
+    /// Thumbnail bytes for `ItemView` grids after **Add Multiple → From Library**, so the grid matches the hero’s default center aspect-fill crop.
+    func gridThumbnailDataMatchingItemDetailHero(outputSide: CGFloat = 300) -> Data? {
+        let cropped = squareAspectFillCenterCropped(side: outputSide)
+        if cropped.hasTransparency {
+            return cropped.pngData()
+        }
+        return cropped.jpegData(compressionQuality: 0.7)
+    }
+
+    /// Encodes for R2 / worker upload: targets **under `maxBytes`** (default 4.8 MB under a 5 MB limit).
+    /// Opaque → JPEG with quality + dimension reduction; alpha → PNG with progressive downscale.
+    func encodeForR2Upload(maxBytes: Int = 4_800_000) -> Data? {
+        if hasTransparency {
+            var working: UIImage = self
+            for _ in 0..<20 {
+                if let png = working.pngData(), png.count <= maxBytes {
+                    return png
+                }
+                let maxDim = max(working.size.width, working.size.height) * 0.86
+                guard maxDim >= 220, let next = working.resizeForStorage(maxDimension: maxDim) else { break }
+                working = next
+            }
+            return working.pngData()
+        }
+
+        var maxDim = min(2048, max(size.width, size.height))
+        guard var working = resizeForStorage(maxDimension: maxDim) else {
+            return jpegData(compressionQuality: 0.45)
+        }
+
+        for _ in 0..<24 {
+            var q: CGFloat = 0.88
+            while q >= 0.18 {
+                if let data = working.jpegData(compressionQuality: q), data.count <= maxBytes {
+                    return data
+                }
+                q -= 0.06
+            }
+            maxDim *= 0.86
+            guard maxDim >= 360, let next = working.resizeForStorage(maxDimension: maxDim) else { break }
+            working = next
+        }
+        return working.jpegData(compressionQuality: 0.35)
+    }
 }
 
