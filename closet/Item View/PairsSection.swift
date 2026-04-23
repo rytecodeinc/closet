@@ -7,12 +7,33 @@
 
 import SwiftUI
 
-struct SetsSection: View {
+struct PairsSection: View {
     let pairedItems: [Item]
+    let onManagePairs: () -> Void
+
+    private var cellSize: CGFloat { (UIScreen.main.bounds.width - 6) / 3 }
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 2) {
+                Button(action: onManagePairs) {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.gray.opacity(0.15))
+                        .frame(width: cellSize, height: cellSize)
+                        .overlay {
+                            VStack(spacing: 6) {
+                                Image(systemName: "link")
+                                    .font(.title3)
+                                    .foregroundStyle(.secondary)
+                                Text("Select an Item")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Manage pairs")
+
                 ForEach(pairedItems, id: \.objectID) { item in
                     SetItemCell(item: item)
                 }

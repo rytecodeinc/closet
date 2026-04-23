@@ -41,6 +41,9 @@ struct ItemGridView: View {
     @State private var selectedOutfitForNavigation: Outfit?
     @State private var selectedOutfits: Set<Outfit> = []
     @State private var showWardrobeSelectionSheet = false
+    @State private var showWardrobeSelectionConfirmAlert = false
+    @State private var pendingWardrobeSelectionTarget: Wardrobe?
+    @State private var pendingWardrobeSelectionWillRemove = false
     @State private var showSharedUsersSheet = false
     @State private var sharedUsersSearchText = ""
     @State private var sharedUserResults: [PublicUserProfile] = []
@@ -48,6 +51,8 @@ struct ItemGridView: View {
     @State private var sharedUsersError: String?
     @State private var pendingFriendRequestUserIds: Set<UUID> = []
     @State private var friendUserIds: Set<UUID> = []
+    @State private var connectedFriends: [PublicUserProfile] = []
+    @State private var isLoadingConnectedFriends = false
     @State private var showUnfriendAlert = false
     @State private var unfriendTargetUserId: UUID?
     @State private var showDeleteConfirmation = false
@@ -57,6 +62,11 @@ struct ItemGridView: View {
     @State private var showTagAddedConfirmation = false
     @State private var addedTagName: String = ""
     @State private var addedTagItemCount: Int = 0
+    @State private var showTagSelectionConfirmAlert = false
+    @State private var pendingTagSelectionTarget: Tag?
+    @State private var pendingTagSelectionWillRemove = false
+    /// Bumps when favorites change so the bottom bar heart reflects Core Data without relying on `selectedItems` identity.
+    @State private var favoriteToolbarTick = 0
     
     // Multi-image picker state
     @StateObject private var queueCoordinator = ImageQueueCoordinator()
@@ -194,6 +204,17 @@ struct ItemGridView: View {
                                     .font(.caption)
                             }
                         }
+                        Button {
+                            toggleFavoriteForSelectedItems()
+                        } label: {
+                            VStack {
+                                Image(systemName: selectedItemsFavoriteToolbarIcon)
+                                    .foregroundColor(selectedItemsAllFavorited ? .red : .primary)
+                                Text("Favorite")
+                                    .font(.caption)
+                            }
+                        }
+                        .disabled(selectedItems.isEmpty)
                     }
                     Button {
                         if selectedTab == "Items" {
@@ -277,22 +298,16 @@ struct ItemGridView: View {
                                 shouldNavigateToItemAdd = true
                             }
                         },
-                        isEditing: false
-                    )
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarLeading) {
-                            Button("Cancel") {
-                                // Show confirmation if queue is active (has current image or more images)
-                                if queueCoordinator.isQueueActive {
-                                    showCropperCancelConfirmation = true
-                                } else {
-                                    // Queue not active, just dismiss
-                                    showCropperForQueue = false
-                                }
+                        isEditing: false,
+                        onCancel: {
+                            if queueCoordinator.isQueueActive {
+                                showCropperCancelConfirmation = true
+                            } else {
+                                showCropperForQueue = false
                             }
                         }
-                    }
+                    )
+                    .navigationBarTitleDisplayMode(.inline)
                 }
                 .alert("Discard this item?", isPresented: $showCropperCancelConfirmation) {
                     Button("Discard", role: .destructive) {
@@ -986,8 +1001,15 @@ struct ItemGridView: View {
                     let isDefault = wardrobe == wardrobes.first
                     
                     Button {
-                        addSelectedItemsToWardrobe(wardrobe)
-                        showWardrobeSelectionSheet = false
+                        let isNonDefaultCurrentWardrobe = selectedWardrobe != wardrobes.first
+                        if isNonDefaultCurrentWardrobe {
+                            pendingWardrobeSelectionTarget = wardrobe
+                            pendingWardrobeSelectionWillRemove = allItemsInWardrobe
+                            showWardrobeSelectionConfirmAlert = true
+                        } else {
+                            addSelectedItemsToWardrobe(wardrobe)
+                            showWardrobeSelectionSheet = false
+                        }
                     } label: {
                         HStack {
                             Text(wardrobe.name ?? "Untitled")
@@ -1022,6 +1044,28 @@ struct ItemGridView: View {
             .toolbarBackground(Color(UIColor.secondarySystemBackground), for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
         }
+        .alert(pendingWardrobeSelectionWillRemove ? "Remove from Wardrobe?" : "Add to Wardrobe?", isPresented: $showWardrobeSelectionConfirmAlert) {
+            Button(pendingWardrobeSelectionWillRemove ? "Remove" : "Add", role: pendingWardrobeSelectionWillRemove ? .destructive : nil) {
+                guard let wardrobe = pendingWardrobeSelectionTarget else { return }
+                if pendingWardrobeSelectionWillRemove {
+                    removeSelectedItemsFromWardrobe(wardrobe)
+                } else {
+                    addSelectedItemsToWardrobe(wardrobe)
+                }
+                pendingWardrobeSelectionTarget = nil
+                pendingWardrobeSelectionWillRemove = false
+                showWardrobeSelectionSheet = false
+            }
+            Button("Cancel", role: .cancel) {
+                pendingWardrobeSelectionTarget = nil
+                pendingWardrobeSelectionWillRemove = false
+            }
+        } message: {
+            let name = pendingWardrobeSelectionTarget?.name ?? "this wardrobe"
+            Text(pendingWardrobeSelectionWillRemove
+                 ? "Remove \(selectedItems.count) selected item(s) from “\(name)”?"
+                 : "Add \(selectedItems.count) selected item(s) to “\(name)”?")
+        }
         .presentationDetents([.medium, .large])
     }
     
@@ -1039,6 +1083,9 @@ struct ItemGridView: View {
                 if isSearchingSharedUsers {
                     ProgressView("Searching…")
                         .padding()
+                } else if isLoadingConnectedFriends && sharedUsersSearchText.isEmpty {
+                    ProgressView("Loading friends…")
+                        .padding()
                 } else if let error = sharedUsersError {
                     Text(error)
                         .foregroundColor(.red)
@@ -1048,12 +1095,12 @@ struct ItemGridView: View {
                     Text("No users found for “\(sharedUsersSearchText)”")
                         .foregroundColor(.secondary)
                         .padding()
-                } else if sharedUserResults.isEmpty {
+                } else if sharedUserResults.isEmpty && connectedFriends.isEmpty {
                     Text("Search by username to find other users.")
                         .foregroundColor(.secondary)
                         .padding()
                 } else {
-                    List(sharedUserResults) { profile in
+                    List(sharedUsersSearchText.isEmpty ? connectedFriends : sharedUserResults) { profile in
                         HStack {
                             VStack(alignment: .leading) {
                                 Text(profile.username)
@@ -1065,7 +1112,7 @@ struct ItemGridView: View {
                                 }
                             }
                             Spacer()
-                            if friendUserIds.contains(profile.userId) {
+                            if sharedUsersSearchText.isEmpty || friendUserIds.contains(profile.userId) {
                                 Button {
                                     unfriendTargetUserId = profile.userId
                                     showUnfriendAlert = true
@@ -1128,6 +1175,7 @@ struct ItemGridView: View {
             }
             .task(id: showSharedUsersSheet) {
                 if showSharedUsersSheet {
+                    await loadConnectedFriends()
                     await refreshFriendshipBadges()
                 }
             }
@@ -1140,6 +1188,7 @@ struct ItemGridView: View {
                             try await supabaseService.unfriend(userId: targetId)
                             await MainActor.run {
                                 friendUserIds.remove(targetId)
+                                connectedFriends.removeAll { $0.userId == targetId }
                             }
                         } catch {
                             print("Failed to unfriend: \(error.localizedDescription)")
@@ -1188,6 +1237,21 @@ struct ItemGridView: View {
         
         await MainActor.run {
             isSearchingSharedUsers = false
+        }
+    }
+
+    private func loadConnectedFriends() async {
+        guard supabaseService.isAuthenticated else {
+            await MainActor.run { connectedFriends = []; isLoadingConnectedFriends = false }
+            return
+        }
+        await MainActor.run { isLoadingConnectedFriends = true }
+        defer { Task { @MainActor in isLoadingConnectedFriends = false } }
+        do {
+            let friends = try await supabaseService.fetchFriends()
+            await MainActor.run { connectedFriends = friends }
+        } catch {
+            await MainActor.run { connectedFriends = [] }
         }
     }
 
@@ -1286,7 +1350,56 @@ struct ItemGridView: View {
             print("❌ Failed to add items to wardrobe: \(error.localizedDescription)")
         }
     }
+
+    private func removeSelectedItemsFromWardrobe(_ wardrobe: Wardrobe) {
+        guard !selectedItems.isEmpty else { return }
+
+        let itemsInWardrobe = (wardrobe.items as? Set<Item>) ?? []
+        for item in selectedItems where itemsInWardrobe.contains(item) {
+            wardrobe.removeFromItems(item)
+        }
+
+        do {
+            try viewContext.save()
+            print("✅ Removed \(selectedItems.count) items from wardrobe '\(wardrobe.name ?? "unknown")'")
+
+            // Exit selection mode after successful removal
+            isInSelectionMode = false
+            selectedItems.removeAll()
+        } catch {
+            print("❌ Failed to remove items from wardrobe: \(error.localizedDescription)")
+        }
+    }
     
+    private var selectedItemsAllFavorited: Bool {
+        _ = favoriteToolbarTick
+        guard !selectedItems.isEmpty else { return false }
+        return selectedItems.allSatisfy(\.isFavorite)
+    }
+
+    private var selectedItemsFavoriteToolbarIcon: String {
+        _ = favoriteToolbarTick
+        guard !selectedItems.isEmpty else { return "heart" }
+        return selectedItemsAllFavorited ? "heart.fill" : "heart"
+    }
+
+    private func toggleFavoriteForSelectedItems() {
+        guard !selectedItems.isEmpty else { return }
+        for item in selectedItems {
+            item.isFavorite.toggle()
+            setUpdatedAt(item)
+        }
+        do {
+            try viewContext.save()
+            for item in selectedItems {
+                SyncService.shared.syncItemIfNeeded(item)
+            }
+            favoriteToolbarTick += 1
+        } catch {
+            print("❌ Failed to toggle favorite: \(error.localizedDescription)")
+        }
+    }
+
     private func deleteSelectedItems() {
         guard !selectedItems.isEmpty else { return }
         
@@ -1382,8 +1495,9 @@ struct ItemGridView: View {
                     let allItemsHaveTag = doAllSelectedItemsHaveTag(tag)
                     
                     Button {
-                        addTagToSelectedItems(tag)
-                        showTagSelectionSheet = false
+                        pendingTagSelectionTarget = tag
+                        pendingTagSelectionWillRemove = allItemsHaveTag
+                        showTagSelectionConfirmAlert = true
                     } label: {
                         HStack {
                             Text(tag.name ?? "Untitled")
@@ -1405,6 +1519,28 @@ struct ItemGridView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(Color(UIColor.secondarySystemBackground), for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
+        }
+        .alert(pendingTagSelectionWillRemove ? "Remove Tag?" : "Add Tag?", isPresented: $showTagSelectionConfirmAlert) {
+            Button(pendingTagSelectionWillRemove ? "Remove" : "Add", role: pendingTagSelectionWillRemove ? .destructive : nil) {
+                guard let tag = pendingTagSelectionTarget else { return }
+                if pendingTagSelectionWillRemove {
+                    removeTagFromSelectedItems(tag)
+                } else {
+                    addTagToSelectedItems(tag, showCompletionAlert: false)
+                }
+                pendingTagSelectionTarget = nil
+                pendingTagSelectionWillRemove = false
+                showTagSelectionSheet = false
+            }
+            Button("Cancel", role: .cancel) {
+                pendingTagSelectionTarget = nil
+                pendingTagSelectionWillRemove = false
+            }
+        } message: {
+            let name = pendingTagSelectionTarget?.name ?? "this tag"
+            Text(pendingTagSelectionWillRemove
+                 ? "Remove tag “\(name)” from \(selectedItems.count) selected item(s)?"
+                 : "Add tag “\(name)” to \(selectedItems.count) selected item(s)?")
         }
         .presentationDetents([.medium, .large])
     }
@@ -1436,7 +1572,7 @@ struct ItemGridView: View {
         }
     }
     
-    private func addTagToSelectedItems(_ tag: Tag) {
+    private func addTagToSelectedItems(_ tag: Tag, showCompletionAlert: Bool = true) {
         guard !selectedItems.isEmpty else { return }
         
         // Count how many items actually get the tag (excluding items that already have it)
@@ -1454,12 +1590,32 @@ struct ItemGridView: View {
             try viewContext.save()
             print("✅ Added tag '\(tag.name ?? "unknown")' to \(itemsAdded) items")
             
-            // Show confirmation alert
-            addedTagName = tag.name ?? "Untitled"
-            addedTagItemCount = itemsAdded
-            showTagAddedConfirmation = true
+            if showCompletionAlert {
+                addedTagName = tag.name ?? "Untitled"
+                addedTagItemCount = itemsAdded
+                showTagAddedConfirmation = true
+            }
         } catch {
             print("❌ Failed to add tag to items: \(error.localizedDescription)")
+        }
+    }
+
+    private func removeTagFromSelectedItems(_ tag: Tag) {
+        guard !selectedItems.isEmpty else { return }
+
+        var itemsRemoved = 0
+        for item in selectedItems {
+            if let tags = item.tags as? Set<Tag>, tags.contains(tag) {
+                item.removeFromTags(tag)
+                itemsRemoved += 1
+            }
+        }
+
+        do {
+            try viewContext.save()
+            print("✅ Removed tag '\(tag.name ?? "unknown")' from \(itemsRemoved) items")
+        } catch {
+            print("❌ Failed to remove tag from items: \(error.localizedDescription)")
         }
     }
 
