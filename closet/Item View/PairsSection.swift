@@ -10,6 +10,7 @@ import SwiftUI
 struct PairsSection: View {
     let pairedItems: [Item]
     let onManagePairs: () -> Void
+    let onSelectPairedItem: (Item) -> Void
 
     private var cellSize: CGFloat { (UIScreen.main.bounds.width - 6) / 3 }
 
@@ -19,7 +20,7 @@ struct PairsSection: View {
                 Button(action: onManagePairs) {
                     RoundedRectangle(cornerRadius: 8)
                         .fill(Color.gray.opacity(0.15))
-                        .frame(width: cellSize, height: cellSize)
+                        .frame(width: cellSize/2, height: cellSize/2)
                         .overlay {
                             VStack(spacing: 6) {
                                 Image(systemName: "link")
@@ -32,10 +33,13 @@ struct PairsSection: View {
                         }
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Manage pairs")
+                .accessibilityLabel("Manage Pairs")
+                .frame(height: cellSize)
 
                 ForEach(pairedItems, id: \.objectID) { item in
-                    SetItemCell(item: item)
+                    SetItemCell(item: item) {
+                        onSelectPairedItem(item)
+                    }
                 }
             }
         }
@@ -44,15 +48,17 @@ struct PairsSection: View {
 
 struct SetItemCell: View {
     @ObservedObject var item: Item
+    let onSelect: () -> Void
     let size: CGFloat = (UIScreen.main.bounds.width - 6) / 3
 
     var body: some View {
-        NavigationLink(destination: ItemDetailView(item: item)) {
+        Button(action: onSelect) {
             VStack {
                 ItemImageView(item: item)
                     .frame(width: size, height: size)
             }
         }
+        .buttonStyle(.plain)
     }
 }
 
