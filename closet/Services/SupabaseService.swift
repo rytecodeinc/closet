@@ -840,6 +840,22 @@ class SupabaseService: ObservableObject {
             userId: userId
         )
     }
+
+    /// Uploads a "worn" outfit photo (user wearing the outfit) to R2 — path `userId/outfits/outfitId_worn.jpg`
+    func uploadOutfitWornImage(imageData: Data, outfitId: UUID, userId: UUID) async throws -> String {
+        try await CloudflareR2Service.shared.uploadOutfitWornImage(
+            imageData: imageData,
+            outfitId: outfitId,
+            userId: userId
+        )
+    }
+
+    func deleteOutfitWornImage(outfitId: UUID, userId: UUID) async throws {
+        try await CloudflareR2Service.shared.deleteOutfitWornImage(
+            outfitId: outfitId,
+            userId: userId
+        )
+    }
     
     // MARK: - Computed Properties
     

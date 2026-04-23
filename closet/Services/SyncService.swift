@@ -1247,6 +1247,12 @@ class SyncService: ObservableObject {
             }
 
             do {
+                try await supabaseService.deleteOutfitWornImage(outfitId: outfitId, userId: userId)
+            } catch {
+                print("⚠️ Failed to delete outfit worn image from R2: \(error.localizedDescription)")
+            }
+
+            do {
                 try await supabaseService.supabaseClient.from("outfit_items")
                     .delete()
                     .eq("outfit_id", value: outfitId.uuidString)
@@ -1291,6 +1297,20 @@ class SyncService: ObservableObject {
             }
         }
 
+        var wornImageUrl: String? = nil
+        if let wornData = outfit.wornImage {
+            do {
+                wornImageUrl = try await supabaseService.uploadOutfitWornImage(
+                    imageData: wornData,
+                    outfitId: outfitId,
+                    userId: userId
+                )
+                print("✅ Uploaded outfit worn image to R2: \(wornImageUrl ?? "")")
+            } catch {
+                print("⚠️ Failed to upload outfit worn image to R2: \(error.localizedDescription)")
+            }
+        }
+
         // Serialize transformationData (portable UUID format) as JSON string for Supabase
         var transformationJson: String? = nil
         if let transformationData = outfit.transformationData {
@@ -1309,6 +1329,7 @@ class SyncService: ObservableObject {
             createdAt: outfit.createdAt?.ISO8601String,
             updatedAt: outfit.updatedAt?.ISO8601String ?? outfit.createdAt?.ISO8601String,
             imageUrl: imageUrl,
+            wornImageUrl: wornImageUrl,
             transformationJson: transformationJson
         )
 
@@ -2934,6 +2955,7 @@ private struct SyncOutfitData: Codable {
     let createdAt: String?
     let updatedAt: String?
     let imageUrl: String?          // R2 CDN URL of the pre-rendered collage
+    let wornImageUrl: String?      // R2 CDN URL of the "worn" photo
     let transformationJson: String? // JSON string of [SavedOutfitItem] with portable UUIDs
 
     enum CodingKeys: String, CodingKey {
@@ -2947,6 +2969,7 @@ private struct SyncOutfitData: Codable {
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case imageUrl = "image_url"
+        case wornImageUrl = "worn_image_url"
         case transformationJson = "transformation_json"
     }
 }

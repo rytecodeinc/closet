@@ -314,6 +314,85 @@ class CloudflareR2Service {
         print("✅ Outfit image deleted from R2: \(fileName)")
     }
 
+    /// Path format: userId/outfits/outfitId_worn.jpg
+    func uploadOutfitWornImage(imageData: Data, outfitId: UUID, userId: UUID) async throws -> String {
+        guard let session = supabaseService.currentSession else {
+            throw R2Error.notAuthenticated
+        }
+        guard let supabaseUserId = supabaseService.currentUser?.id else {
+            throw R2Error.notAuthenticated
+        }
+
+        let fileName = "\(supabaseUserId.uuidString)/outfits/\(outfitId.uuidString)_worn.jpg"
+        let url = URL(string: "\(CloudflareR2Config.workerURL)/\(fileName)")!
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.httpBody = imageData
+
+        print("📤 Uploading outfit worn image to R2: \(fileName)")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw R2Error.invalidResponse
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            if let errorData = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let errorMessage = errorData["error"] as? String {
+                throw R2Error.uploadFailed(errorMessage)
+            }
+            throw R2Error.uploadFailed("HTTP \(httpResponse.statusCode)")
+        }
+
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let imageURL = json["url"] as? String {
+            print("✅ Outfit worn image uploaded: \(imageURL)")
+            return imageURL
+        }
+
+        let imageURL = "\(CloudflareR2Config.customDomain)/\(fileName)"
+        print("✅ Outfit worn image uploaded: \(imageURL)")
+        return imageURL
+    }
+
+    func deleteOutfitWornImage(outfitId: UUID, userId: UUID) async throws {
+        guard let session = supabaseService.currentSession else {
+            throw R2Error.notAuthenticated
+        }
+        guard let supabaseUserId = supabaseService.currentUser?.id else {
+            throw R2Error.notAuthenticated
+        }
+
+        let fileName = "\(supabaseUserId.uuidString)/outfits/\(outfitId.uuidString)_worn.jpg"
+        let url = URL(string: "\(CloudflareR2Config.workerURL)/\(fileName)")!
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+
+        print("🗑️ Deleting outfit worn image from R2: \(fileName)")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw R2Error.invalidResponse
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            if let errorData = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let errorMessage = errorData["error"] as? String {
+                throw R2Error.deleteFailed(errorMessage)
+            }
+            throw R2Error.deleteFailed("HTTP \(httpResponse.statusCode)")
+        }
+
+        print("✅ Outfit worn image deleted from R2: \(fileName)")
+    }
+
     /// Gets the public URL for a photo (for display)
     /// - Parameters:
     ///   - itemId: The ID of the item this photo belongs to
