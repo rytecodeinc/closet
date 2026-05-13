@@ -478,6 +478,7 @@ struct DataSeeder {
                 wardrobe.id = UUID()
                 wardrobe.name = name
                 wardrobe.type = type
+                wardrobe.isDefault = true
                 let now = Date()
                 wardrobe.timestamp = now
                 wardrobe.createdAt = now

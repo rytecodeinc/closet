@@ -23,11 +23,13 @@ struct PersistenceController {
         closet.id = UUID()
         closet.name = "Closet"
         closet.type = "closet"
+        closet.isDefault = true
         
         let wishlist = Wardrobe(context: viewContext)
         wishlist.id = UUID()
         wishlist.name = "Wishlist"
         wishlist.type = "wishlist"
+        wishlist.isDefault = true
         
         // Seed items and attach them to one of the wardrobes
         for i in 0..<11 {

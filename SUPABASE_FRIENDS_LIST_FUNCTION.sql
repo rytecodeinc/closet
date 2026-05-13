@@ -28,4 +28,3 @@ $$
 $$;
 
 GRANT EXECUTE ON FUNCTION get_friends() TO authenticated;
-

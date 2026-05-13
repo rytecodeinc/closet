@@ -22,4 +22,3 @@ $$;
 
 -- Grant execute permission to authenticated users only.
 GRANT EXECUTE ON FUNCTION search_profiles_by_username(text) TO authenticated;
-

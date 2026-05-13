@@ -30,6 +30,57 @@ class SyncService: ObservableObject {
     func setContext(_ context: NSManagedObjectContext) {
         self.context = context
     }
+
+    // MARK: - Local tombstone purge (post-delete cleanup)
+    /// Schedules a background purge of locally soft-deleted records that have already been deleted in Supabase.
+    /// We delay slightly to avoid hard-deleting objects while SwiftUI may still be rendering them.
+    func schedulePurgeLocalTombstones(delayNanoseconds: UInt64 = 800_000_000) {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+            await self.purgeLocalTombstonesIfPossible()
+        }
+    }
+
+    /// Purges local soft-deleted records that have `syncedAt != nil` (i.e. backend delete succeeded).
+    /// Safe to call repeatedly; does nothing if not authenticated or no context.
+    func purgeLocalTombstonesIfPossible() async {
+        guard let context = context else { return }
+        guard supabaseService.isAuthenticated, let userId = supabaseService.currentUser?.id else { return }
+
+        // Items / outfits / wardrobes are user-scoped in this app.
+        let userIdString = userId.uuidString
+
+        // Helper to fetch + delete in a single pass.
+        func purge<T: NSManagedObject>(_ request: NSFetchRequest<T>) throws -> Int {
+            let objects = try context.fetch(request)
+            guard !objects.isEmpty else { return 0 }
+            for obj in objects { context.delete(obj) }
+            return objects.count
+        }
+
+        do {
+            var totalPurged = 0
+
+            let itemRequest: NSFetchRequest<Item> = Item.fetchRequest()
+            itemRequest.predicate = NSPredicate(format: "userId == %@ AND isSoftDeleted == YES AND syncedAt != nil", userIdString)
+            totalPurged += try purge(itemRequest)
+
+            let outfitRequest: NSFetchRequest<Outfit> = Outfit.fetchRequest()
+            outfitRequest.predicate = NSPredicate(format: "userId == %@ AND isSoftDeleted == YES AND syncedAt != nil", userIdString)
+            totalPurged += try purge(outfitRequest)
+
+            let wardrobeRequest: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
+            wardrobeRequest.predicate = NSPredicate(format: "userId == %@ AND isSoftDeleted == YES AND syncedAt != nil", userIdString)
+            totalPurged += try purge(wardrobeRequest)
+
+            if totalPurged > 0 {
+                try context.save()
+                print("🧹 Purged \(totalPurged) synced tombstone record(s) from local Core Data")
+            }
+        } catch {
+            print("⚠️ Failed to purge local tombstones: \(error.localizedDescription)")
+        }
+    }
     
     /// Migrates existing local items and reference data to the authenticated user
     func migrateLocalItemsToUser(userId: UUID) async throws {
@@ -289,6 +340,8 @@ class SyncService: ObservableObject {
         guard totalItems > 0 else {
             syncStatus = "All items are synced"
             print("ℹ️ No items need syncing - all are up to date")
+            // Even if nothing needs syncing, we may have synced tombstones to purge.
+            schedulePurgeLocalTombstones()
             return
         }
         
@@ -319,6 +372,9 @@ class SyncService: ObservableObject {
         
         // Sync any outfits that haven't been pushed to Supabase yet
         try await syncAllOutfits(userId: userId)
+
+        // After a sync session completes, purge any soft-deleted records that were successfully deleted in Supabase.
+        schedulePurgeLocalTombstones()
     }
     
     /// Syncs all outfits that have never been synced or have changed since last sync.
@@ -1160,6 +1216,7 @@ class SyncService: ObservableObject {
             name: wardrobe.name ?? "",
             type: wardrobe.type,
             isSoftDeleted: wardrobe.isSoftDeleted,
+            isDefault: wardrobe.isDefault,
             createdAt: wardrobe.createdAt?.ISO8601String ?? wardrobe.timestamp?.ISO8601String,
             updatedAt: wardrobe.updatedAt?.ISO8601String
         )
@@ -1278,6 +1335,9 @@ class SyncService: ObservableObject {
             outfit.syncedAt = Date()
             try context.save()
             print("✅ Deleted outfit from Supabase and R2")
+
+            // Now that backend deletion succeeded, purge the local tombstone later (safe timing).
+            schedulePurgeLocalTombstones()
             return
         }
 
@@ -1323,6 +1383,7 @@ class SyncService: ObservableObject {
             userId: userId.uuidString,
             name: outfit.name,
             notes: outfit.notes,
+            isFavorite: outfit.isFavorite,
             isDraft: outfit.isDraft,
             isSoftDeleted: outfit.isSoftDeleted,
             category: outfit.category,
@@ -1458,7 +1519,6 @@ class SyncService: ObservableObject {
         let repository = UserProfileRepository(context: context)
         do {
             try repository.updateUsername(username, userId: userId)
-            print("✅ Synced username to Core Data: \(username)")
         } catch {
             print("⚠️ Failed to sync username to Core Data: \(error.localizedDescription)")
         }
@@ -1478,9 +1538,24 @@ class SyncService: ObservableObject {
         let repository = UserProfileRepository(context: context)
         do {
             try repository.updateDisplayName(displayName, userId: userId)
-            print("✅ Synced display name to Core Data: \(displayName)")
         } catch {
             print("⚠️ Failed to sync display name to Core Data: \(error.localizedDescription)")
+        }
+    }
+
+    /// Syncs profile avatar URL from Supabase into Core Data.
+    @MainActor
+    func syncAvatarUrlToCoreData(_ avatarUrl: String?) {
+        guard let context = context else {
+            print("⚠️ No context available for avatar URL sync")
+            return
+        }
+        let userId = supabaseService.currentUser?.id.uuidString
+        let repository = UserProfileRepository(context: context)
+        do {
+            try repository.updateAvatarUrl(avatarUrl, userId: userId)
+        } catch {
+            print("⚠️ Failed to sync avatar URL to Core Data: \(error.localizedDescription)")
         }
     }
     
@@ -1502,8 +1577,8 @@ class SyncService: ObservableObject {
             if profile.syncedAt == nil {
                 needsSync = true // Never synced
             } else if let updatedAt = profile.updatedAt, let syncedAt = profile.syncedAt {
-                // Use >= instead of > to handle edge case where they're set at same time
-                needsSync = updatedAt >= syncedAt // Changed since last sync
+                // Strict ordering: equal timestamps mean "already uploaded this revision"; avoid duplicate pushes.
+                needsSync = updatedAt > syncedAt
             } else {
                 needsSync = false
             }
@@ -1515,7 +1590,6 @@ class SyncService: ObservableObject {
             // Sync in background (don't block UI)
             do {
                 try await self.syncUserProfile(profile, userId: userId)
-                print("✅ Auto-synced user profile (weight data)")
             } catch {
                 print("⚠️ Auto-sync failed for user profile: \(error.localizedDescription)")
                 // Don't show error to user - sync happens in background
@@ -1550,18 +1624,13 @@ class SyncService: ObservableObject {
                      profileData.displayName != nil
         
         guard hasData else {
-            print("ℹ️ User profile has no data to sync")
             return
         }
-        
-        print("📤 Syncing user profile to Supabase (user_id: \(userId.uuidString))")
-        
+
         // Upsert profile data to user_profiles table (using user_id as conflict key)
         try await supabaseService.supabaseClient.from("user_profiles")
             .upsert(profileData, onConflict: "user_id")
             .execute()
-        
-        print("✅ Successfully synced user profile to Supabase")
         
         // Mark as synced after successful upload
         profile.syncedAt = Date()
@@ -1729,6 +1798,9 @@ class SyncService: ObservableObject {
             item.syncedAt = Date()
             try context.save()
             print("✅ Successfully deleted item from Supabase and R2")
+
+            // Now that backend deletion succeeded, purge the local tombstone later (safe timing).
+            schedulePurgeLocalTombstones()
             return
         }
         
@@ -1899,6 +1971,37 @@ class SyncService: ObservableObject {
         }
     }
     
+    /// Target max payload size for R2 worker (5 MB); stay slightly under for safety.
+    private static let r2WorkerSafeMaxBytes = 4_800_000
+
+    /// Hard ceiling (5 MiB); reject encoded output that still exceeds worker limits.
+    private static let r2WorkerHardMaxBytes = 5 * 1024 * 1024
+
+    /// Ensures image bytes respect the worker cap. When re-encoding, updates `photo.data` so Core Data matches the CDN.
+    private func imageDataPreparedForR2Upload(original: Data, photo: Photo) throws -> Data {
+        if original.count <= Self.r2WorkerSafeMaxBytes {
+            return original
+        }
+        guard let image = UIImage(data: original) else {
+            print("❌ Photo \(photo.id?.uuidString ?? "?"): cannot decode; \(original.count) bytes > R2 safe limit")
+            throw SyncError.photoExceedsWorkerLimit
+        }
+        let encoded =
+            image.encodeForR2Upload(maxBytes: Self.r2WorkerSafeMaxBytes)
+            ?? image.processForStorage(maxDimension: 1200, maxFileSizeKB: 450)
+        guard let data = encoded, !data.isEmpty else {
+            print("❌ Photo \(photo.id?.uuidString ?? "?"): R2 encode failed")
+            throw SyncError.photoEncodingFailed
+        }
+        guard data.count <= Self.r2WorkerHardMaxBytes else {
+            print("❌ Photo \(photo.id?.uuidString ?? "?"): encoded size \(data.count) still exceeds worker max")
+            throw SyncError.photoExceedsWorkerLimit
+        }
+        photo.data = data
+        print("📦 R2-safe full image: \(original.count) → \(data.count) bytes")
+        return data
+    }
+
     /// Syncs a photo to Cloudflare R2 via Worker and stores URL
     /// Each photo (front, back, worn) has a unique photoId, ensuring they don't conflict
     /// Uploads both full image and thumbnail to R2 for storage efficiency
@@ -1927,9 +2030,12 @@ class SyncService: ObservableObject {
         
         // STEP 1: Upload full image if needed
         if let imageData = photo.data, !imageData.isEmpty {
-            // We have new image data - upload it
+            let payload = try imageDataPreparedForR2Upload(original: imageData, photo: photo)
+            if context.hasChanges {
+                try context.save()
+            }
             imageUrl = try await supabaseService.uploadPhoto(
-                imageData: imageData,
+                imageData: payload,
                 itemId: itemId,
                 photoId: photoId,
                 userId: userId
@@ -2574,6 +2680,10 @@ enum SyncError: LocalizedError {
     case noContext
     case uploadFailed
     case networkError
+    /// Raw `photo.data` could not be decoded and exceeded the worker size limit.
+    case photoExceedsWorkerLimit
+    /// Could not re-encode image bytes for R2 upload.
+    case photoEncodingFailed
     
     var errorDescription: String? {
         switch self {
@@ -2585,6 +2695,10 @@ enum SyncError: LocalizedError {
             return "Failed to upload photo"
         case .networkError:
             return "Network error during sync"
+        case .photoExceedsWorkerLimit:
+            return "Photo file is too large for upload and could not be compressed"
+        case .photoEncodingFailed:
+            return "Failed to compress photo for upload"
         }
     }
 }
@@ -2930,6 +3044,7 @@ private struct SyncWardrobeData: Codable {
     let name: String
     let type: String?
     let isSoftDeleted: Bool
+    let isDefault: Bool
     let createdAt: String?
     let updatedAt: String?
     
@@ -2939,6 +3054,7 @@ private struct SyncWardrobeData: Codable {
         case name
         case type
         case isSoftDeleted = "is_soft_deleted"
+        case isDefault = "is_default"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
     }
@@ -2949,6 +3065,7 @@ private struct SyncOutfitData: Codable {
     let userId: String
     let name: String?
     let notes: String?
+    let isFavorite: Bool
     let isDraft: Bool
     let isSoftDeleted: Bool
     let category: String?
@@ -2963,6 +3080,7 @@ private struct SyncOutfitData: Codable {
         case userId = "user_id"
         case name
         case notes
+        case isFavorite = "is_favorite"
         case isDraft = "is_draft"
         case isSoftDeleted = "is_soft_deleted"
         case category
