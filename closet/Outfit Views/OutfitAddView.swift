@@ -253,6 +253,12 @@ struct OutfitAddView: View {
     // Wardrobe type to filter by (closet or wishlist)
     let wardrobeType: String
 
+    /// If provided, this item will be resolved and placed on the canvas on first appear.
+    let preselectedItemURI: String?
+    
+    /// Forces a unique view identity per creation session (prevents @State reuse).
+    let sessionID: UUID
+
     // Fetch all wardrobes (we'll filter by type)
     @FetchRequest(
         entity: Wardrobe.entity(),
@@ -339,7 +345,7 @@ struct OutfitAddView: View {
         if let selected = selectedWardrobe, selected.type == targetWardrobeType {
             wardrobeToUse = selected
         } else {
-            wardrobeToUse = targetWardrobes.first
+            wardrobeToUse = WardrobeBootstrap.primaryWardrobe(in: targetWardrobes)
         }
 
         guard let wardrobe = wardrobeToUse else {
@@ -394,11 +400,23 @@ struct OutfitAddView: View {
     @State private var undoStack: [CanvasState] = []
     @State private var redoStack: [CanvasState] = []
     @State private var transformInProgress = false
+    
+    @State private var didApplyPreselectedItem = false
 
     init(outfitToEdit: Outfit? = nil, wardrobeType: String = "closet", initialWardrobe: Wardrobe? = nil) {
         self.outfitToEdit = outfitToEdit
         self.wardrobeType = wardrobeType
         _selectedWardrobe = State(initialValue: initialWardrobe)
+        self.preselectedItemURI = nil
+        self.sessionID = UUID()
+    }
+    
+    init(outfitToEdit: Outfit? = nil, wardrobeType: String = "closet", initialWardrobe: Wardrobe? = nil, preselectedItemURI: String?, sessionID: UUID = UUID()) {
+        self.outfitToEdit = outfitToEdit
+        self.wardrobeType = wardrobeType
+        _selectedWardrobe = State(initialValue: initialWardrobe)
+        self.preselectedItemURI = preselectedItemURI
+        self.sessionID = sessionID
     }
 
     private var squareSize: CGFloat {
@@ -415,30 +433,62 @@ struct OutfitAddView: View {
     var body: some View {
         sheetsContent
             .onAppear {
+                print("👗 [OutfitAddView] onAppear. sessionID=\(sessionID.uuidString) outfitToEdit=\(outfitToEdit != nil) wardrobeType=\(wardrobeType) preselectedItemURI=\(preselectedItemURI ?? "nil")")
+                
                 if selectedWardrobe == nil {
                     if wardrobeType == "wishlist" {
-                        selectedWardrobe = allWardrobes.first(where: { $0.type == "wishlist" })
+                        let wish = allWardrobes.filter {
+                            $0.type == "wishlist" &&
+                            $0.isSoftDeleted != true &&
+                            (currentUserId == nil || $0.userId == currentUserId)
+                        }
+                        selectedWardrobe = WardrobeBootstrap.primaryWardrobe(in: wish)
                     } else {
-                        selectedWardrobe = wardrobes.first
+                        selectedWardrobe = WardrobeBootstrap.primaryWardrobe(in: wardrobes)
                     }
                 }
+                
+                if !didApplyPreselectedItem, let uriString = preselectedItemURI {
+                    didApplyPreselectedItem = true
+                    print("👗 [OutfitAddView] Attempting to resolve preselected item. uri=\(uriString)")
+                    if let url = URL(string: uriString),
+                       let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url) {
+                        do {
+                            if let resolvedItem = try viewContext.existingObject(with: objectID) as? Item {
+                                print("👗 [OutfitAddView] Resolved preselected item. objectID=\(objectID) itemID=\(resolvedItem.id?.uuidString ?? "nil")")
+                                addItemToOutfit(resolvedItem)
+                                print("👗 [OutfitAddView] Added preselected item to canvas. outfitItemsCount=\(outfitItems.count)")
+                            } else {
+                                print("❌ [OutfitAddView] Resolved object was not an Item. objectID=\(objectID)")
+                            }
+                        } catch {
+                            print("❌ [OutfitAddView] Failed to resolve preselected item via existingObject. error=\(error)")
+                        }
+                    } else {
+                        print("❌ [OutfitAddView] Invalid preselected item URI or could not create objectID. uri=\(uriString)")
+                    }
+                }
+                
                 loadOutfitIfEditing()
                 fetchClosetItems()
+                print("👗 [OutfitAddView] Finished onAppear work. closetItemsCount=\(closetItems.count) outfitItemsCount=\(outfitItems.count)")
             }
             .onChange(of: selectedWardrobe) { _ in fetchClosetItems() }
             .onChange(of: wardrobes) { newWardrobes in
                 if let current = selectedWardrobe, !newWardrobes.contains(current) {
-                    selectedWardrobe = newWardrobes.first
+                    selectedWardrobe = WardrobeBootstrap.primaryWardrobe(in: newWardrobes)
                 }
             }
             .onChange(of: filterKey) { _ in fetchClosetItems() }
             .onChange(of: itemTypeSegment) { _ in
                 if wardrobeType == "wishlist" {
                     let targetType = itemTypeSegment == .wishlist ? "wishlist" : "closet"
-                    let targetWardrobes = allWardrobes.filter { $0.type == targetType }
-                    if let firstWardrobe = targetWardrobes.first {
-                        selectedWardrobe = firstWardrobe
+                    let targetWardrobes = allWardrobes.filter {
+                        $0.type == targetType &&
+                        $0.isSoftDeleted != true &&
+                        (currentUserId == nil || $0.userId == currentUserId)
                     }
+                    selectedWardrobe = WardrobeBootstrap.primaryWardrobe(in: targetWardrobes)
                 }
                 fetchClosetItems()
             }

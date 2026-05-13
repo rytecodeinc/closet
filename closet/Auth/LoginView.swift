@@ -66,8 +66,7 @@ struct LoginView: View {
     }
     
     var body: some View {
-        NavigationStack {
-            ScrollView {
+        ScrollView {
                 // Header
                 VStack(spacing: 8) {
                     Image(systemName: "person.circle.fill")
@@ -339,9 +338,14 @@ struct LoginView: View {
                 .padding(.bottom, 20)
             }
             .scrollDismissesKeyboard(.interactively)
+            .navigationTitle(supabaseService.isAuthenticated ? "Account" : "Login")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showSignUp) {
-                SignUpView().environmentObject(supabaseService)
+                NavigationStack {
+                    SignUpView()
+                        .environmentObject(supabaseService)
+                }
+                .presentationDragIndicator(.visible)
             }
             .alert("Clean Up Orphaned Data", isPresented: $showCleanupConfirmation) {
                 Button("Cancel", role: .cancel) { }
@@ -367,7 +371,6 @@ struct LoginView: View {
             } message: {
                 Text("This will permanently delete all local wardrobes that are not linked to your account (userId is nil or belongs to a different user). This cannot be undone.")
             }
-        }
     }
     
     // MARK: - Purge soft-deleted outfits from local Core Data

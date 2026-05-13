@@ -13,8 +13,13 @@ struct ItemFilterView: View {
     @ObservedObject var filterModel: ItemFilterModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var viewContext
+    @EnvironmentObject private var supabaseService: SupabaseService
     
     var wardrobeType: String = "closet" // Default to "closet" for backward compatibility
+
+    private var currentUserId: String? {
+        supabaseService.currentUser?.id.uuidString
+    }
 
     var body: some View {
         NavigationStack {
@@ -27,10 +32,14 @@ struct ItemFilterView: View {
                 }
                 .pickerStyle(.menu)
                 
+                // Favorites-only filter
+                Toggle("Favorites", isOn: $filterModel.favoritesOnly)
+                
                 // Wardrobe filter
                 NavigationLink(destination: WardrobeListView(
                     selectedWardrobes: $filterModel.selectedWardrobes,
-                    defaultWardrobeType: wardrobeType
+                    defaultWardrobeType: wardrobeType,
+                    userId: currentUserId
                 )
                 ) {
                     HStack {
@@ -45,7 +54,11 @@ struct ItemFilterView: View {
                 }
                 
                 // Category filter
-                NavigationLink(destination: CategoryFilterListView(selectedCategoryName: $filterModel.selectedCategoryName, selectedSubcategoryName: $filterModel.selectedSubcategoryName)
+                NavigationLink(destination: CategoryFilterListView(
+                    selectedCategoryName: $filterModel.selectedCategoryName,
+                    selectedSubcategoryName: $filterModel.selectedSubcategoryName,
+                    userId: currentUserId
+                )
                 ) {
                     HStack {
                         Text("Category")
@@ -65,7 +78,7 @@ struct ItemFilterView: View {
                 }
                 
                 // Brand filter
-                NavigationLink(destination: BrandListView(selectedBrand: $filterModel.selectedBrand)) {
+                NavigationLink(destination: BrandListView(selectedBrand: $filterModel.selectedBrand, userId: currentUserId)) {
                     HStack {
                         Text("Brand")
                         Spacer()
@@ -78,7 +91,7 @@ struct ItemFilterView: View {
                 }
                 
                 // Size filter
-                NavigationLink(destination: SizeListView(selectedSizeValue: $filterModel.selectedSizeValue)) {
+                NavigationLink(destination: SizeListView(selectedSizeValue: $filterModel.selectedSizeValue, userId: currentUserId)) {
                     HStack {
                         Text("Size")
                         Spacer()
@@ -91,7 +104,7 @@ struct ItemFilterView: View {
                 }
                 
                 // Color filter
-                NavigationLink(destination: ColorListView(selectedColorNames: $filterModel.selectedColors)) {
+                NavigationLink(destination: ColorListView(selectedColorNames: $filterModel.selectedColors, userId: currentUserId)) {
                     HStack {
                         Text("Colors")
                         Spacer()
@@ -118,7 +131,7 @@ struct ItemFilterView: View {
                 }
                 */
                 // Location filter
-                NavigationLink(destination: LocationListView(selectedLocation: $filterModel.selectedLocation)) {
+                NavigationLink(destination: LocationListView(selectedLocation: $filterModel.selectedLocation, userId: currentUserId)) {
                     HStack {
                         Text("Location")
                         Spacer()
@@ -189,7 +202,7 @@ struct ItemFilterView: View {
                 }
                 
                 // Tag filter
-                NavigationLink(destination: TagListView(selectedTags: $filterModel.selectedTags, wardrobeType: wardrobeType)) {
+                NavigationLink(destination: TagListView(selectedTags: $filterModel.selectedTags, wardrobeType: wardrobeType, userId: currentUserId)) {
                     HStack {
                         Text("Tags")
                         Spacer()

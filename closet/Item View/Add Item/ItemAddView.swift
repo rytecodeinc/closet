@@ -74,20 +74,39 @@ struct ItemAddView: View {
 
     // Original init for backward compatibility (creates dummy coordinator)
     init(parentContext: NSManagedObjectContext, selectedWardrobe: Wardrobe?, initialURL: URL? = nil, initialImage: UIImage? = nil) {
-        _vm = StateObject(wrappedValue: ItemAddViewModel(parentContext: parentContext, selectedWardrobe: selectedWardrobe, initialURL: initialURL, initialImage: initialImage))
+        let authUserId = SupabaseService.shared.currentUser?.id.uuidString
+        _vm = StateObject(wrappedValue: ItemAddViewModel(
+            parentContext: parentContext,
+            selectedWardrobe: selectedWardrobe,
+            initialURL: initialURL,
+            initialImage: initialImage,
+            authUserId: authUserId
+        ))
         _queueCoordinator = ObservedObject(wrappedValue: ImageQueueCoordinator())
     }
     
     // New init with queue coordinator
     init(parentContext: NSManagedObjectContext, selectedWardrobe: Wardrobe?, queueCoordinator: ImageQueueCoordinator, initialURL: URL? = nil) {
         let initialImage = queueCoordinator.nextCroppedImage
-        _vm = StateObject(wrappedValue: ItemAddViewModel(parentContext: parentContext, selectedWardrobe: selectedWardrobe, initialURL: initialURL, initialImage: initialImage))
+        let authUserId = SupabaseService.shared.currentUser?.id.uuidString
+        _vm = StateObject(wrappedValue: ItemAddViewModel(
+            parentContext: parentContext,
+            selectedWardrobe: selectedWardrobe,
+            initialURL: initialURL,
+            initialImage: initialImage,
+            authUserId: authUserId
+        ))
         _queueCoordinator = ObservedObject(wrappedValue: queueCoordinator)
     }
 
     // Init for editing an existing draft item
     init(parentContext: NSManagedObjectContext, existingDraft: Item) {
-        _vm = StateObject(wrappedValue: ItemAddViewModel(parentContext: parentContext, existingDraft: existingDraft))
+        let authUserId = SupabaseService.shared.currentUser?.id.uuidString
+        _vm = StateObject(wrappedValue: ItemAddViewModel(
+            parentContext: parentContext,
+            existingDraft: existingDraft,
+            authUserId: authUserId
+        ))
         _queueCoordinator = ObservedObject(wrappedValue: ImageQueueCoordinator())
     }
 
@@ -930,9 +949,10 @@ struct ItemAddView: View {
 
     /// Add Multiple → From Library: dismiss add UI, then process on the grid tab (progress overlay + cancel).
     private func beginBulkLibraryImport(with images: [UIImage]) {
+        let userIdStr = SupabaseService.shared.currentUser?.id.uuidString
         guard let parentContext = vm.childContext.parent,
               let wardrobeOID = vm.selectedWardrobeObjectID,
-              let userIdStr = SupabaseService.shared.currentUser?.id.uuidString else {
+              let userIdStr else {
             print("⚠️ Bulk import: missing parent context, wardrobe, or auth")
             return
         }
@@ -962,11 +982,19 @@ final class ItemAddViewModel: ObservableObject {
     let selectedWardrobeObjectID: NSManagedObjectID?
     let initialURL: URL?
     let initialImage: UIImage?
+    /// Captured on the main actor when the view model is created; used where `selectedWardrobe.userId` may be nil.
+    private let authUserId: String?
+
+    /// User's primary wardrobe for `type` (`isDefault` when set). Used to prepend the default closet/wishlist when adding from a secondary wardrobe of the same type.
+    private static func fetchPrimaryWardrobe(forType type: String, userId: String, in context: NSManagedObjectContext) -> Wardrobe? {
+        try? WardrobeBootstrap.fetchPrimaryWardrobe(forType: type, userIdString: userId, in: context)
+    }
     
-    init(parentContext: NSManagedObjectContext, selectedWardrobe: Wardrobe?, initialURL: URL? = nil, initialImage: UIImage? = nil) {
+    init(parentContext: NSManagedObjectContext, selectedWardrobe: Wardrobe?, initialURL: URL? = nil, initialImage: UIImage? = nil, authUserId: String? = nil) {
         self.initialURL = initialURL
         self.initialImage = initialImage
         self.selectedWardrobeObjectID = selectedWardrobe?.objectID
+        self.authUserId = authUserId
         
         let ctx = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
         ctx.parent = parentContext
@@ -983,25 +1011,16 @@ final class ItemAddViewModel: ObservableObject {
         if let wardrobeObjectID = selectedWardrobe?.objectID {
             do {
                 let wardrobeInChild = try ctx.existingObject(with: wardrobeObjectID) as? Wardrobe
-                if let wardrobe = wardrobeInChild {
-                    item.addToWardrobes(wardrobe)
-
-                    // Also ensure the primary wardrobe of the same type is always assigned.
-                    // "Primary" = oldest created wardrobe of the same type (timestamp ascending).
-                    // If selectedWardrobe IS the primary, addToWardrobes is a no-op (set semantics).
-                    if let wardrobeType = wardrobe.type {
-                        let primaryRequest: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
-                        primaryRequest.predicate = NSPredicate(
-                            format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)",
-                            wardrobeType
-                        )
-                        primaryRequest.sortDescriptors = [NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)]
-                        primaryRequest.fetchLimit = 1
-                        if let primaryInParent = try? parentContext.fetch(primaryRequest).first,
-                           let primaryInChild = try? ctx.existingObject(with: primaryInParent.objectID) as? Wardrobe {
-                            item.addToWardrobes(primaryInChild)
-                        }
+                if let selected = wardrobeInChild {
+                    let type = (selected.type ?? "closet").lowercased()
+                    let userId = selected.userId ?? authUserId
+                    if let userId = userId, !userId.isEmpty,
+                       let primary = Self.fetchPrimaryWardrobe(forType: type, userId: userId, in: ctx),
+                       primary.objectID != selected.objectID {
+                        // Secondary closet/wishlist: item belongs in that wardrobe and the default row for that type.
+                        item.addToWardrobes(primary)
                     }
+                    item.addToWardrobes(selected)
                 }
             } catch {
                 print("⚠️ Warning: Could not re-fetch wardrobe in child context during init: \(error.localizedDescription)")
@@ -1012,10 +1031,11 @@ final class ItemAddViewModel: ObservableObject {
     }
 
     /// Loads an existing draft item into the child context so edits are sandboxed until save.
-    init(parentContext: NSManagedObjectContext, existingDraft: Item) {
+    init(parentContext: NSManagedObjectContext, existingDraft: Item, authUserId: String? = nil) {
         self.initialURL = nil
         self.initialImage = nil
         self.selectedWardrobeObjectID = (existingDraft.wardrobes?.anyObject() as? Wardrobe)?.objectID
+        self.authUserId = authUserId
 
         let ctx = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
         ctx.parent = parentContext
@@ -1119,6 +1139,13 @@ final class ItemAddViewModel: ObservableObject {
                         item.userId = userId.uuidString
                         try parent.save()
                     }
+                    let outfitsToSync = OutfitSanitizer.regenerateCollagesForOutfitsContaining(item: item, in: parent)
+                    if !outfitsToSync.isEmpty {
+                        try parent.save()
+                        for outfit in outfitsToSync {
+                            SyncService.shared.syncOutfitIfNeeded(outfit)
+                        }
+                    }
                     print("🔄 Triggering sync for newly saved item: \(item.name ?? "unnamed")")
                     SyncService.shared.syncItemIfNeeded(item)
                 } else {
@@ -1148,6 +1175,13 @@ final class ItemAddViewModel: ObservableObject {
                             item.userId = userId.uuidString
                             try parent.save()
                         }
+                        let outfitsToSync = OutfitSanitizer.regenerateCollagesForOutfitsContaining(item: item, in: parent)
+                        if !outfitsToSync.isEmpty {
+                            try parent.save()
+                            for outfit in outfitsToSync {
+                                SyncService.shared.syncOutfitIfNeeded(outfit)
+                            }
+                        }
                         print("🔄 Triggering sync for saved item (after conflict resolution): \(item.name ?? "unnamed")")
                         SyncService.shared.syncItemIfNeeded(item)
                     }
@@ -1169,6 +1203,13 @@ final class ItemAddViewModel: ObservableObject {
         if let wardrobe = selectedWardrobe {
             do {
                 if let wardrobeInChild = try childContext.existingObject(with: wardrobe.objectID) as? Wardrobe {
+                    let type = (wardrobeInChild.type ?? "closet").lowercased()
+                    let userId = wardrobeInChild.userId ?? authUserId
+                    if let userId = userId, !userId.isEmpty,
+                       let primary = Self.fetchPrimaryWardrobe(forType: type, userId: userId, in: childContext),
+                       primary.objectID != wardrobeInChild.objectID {
+                        item.addToWardrobes(primary)
+                    }
                     item.addToWardrobes(wardrobeInChild)
                     print("✅ Assigned wardrobe: \(wardrobeInChild.name ?? "unknown")")
                 }
@@ -1178,6 +1219,13 @@ final class ItemAddViewModel: ObservableObject {
         } else if let wardrobeObjectID = selectedWardrobeObjectID {
             do {
                 if let wardrobeInChild = try childContext.existingObject(with: wardrobeObjectID) as? Wardrobe {
+                    let type = (wardrobeInChild.type ?? "closet").lowercased()
+                    let userId = wardrobeInChild.userId ?? authUserId
+                    if let userId = userId, !userId.isEmpty,
+                       let primary = Self.fetchPrimaryWardrobe(forType: type, userId: userId, in: childContext),
+                       primary.objectID != wardrobeInChild.objectID {
+                        item.addToWardrobes(primary)
+                    }
                     item.addToWardrobes(wardrobeInChild)
                     print("✅ Assigned wardrobe from objectID: \(wardrobeInChild.name ?? "unknown")")
                 }
@@ -1442,7 +1490,7 @@ private struct ItemAttributesSection: View {
                 Text("Wardrobes").foregroundColor(.primary)
                 Spacer()
                 if let selected = item.wardrobes as? Set<Wardrobe>, !selected.isEmpty {
-                    let names = selected.compactMap { $0.name }.sorted()
+                    let names = Array(Set(selected.compactMap { $0.name }.filter { !$0.isEmpty })).sorted()
                     Text(names.prefix(2).joined(separator: ", ")).foregroundColor(.gray).lineLimit(1)
                     if names.count > 2 { Text("…").foregroundColor(.gray) }
                 }

@@ -11,12 +11,23 @@ import CoreData
 
 struct WishlistView: View {
     @Environment(\.managedObjectContext) private var viewContext
+    @EnvironmentObject private var supabaseService: SupabaseService
     @StateObject var filterModel = ItemFilterModel()
     
     @FetchRequest(
         sortDescriptors: [NSSortDescriptor(keyPath: \Wardrobe.createdAt, ascending: true)],
         predicate: NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", "wishlist")
-    ) private var wishlists: FetchedResults<Wardrobe>
+    ) private var allWishlistsOfType: FetchedResults<Wardrobe>
+
+    private var currentUserId: String? {
+        supabaseService.currentUser?.id.uuidString
+    }
+
+    /// Wishlists for the signed-in user only.
+    private var userWishlists: [Wardrobe] {
+        guard let uid = currentUserId else { return [] }
+        return allWishlistsOfType.filter { $0.userId == uid }
+    }
     
     @State private var selectedWishlist: Wardrobe?
     @State private var showWishlistSheet = false
@@ -26,22 +37,29 @@ struct WishlistView: View {
     @State private var editingName: String = ""
     @State private var showEditAlert = false
     @State private var isItemGridInSelectionMode = false
+    @State private var wardrobePendingDelete: Wardrobe?
+    @State private var showDeleteWardrobeConfirmation = false
     
     var body: some View {
        // NavigationView {
             mainContent()
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { navigationBarToolbar() }
-                .onAppear { setInitialWishlist() }
+                .onAppear {
+                    if let uid = supabaseService.currentUser?.id {
+                        try? WardrobeBootstrap.ensureDefaultWardrobes(for: uid, in: viewContext)
+                    }
+                    setInitialWishlist()
+                }
                 .alert("New Wishlist", isPresented: $isCreatingNewWishlist) {
                     createWishlistAlertButtons()
                 } message: {
-                    Text("Enter a name for your new wishlist")
+                    Text("Enter a name for your new wishlist (max \(WardrobeNaming.maxNameLength) characters)")
                 }
                 .alert("Edit Wardrobe", isPresented: $showEditAlert) {
                     editWishlistAlertButtons()
                 } message: {
-                    Text("Enter a new name for this wardrobe")
+                    Text("Enter a new name for this wardrobe (max \(WardrobeNaming.maxNameLength) characters)")
                 }
                 .sheet(isPresented: $showWishlistSheet) {
                     wishlistSelectionSheet()
@@ -111,11 +129,17 @@ private extension WishlistView {
     
     /// Ensure the default "Wishlist" (seeded) is always used first
     func setInitialWishlist() {
+        guard currentUserId != nil else { return }
+
+        if let selected = selectedWishlist,
+           !userWishlists.contains(where: { $0.objectID == selected.objectID }) {
+            selectedWishlist = nil
+        }
         if selectedWishlist == nil {
-            if wishlists.isEmpty {
+            if userWishlists.isEmpty {
                 isCreatingNewWishlist = true   // force first-time creation
             } else {
-                selectedWishlist = wishlists.first
+                selectedWishlist = WardrobeBootstrap.primaryWardrobe(in: userWishlists)
             }
         }
     }
@@ -123,6 +147,12 @@ private extension WishlistView {
     func createWishlistAlertButtons() -> some View {
         Group {
             TextField("i.e. Summer Items, Gifts", text: $newWishlistName)
+                .textInputAutocapitalization(.words)
+                .onChange(of: newWishlistName) { _, new in
+                    if new.count > WardrobeNaming.maxNameLength {
+                        newWishlistName = String(new.prefix(WardrobeNaming.maxNameLength))
+                    }
+                }
             Button("Create") {
                 if let newWishlist = createNewWishlist(named: newWishlistName) {
                     selectedWishlist = newWishlist
@@ -136,6 +166,12 @@ private extension WishlistView {
     func editWishlistAlertButtons() -> some View {
         Group {
             TextField("Wardrobe name", text: $editingName)
+                .textInputAutocapitalization(.words)
+                .onChange(of: editingName) { _, new in
+                    if new.count > WardrobeNaming.maxNameLength {
+                        editingName = String(new.prefix(WardrobeNaming.maxNameLength))
+                    }
+                }
             Button("Save") {
                 if let wardrobe = editingWardrobe {
                     updateWardrobeName(wardrobe, to: editingName)
@@ -154,7 +190,7 @@ private extension WishlistView {
     func wishlistSelectionSheet() -> some View {
         NavigationView {
             List {
-                ForEach(wishlists, id: \.self) { wishlist in
+                ForEach(userWishlists, id: \.objectID) { wishlist in
                     ZStack(alignment: .trailing) {
                         Button {
                             selectedWishlist = wishlist
@@ -168,8 +204,7 @@ private extension WishlistView {
                                         .foregroundColor(.blue)
                                 }
                                 
-                                // Add "Default" badge for the first wishlist
-                                if wishlist == wishlists.first {
+                                if wishlist.isDefault == true {
                                     Text("Default")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
@@ -189,7 +224,7 @@ private extension WishlistView {
                         
                         Button {
                             editingWardrobe = wishlist
-                            editingName = wishlist.name ?? ""
+                            editingName = WardrobeNaming.normalizedUserName(wishlist.name ?? "")
                             showEditAlert = true
                         } label: {
                             Image(systemName: "pencil")
@@ -198,11 +233,11 @@ private extension WishlistView {
                         }
                         .buttonStyle(.plain)
                     }
-                    // Prevent deleting the default wishlist
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        if wishlist != wishlists.first {
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        if wishlist.isDefault != true {
                             Button(role: .destructive) {
-                                deleteWishlist(wishlist)
+                                wardrobePendingDelete = wishlist
+                                showDeleteWardrobeConfirmation = true
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
@@ -230,17 +265,38 @@ private extension WishlistView {
             }
         }
         .presentationDetents([.medium, .large])
+        .alert(
+            wardrobeDeleteAlertTitle(pendingDelete: wardrobePendingDelete, fallbackTitle: "Delete Wishlist?"),
+            isPresented: $showDeleteWardrobeConfirmation
+        ) {
+            Button("Delete", role: .destructive) {
+                if let wardrobe = wardrobePendingDelete {
+                    deleteWishlist(wardrobe)
+                }
+                wardrobePendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) {
+                wardrobePendingDelete = nil
+            }
+        } message: {
+            Text(
+                wardrobeDeleteConfirmationMessage(
+                    pendingDelete: wardrobePendingDelete,
+                    userWardrobesSameKind: userWishlists,
+                    fallbackDefaultDisplayName: "Wishlist"
+                )
+            )
+        }
     }
 
-    
     private func createNewWishlist(named name: String) -> Wardrobe? {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        
+        let normalized = WardrobeNaming.normalizedUserName(name)
+        guard !normalized.isEmpty else { return nil }
+
         let newWishlist = Wardrobe(context: viewContext)
         newWishlist.id = UUID()
         newWishlist.type = "wishlist"
-        newWishlist.name = trimmed
+        newWishlist.name = normalized
         
         // Set userId for sync
         if let userId = SupabaseService.shared.currentUser?.id.uuidString {
@@ -286,15 +342,15 @@ private extension WishlistView {
 
         // If the deleted wishlist was selected, reset to the default one
         if selectedWishlist == wishlist {
-            selectedWishlist = wishlists.first
+            selectedWishlist = WardrobeBootstrap.primaryWardrobe(in: userWishlists)
         }
     }
     
     private func updateWardrobeName(_ wardrobe: Wardrobe, to newName: String) {
-        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        
-        wardrobe.name = trimmed
+        let normalized = WardrobeNaming.normalizedUserName(newName)
+        guard !normalized.isEmpty else { return }
+
+        wardrobe.name = normalized
         
         // Set updatedAt for sync
         setUpdatedAt(wardrobe)

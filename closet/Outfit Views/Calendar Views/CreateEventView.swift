@@ -17,6 +17,11 @@ struct CreateEventView: View {
     
     let eventToEdit: Event?
     
+    /// Account that owns new calendar rows (matches `Event.userId` filtering elsewhere).
+    private var calendarAccountUserId: String? {
+        SupabaseService.shared.currentUser?.id.uuidString
+    }
+    
     @State private var eventName = ""
     @State private var eventLocation = ""
     
@@ -589,6 +594,7 @@ struct CreateEventView: View {
             let newEvent = eventToEdit ?? Event(context: viewContext)
             if eventToEdit == nil {
                 newEvent.id = UUID()
+                newEvent.userId = calendarAccountUserId
             }
             // Set initial values, will be updated on save
             newEvent.name = eventName.isEmpty ? nil : eventName
@@ -646,6 +652,11 @@ struct CreateEventView: View {
         }
         
         guard let event = tempEvent else { return }
+        
+        syncEventUserIdFromLinkedEntities(event)
+        if (event.userId == nil || (event.userId ?? "").isEmpty), let uid = calendarAccountUserId {
+            event.userId = uid
+        }
         
         // Set updatedAt if editing existing event
         if tempEvent?.id != nil {

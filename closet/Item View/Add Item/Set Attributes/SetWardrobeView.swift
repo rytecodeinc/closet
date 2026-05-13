@@ -89,6 +89,11 @@ struct SetWardrobeView: View {
             if let wardrobes = item.wardrobes as? Set<Wardrobe>, !wardrobes.isEmpty {
                 selectedWardrobes = wardrobes
             } else {
+                if let uid = currentUserId,
+                   let defaultType = defaultWardrobeType,
+                   let primary = try? WardrobeBootstrap.fetchPrimaryWardrobe(forType: defaultType, userIdString: uid, in: viewContext) {
+                    selectedWardrobes = [primary]
+                } else {
                 // If no wardrobes are selected, select the default wardrobe
                 // Fetch wardrobes filtered by default type
                 let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
@@ -122,6 +127,7 @@ struct SetWardrobeView: View {
                         selectedWardrobes = [firstWardrobe]
                     }
                 }
+                }
             }
         }
         .onDisappear {
@@ -140,7 +146,10 @@ struct SetWardrobeView: View {
         let hasDefaultWardrobe = selectedWardrobes.contains { $0.type?.lowercased() == defaultType.lowercased() }
         
         if !hasDefaultWardrobe {
-            // Fetch the default wardrobe
+            if let uid = item.userId ?? SupabaseService.shared.currentUser?.id.uuidString,
+               let defaultWardrobe = try? WardrobeBootstrap.fetchPrimaryWardrobe(forType: defaultType, userIdString: uid, in: viewContext) {
+                selectedWardrobes.insert(defaultWardrobe)
+            } else {
             let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
             request.predicate = NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", defaultType)
             request.sortDescriptors = [NSSortDescriptor(keyPath: \Wardrobe.createdAt, ascending: true)]
@@ -148,12 +157,18 @@ struct SetWardrobeView: View {
             if let defaultWardrobe = try? viewContext.fetch(request).first {
                 selectedWardrobes.insert(defaultWardrobe)
             }
+            }
         }
     }
     
     private func applyWardrobeSelectionToItem() {
         // Ensure at least one wardrobe is selected
         if selectedWardrobes.isEmpty {
+            if let uid = item.userId ?? SupabaseService.shared.currentUser?.id.uuidString,
+               let defaultType = defaultWardrobeType,
+               let primary = try? WardrobeBootstrap.fetchPrimaryWardrobe(forType: defaultType, userIdString: uid, in: viewContext) {
+                selectedWardrobes = [primary]
+            } else {
             // If somehow no wardrobes are selected, fetch and select the default one
             let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
             
@@ -186,21 +201,15 @@ struct SetWardrobeView: View {
                     return
                 }
             }
+            }
         }
         
         // Safety net: ensure the primary wardrobe of the correct type is always present.
         // This catches any case where the user somehow ended up with it deselected.
-        if let wardrobeType = selectedWardrobes.first?.type ?? (defaultWardrobeType) {
-            let primaryRequest: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
-            primaryRequest.predicate = NSPredicate(
-                format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)",
-                wardrobeType
-            )
-            primaryRequest.sortDescriptors = [NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)]
-            primaryRequest.fetchLimit = 1
-            if let primary = try? viewContext.fetch(primaryRequest).first {
-                selectedWardrobes.insert(primary)
-            }
+        if let wardrobeType = selectedWardrobes.first?.type ?? (defaultWardrobeType),
+           let uid = item.userId ?? SupabaseService.shared.currentUser?.id.uuidString,
+           let primary = try? WardrobeBootstrap.fetchPrimaryWardrobe(forType: wardrobeType, userIdString: uid, in: viewContext) {
+            selectedWardrobes.insert(primary)
         }
 
         // Remove all existing wardrobes

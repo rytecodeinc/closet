@@ -393,6 +393,81 @@ class CloudflareR2Service {
         print("✅ Outfit worn image deleted from R2: \(fileName)")
     }
 
+    /// Profile avatar uses exactly **one** object per user: `userId/profile/avatar.jpg`.
+    /// Each PUT replaces that object; there are no versioned paths. Persist the canonical CDN URL below.
+    func uploadProfileAvatar(imageData: Data, userId _: UUID) async throws -> String {
+        guard let session = supabaseService.currentSession else {
+            throw R2Error.notAuthenticated
+        }
+        guard let supabaseUserId = supabaseService.currentUser?.id else {
+            throw R2Error.notAuthenticated
+        }
+
+        let fileName = "\(supabaseUserId.uuidString)/profile/avatar.jpg"
+        let workerPutURL = URL(string: "\(CloudflareR2Config.workerURL)/\(fileName)")!
+        /// Single public URL for that key (same string on every replacement — only bytes change in R2).
+        let canonicalPublicURL = "\(CloudflareR2Config.customDomain)/\(fileName)"
+
+        var request = URLRequest(url: workerPutURL)
+        request.httpMethod = "PUT"
+        request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.httpBody = imageData
+
+        print("📤 Uploading profile avatar to R2 (replaces existing): \(fileName)")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw R2Error.invalidResponse
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            if let errorData = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let errorMessage = errorData["error"] as? String {
+                throw R2Error.uploadFailed(errorMessage)
+            }
+            throw R2Error.uploadFailed("HTTP \(httpResponse.statusCode)")
+        }
+
+        print("✅ Profile avatar replaced in R2: \(canonicalPublicURL)")
+        return canonicalPublicURL
+    }
+
+    func deleteProfileAvatar(userId _: UUID) async throws {
+        guard let session = supabaseService.currentSession else {
+            throw R2Error.notAuthenticated
+        }
+        guard let supabaseUserId = supabaseService.currentUser?.id else {
+            throw R2Error.notAuthenticated
+        }
+
+        let fileName = "\(supabaseUserId.uuidString)/profile/avatar.jpg"
+        let url = URL(string: "\(CloudflareR2Config.workerURL)/\(fileName)")!
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+
+        print("🗑️ Deleting profile avatar from R2: \(fileName)")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw R2Error.invalidResponse
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            if let errorData = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let errorMessage = errorData["error"] as? String {
+                throw R2Error.deleteFailed(errorMessage)
+            }
+            throw R2Error.deleteFailed("HTTP \(httpResponse.statusCode)")
+        }
+
+        print("✅ Profile avatar deleted from R2: \(fileName)")
+    }
+
     /// Gets the public URL for a photo (for display)
     /// - Parameters:
     ///   - itemId: The ID of the item this photo belongs to

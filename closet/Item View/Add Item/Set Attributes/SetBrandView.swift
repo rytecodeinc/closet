@@ -116,15 +116,34 @@ struct SetBrandView: View {
 
     // MARK: - Fetch Brands
     private func fetchBrands() {
-        // First, cleanup brands with 0 items
-        cleanupOrphanedBrands()
-        
+        if item.userId == nil || item.userId?.isEmpty == true {
+            cleanupOrphanedBrands()
+        }
+
         let request: NSFetchRequest<Brand> = Brand.fetchRequest()
-        request.predicate = NSPredicate(format: "isVisible == YES")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Brand.name, ascending: true)]
+
+        if let uid = item.userId, !uid.isEmpty {
+            let visible = NSPredicate(format: "isVisible == YES")
+            let owned = NSPredicate(format: "userId == %@", uid)
+            let usedByUser = NSPredicate(
+                format: "SUBQUERY(items, $i, $i.userId == %@ AND ($i.isSoftDeleted != YES OR $i.isSoftDeleted == nil)).@count > 0",
+                uid
+            )
+            let scope = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, usedByUser])
+            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [visible, scope])
+            do {
+                brands = try viewContext.fetch(request)
+            } catch {
+                print("❌ Failed to fetch brands: \(error)")
+                brands = []
+            }
+            return
+        }
+
+        request.predicate = NSPredicate(format: "isVisible == YES")
         do {
             let allBrands = try viewContext.fetch(request)
-            // Filter to only show brands that have at least one item
             brands = allBrands.filter { brand in
                 if let items = brand.items as? Set<Item> {
                     return !items.isEmpty
@@ -203,6 +222,7 @@ struct SetBrandView: View {
         newBrand.id = UUID()
         newBrand.name = trimmed
         newBrand.isVisible = true
+        newBrand.userId = item.userId
 
         item.brand = newBrand
         

@@ -129,17 +129,11 @@ final class BulkItemImportCoordinator: ObservableObject {
     private static func attachDefaultWardrobes(to item: Item, wardrobeObjectID: NSManagedObjectID, in context: NSManagedObjectContext) {
         guard let wardrobe = try? context.existingObject(with: wardrobeObjectID) as? Wardrobe else { return }
         item.addToWardrobes(wardrobe)
-        if let wardrobeType = wardrobe.type {
-            let primaryRequest: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
-            primaryRequest.predicate = NSPredicate(
-                format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)",
-                wardrobeType
-            )
-            primaryRequest.sortDescriptors = [NSSortDescriptor(keyPath: \Wardrobe.timestamp, ascending: true)]
-            primaryRequest.fetchLimit = 1
-            if let primary = try? context.fetch(primaryRequest).first {
-                item.addToWardrobes(primary)
-            }
+        if let wardrobeType = wardrobe.type,
+           let uid = item.userId ?? wardrobe.userId,
+           let primary = try? WardrobeBootstrap.fetchPrimaryWardrobe(forType: wardrobeType, userIdString: uid, in: context),
+           primary.objectID != wardrobe.objectID {
+            item.addToWardrobes(primary)
         }
     }
 }

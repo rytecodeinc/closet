@@ -11,12 +11,23 @@ import CoreData
 
 struct ClosetView: View {
     @Environment(\.managedObjectContext) private var viewContext
+    @EnvironmentObject private var supabaseService: SupabaseService
     @StateObject var filterModel = ItemFilterModel()
     
     @FetchRequest(
         sortDescriptors: [NSSortDescriptor(keyPath: \Wardrobe.createdAt, ascending: true)],
         predicate: NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", "closet")
-    ) private var closets: FetchedResults<Wardrobe>
+    ) private var allClosetsOfType: FetchedResults<Wardrobe>
+
+    private var currentUserId: String? {
+        supabaseService.currentUser?.id.uuidString
+    }
+
+    /// Closets belonging to the signed-in user only (same-store multi-account safe).
+    private var userClosets: [Wardrobe] {
+        guard let uid = currentUserId else { return [] }
+        return allClosetsOfType.filter { $0.userId == uid }
+    }
     
     @State private var selectedWardrobe: Wardrobe?
     @State private var showClosetSheet = false
@@ -26,22 +37,29 @@ struct ClosetView: View {
     @State private var editingName: String = ""
     @State private var showEditAlert = false
     @State private var isItemGridInSelectionMode = false
+    @State private var wardrobePendingDelete: Wardrobe?
+    @State private var showDeleteWardrobeConfirmation = false
     
     var body: some View {
       //  NavigationView {
             mainContent()
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { navigationBarToolbar() }
-                .onAppear { setInitialCloset() }
+                .onAppear {
+                    if let uid = supabaseService.currentUser?.id {
+                        try? WardrobeBootstrap.ensureDefaultWardrobes(for: uid, in: viewContext)
+                    }
+                    setInitialCloset()
+                }
                 .alert("New Wardrobe", isPresented: $isCreatingNewCloset) {
                     createClosetAlertButtons()
                 } message: {
-                    Text("Enter a name for your new closet")
+                    Text("Enter a name for your new closet (max \(WardrobeNaming.maxNameLength) characters)")
                 }
                 .alert("Edit Wardrobe", isPresented: $showEditAlert) {
                     editClosetAlertButtons()
                 } message: {
-                    Text("Enter a new name for this wardrobe")
+                    Text("Enter a new name for this wardrobe (max \(WardrobeNaming.maxNameLength) characters)")
                 }
                 .sheet(isPresented: $showClosetSheet) {
                     closetSelectionSheet()
@@ -113,11 +131,17 @@ private extension ClosetView {
     
     /// Ensure the default "Closet" (seeded) is always used first
     func setInitialCloset() {
+        guard currentUserId != nil else { return }
+
+        if let selected = selectedWardrobe,
+           !userClosets.contains(where: { $0.objectID == selected.objectID }) {
+            selectedWardrobe = nil
+        }
         if selectedWardrobe == nil {
-            if closets.isEmpty {
+            if userClosets.isEmpty {
                 isCreatingNewCloset = true   // force first-time creation
             } else {
-                selectedWardrobe = closets.first
+                selectedWardrobe = WardrobeBootstrap.primaryWardrobe(in: userClosets)
             }
         }
     }
@@ -126,6 +150,12 @@ private extension ClosetView {
     func createClosetAlertButtons() -> some View {
         Group {
             TextField("i.e. Vacation, Business Trip", text: $newClosetName)
+                .textInputAutocapitalization(.words)
+                .onChange(of: newClosetName) { _, new in
+                    if new.count > WardrobeNaming.maxNameLength {
+                        newClosetName = String(new.prefix(WardrobeNaming.maxNameLength))
+                    }
+                }
             Button("Create") {
                 if let newCloset = createNewCloset(named: newClosetName) {
                     selectedWardrobe = newCloset
@@ -139,6 +169,12 @@ private extension ClosetView {
     func editClosetAlertButtons() -> some View {
         Group {
             TextField("Wardrobe name", text: $editingName)
+                .textInputAutocapitalization(.words)
+                .onChange(of: editingName) { _, new in
+                    if new.count > WardrobeNaming.maxNameLength {
+                        editingName = String(new.prefix(WardrobeNaming.maxNameLength))
+                    }
+                }
             Button("Save") {
                 if let wardrobe = editingWardrobe {
                     updateWardrobeName(wardrobe, to: editingName)
@@ -157,7 +193,7 @@ private extension ClosetView {
     func closetSelectionSheet() -> some View {
         NavigationView {
             List {
-                ForEach(closets, id: \.self) { closet in
+                ForEach(userClosets, id: \.objectID) { closet in
                     ZStack(alignment: .trailing) {
                         Button {
                             selectedWardrobe = closet
@@ -171,8 +207,7 @@ private extension ClosetView {
                                         .foregroundColor(.blue)
                                 }
                                 
-                                // Add "Default" label next to the first closet
-                                if closet == closets.first {
+                                if closet.isDefault == true {
                                     Text("Default")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
@@ -192,8 +227,11 @@ private extension ClosetView {
                         
                         Button {
                             editingWardrobe = closet
-                            editingName = closet.name ?? ""
-                            showEditAlert = true
+                            editingName = WardrobeNaming.normalizedUserName(closet.name ?? "")
+                            showClosetSheet = false
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                                showEditAlert = true
+                            }
                         } label: {
                             Image(systemName: "pencil")
                                 .foregroundColor(.blue)
@@ -201,11 +239,12 @@ private extension ClosetView {
                         }
                         .buttonStyle(.plain)
                     }
-                    // Prevent swipe-to-delete on the first (default) closet
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        if closet != closets.first {
+                    // Prevent swipe-to-delete on the default closet
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        if closet.isDefault != true {
                             Button(role: .destructive) {
-                                deleteCloset(closet)
+                                wardrobePendingDelete = closet
+                                showDeleteWardrobeConfirmation = true
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
@@ -222,28 +261,49 @@ private extension ClosetView {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
                         newClosetName = ""
-                        isCreatingNewCloset = true
-                    } label: {
-                        HStack {
-                            Text("Add")
-                            Image(systemName: "plus")
+                        showClosetSheet = false
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                            isCreatingNewCloset = true
                         }
+                    } label: {
+                        Image(systemName: "plus")
                     }
                 }
             }
         }
         .presentationDetents([.medium, .large])
+        .alert(
+            wardrobeDeleteAlertTitle(pendingDelete: wardrobePendingDelete, fallbackTitle: "Delete Closet?"),
+            isPresented: $showDeleteWardrobeConfirmation
+        ) {
+            Button("Delete", role: .destructive) {
+                if let wardrobe = wardrobePendingDelete {
+                    deleteCloset(wardrobe)
+                }
+                wardrobePendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) {
+                wardrobePendingDelete = nil
+            }
+        } message: {
+            Text(
+                wardrobeDeleteConfirmationMessage(
+                    pendingDelete: wardrobePendingDelete,
+                    userWardrobesSameKind: userClosets,
+                    fallbackDefaultDisplayName: "Closet"
+                )
+            )
+        }
     }
 
-    
     private func createNewCloset(named name: String) -> Wardrobe? {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        
+        let normalized = WardrobeNaming.normalizedUserName(name)
+        guard !normalized.isEmpty else { return nil }
+
         let newCloset = Wardrobe(context: viewContext)
         newCloset.id = UUID()
         newCloset.type = "closet"
-        newCloset.name = trimmed
+        newCloset.name = normalized
         
         // Set userId for sync
         if let userId = SupabaseService.shared.currentUser?.id.uuidString {
@@ -286,7 +346,7 @@ private extension ClosetView {
         
         // Reset selectedCloset if the deleted one was selected (before save)
         if selectedWardrobe == closet {
-            selectedWardrobe = closets.first
+            selectedWardrobe = WardrobeBootstrap.primaryWardrobe(in: userClosets)
         }
         
         do {
@@ -302,10 +362,10 @@ private extension ClosetView {
     }
     
     private func updateWardrobeName(_ wardrobe: Wardrobe, to newName: String) {
-        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        
-        wardrobe.name = trimmed
+        let normalized = WardrobeNaming.normalizedUserName(newName)
+        guard !normalized.isEmpty else { return }
+
+        wardrobe.name = normalized
         
         // Set updatedAt for sync
         setUpdatedAt(wardrobe)

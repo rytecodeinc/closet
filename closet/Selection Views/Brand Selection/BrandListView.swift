@@ -12,6 +12,8 @@ import Foundation
 struct BrandListView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Binding var selectedBrand: Brand?
+    /// When set, only brands referenced by this user's items appear.
+    var userId: String? = nil
     
     @State private var brands: [Brand] = []
 
@@ -54,20 +56,36 @@ struct BrandListView: View {
     }
 
     private func fetchBrands() {
-        // First, cleanup brands with 0 items
-        cleanupOrphanedBrands()
+        // Avoid cross-user deletes when browsing filters scoped to one account.
+        if userId == nil {
+            cleanupOrphanedBrands()
+        }
         
         let request: NSFetchRequest<Brand> = Brand.fetchRequest()
-        request.predicate = NSPredicate(format: "isVisible == YES")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Brand.name, ascending: true)]
+        if let uid = userId {
+            let visible = NSPredicate(format: "isVisible == YES")
+            let owned = NSPredicate(format: "userId == %@", uid)
+            let usedByUser = NSPredicate(
+                format: "SUBQUERY(items, $i, $i.userId == %@ AND ($i.isSoftDeleted != YES OR $i.isSoftDeleted == nil)).@count > 0",
+                uid
+            )
+            let scope = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, usedByUser])
+            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [visible, scope])
+        } else {
+            request.predicate = NSPredicate(format: "isVisible == YES")
+        }
         do {
             let allBrands = try viewContext.fetch(request)
-            // Filter to only show brands that have at least one item
-            brands = allBrands.filter { brand in
-                if let items = brand.items as? Set<Item> {
-                    return !items.isEmpty
+            if userId != nil {
+                brands = allBrands
+            } else {
+                brands = allBrands.filter { brand in
+                    if let items = brand.items as? Set<Item> {
+                        return !items.isEmpty
+                    }
+                    return false
                 }
-                return false
             }
         } catch {
             print("❌ Failed to fetch brands: \(error.localizedDescription)")

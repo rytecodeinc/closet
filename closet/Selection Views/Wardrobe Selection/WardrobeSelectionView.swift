@@ -94,13 +94,17 @@ struct WardrobeSelectionView: View {
         let hasDefaultWardrobe = selectedWardrobes.contains { $0.type?.lowercased() == defaultType.lowercased() }
         
         if !hasDefaultWardrobe {
-            // Fetch the default wardrobe
+            if let uid = item.userId ?? SupabaseService.shared.currentUser?.id.uuidString,
+               let w = try? WardrobeBootstrap.fetchPrimaryWardrobe(forType: defaultType, userIdString: uid, in: viewContext) {
+                selectedWardrobes.insert(w)
+            } else {
             let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
             request.predicate = NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", defaultType)
             request.sortDescriptors = [NSSortDescriptor(keyPath: \Wardrobe.createdAt, ascending: true)]
             
             if let defaultWardrobe = try? viewContext.fetch(request).first {
                 selectedWardrobes.insert(defaultWardrobe)
+            }
             }
         }
     }

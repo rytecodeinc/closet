@@ -129,6 +129,7 @@ struct EventIndividualItemSelection: View {
                 event.addToItems(item)
             }
         }
+        syncEventUserIdFromLinkedEntities(event)
         
         // Only save context if event is already persisted (not a temporary/new event)
         if !event.objectID.isTemporaryID {

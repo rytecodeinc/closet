@@ -96,7 +96,7 @@ struct OutfitAddView: View {
         if let selected = selectedWardrobe, selected.type == targetWardrobeType {
             wardrobeToUse = selected
         } else {
-            wardrobeToUse = targetWardrobes.first
+            wardrobeToUse = WardrobeBootstrap.primaryWardrobe(in: targetWardrobes)
         }
         
         guard let wardrobe = wardrobeToUse else {
@@ -239,15 +239,10 @@ struct OutfitAddView: View {
             // Set default wardrobe to first wardrobe of appropriate type
             if selectedWardrobe == nil {
                 if wardrobeType == "wishlist" {
-                    // In wishlist mode, default to wishlist wardrobe
-                    if let firstWishlistWardrobe = allWardrobes.first(where: { $0.type == "wishlist" }) {
-                        selectedWardrobe = firstWishlistWardrobe
-                    }
+                    let wish = allWardrobes.filter { $0.type == "wishlist" }
+                    selectedWardrobe = WardrobeBootstrap.primaryWardrobe(in: wish)
                 } else {
-                    // In closet mode, default to closet wardrobe
-                    if let firstWardrobe = wardrobes.first {
-                        selectedWardrobe = firstWardrobe
-                    }
+                    selectedWardrobe = WardrobeBootstrap.primaryWardrobe(in: wardrobes)
                 }
             }
             loadOutfitIfEditing()
@@ -259,7 +254,7 @@ struct OutfitAddView: View {
         .onChange(of: wardrobes) { newWardrobes in
             // If the selected wardrobe is no longer in the list (e.g., deleted), reset to first
             if let current = selectedWardrobe, !newWardrobes.contains(current) {
-                selectedWardrobe = newWardrobes.first
+                selectedWardrobe = WardrobeBootstrap.primaryWardrobe(in: newWardrobes)
             }
         }
         .onChange(of: filterKey) { _ in
@@ -270,9 +265,7 @@ struct OutfitAddView: View {
             if wardrobeType == "wishlist" {
                 let targetType = itemTypeSegment == .wishlist ? "wishlist" : "closet"
                 let targetWardrobes = allWardrobes.filter { $0.type == targetType }
-                if let firstWardrobe = targetWardrobes.first {
-                    selectedWardrobe = firstWardrobe
-                }
+                selectedWardrobe = WardrobeBootstrap.primaryWardrobe(in: targetWardrobes)
             }
             fetchClosetItems()
         }

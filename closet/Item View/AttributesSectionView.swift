@@ -61,8 +61,8 @@ extension AttributesSectionView {
                 Spacer()
                 
                 if let wardrobes = item.wardrobes as? Set<Wardrobe>, !wardrobes.isEmpty {
-                    // Display names, e.g., "Closet • Capsule • Summer"
-                    let names = wardrobes.compactMap { $0.name }.sorted()
+                    // Dedupe by name: legacy + user-scoped rows can both be "Closet" (same label, distinct objects).
+                    let names = Array(Set(wardrobes.compactMap { $0.name }.filter { !$0.isEmpty })).sorted()
                     Text(names.prefix(2).joined(separator: ", "))
                         .foregroundColor(.gray)
                         .lineLimit(1)

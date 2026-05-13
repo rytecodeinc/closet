@@ -12,6 +12,8 @@ import Foundation
 struct SizeListView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Binding var selectedSizeValue: String?
+    /// When set, only sizes owned by or used by this user's items appear.
+    var userId: String? = nil
     
     @State private var sizeValues: [String] = []
 
@@ -58,6 +60,14 @@ struct SizeListView: View {
             NSSortDescriptor(keyPath: \Size.sortOrder, ascending: true),
             NSSortDescriptor(keyPath: \Size.value, ascending: true)
         ]
+        if let uid = userId {
+            let owned = NSPredicate(format: "userId == %@", uid)
+            let usedByUser = NSPredicate(
+                format: "SUBQUERY(items, $i, $i.userId == %@ AND ($i.isSoftDeleted != YES OR $i.isSoftDeleted == nil)).@count > 0",
+                uid
+            )
+            request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, usedByUser])
+        }
         do {
             let allSizes = try viewContext.fetch(request)
             // Get unique size values

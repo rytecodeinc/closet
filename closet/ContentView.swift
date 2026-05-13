@@ -92,6 +92,15 @@ struct ContentView: View {
                 Text("Profile")
             }
         }
+        .task(id: supabaseService.currentUser?.id) {
+            guard let userId = supabaseService.currentUser?.id else { return }
+            do {
+                try WardrobeBootstrap.ensureDefaultWardrobes(for: userId, in: viewContext)
+                try ReferenceDataBootstrap.ensureUserDefaults(for: userId, in: viewContext)
+            } catch {
+                print("⚠️ WardrobeBootstrap / ReferenceDataBootstrap: \(error.localizedDescription)")
+            }
+        }
         .onAppear {
                 print("-- ContentView appeared")
                 migrateItemImages(context: viewContext)
@@ -102,6 +111,8 @@ struct ContentView: View {
                 resolveSizeConstraintConflicts(context: viewContext)
                 migrateUserWeightFromUserDefaults(context: viewContext)
                 migrateTimestampToCreatedAt(context: viewContext)
+                migrateEventUserIdsFromRelationships(context: viewContext)
+                migrateWardrobeIsDefaultBackfill(context: viewContext)
                 
                 // Mark as appeared and check for pending navigation intent
                 hasAppeared = true
@@ -171,5 +182,7 @@ struct ContentView: View {
 #Preview {
     ContentView()
         .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
+        .environmentObject(DeepLinkRouter.shared)
+        .environmentObject(SupabaseService.shared)
         .environmentObject(BulkItemImportCoordinator())
 }

@@ -107,14 +107,22 @@ struct PairItemSelectionView: View {
     }
     
     private func fetchClosetItems() {
-        // Fetch the closet wardrobe
-        let wardrobeRequest: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
-        wardrobeRequest.predicate = NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", "closet")
+        let uid = item.userId ?? SupabaseService.shared.currentUser?.id.uuidString
+        if let uid, !uid.isEmpty,
+           let wardrobe = try? WardrobeBootstrap.fetchPrimaryWardrobe(forType: "closet", userIdString: uid, in: viewContext) {
+            selectedWardrobe = wardrobe
+        } else {
+            let wardrobeRequest: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
+            wardrobeRequest.predicate = NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", "closet")
+            do {
+                let wardrobes = try viewContext.fetch(wardrobeRequest)
+                selectedWardrobe = WardrobeBootstrap.primaryWardrobe(in: wardrobes)
+            } catch {
+                selectedWardrobe = nil
+            }
+        }
         
         do {
-            let wardrobes = try viewContext.fetch(wardrobeRequest)
-            selectedWardrobe = wardrobes.first
-            
             guard let wardrobe = selectedWardrobe else {
                 closetItems = []
                 return
@@ -126,11 +134,13 @@ struct PairItemSelectionView: View {
             
             let wardrobePredicate = NSPredicate(format: "ANY wardrobes == %@", wardrobe)
             let draftPredicate = NSPredicate(format: "isDraft != YES")
+            let notSoftDeletedPredicate = NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
             let notCurrentItemPredicate = NSPredicate(format: "SELF != %@", item)
             
             let finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
                 wardrobePredicate,
                 draftPredicate,
+                notSoftDeletedPredicate,
                 notCurrentItemPredicate
             ])
             

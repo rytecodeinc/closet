@@ -17,7 +17,7 @@ struct SetColorView: View {
 
     var body: some View {
         Section(header: SelectionHeader(title: "Select Color")) {
-            ColorListView(selectedColorNames: $selectedColorNames)
+            ColorListView(selectedColorNames: $selectedColorNames, userId: item.userId)
         }
         .onAppear {
             if let colors = item.colors as? Set<AppColor> {
@@ -74,7 +74,11 @@ struct SetColorView: View {
 
     private func fetchOrCreateColor(named name: String) -> AppColor {
         let fetchRequest: NSFetchRequest<AppColor> = AppColor.fetchRequest()
-        fetchRequest.predicate = NSPredicate(format: "name ==[c] %@", name)
+        if let uid = item.userId, !uid.isEmpty {
+            fetchRequest.predicate = NSPredicate(format: "name ==[c] %@ AND userId == %@", name, uid)
+        } else {
+            fetchRequest.predicate = NSPredicate(format: "name ==[c] %@", name)
+        }
         do {
             if let match = try viewContext.fetch(fetchRequest).first {
                 return match
@@ -88,6 +92,7 @@ struct SetColorView: View {
         newColor.id = UUID()
         newColor.name = name
         newColor.isVisible = true
+        newColor.userId = item.userId
         return newColor
     }
 }

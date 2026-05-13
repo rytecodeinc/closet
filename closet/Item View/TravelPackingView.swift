@@ -30,6 +30,11 @@ private struct PackingItemRef: Codable, Transferable {
     }
 }
 
+private enum PackMoveConfirmationTarget {
+    case unpacked
+    case storage(PackingStorageLocation)
+}
+
 struct TravelPackingView: View {
     var selectedWardrobe: Wardrobe
     var wardrobeType: String
@@ -48,17 +53,108 @@ struct TravelPackingView: View {
     @State private var itemToLocation: [UUID: UUID] = [:]
     @State private var showDeleteStorageLocationConfirmation = false
     @State private var storageLocationPendingDelete: PackingStorageLocation?
-    
+    @State private var isInSelectionMode = false
+    @State private var selectedItems: Set<Item> = []
+    @State private var showMoveToSectionSheet = false
+    /// When true, the next successful "New Storage Location" create (from Pack sheet +) assigns current selection to that location.
+    @State private var assignSelectedItemsToNewStorageAfterCreate = false
+    @State private var showPackMoveConfirmAlert = false
+    @State private var packMoveAlertIsUnpack = false
+    @State private var packMoveAlertStorageObjectID: NSManagedObjectID?
+    @State private var packMoveAlertItemCount = 0
+    @State private var collapsedStorageSectionIDs: Set<NSManagedObjectID> = []
+
     let gridColumns = [
         GridItem(.flexible(), spacing: 2),
         GridItem(.flexible(), spacing: 2),
         GridItem(.flexible(), spacing: 2)
     ]
-    
+
+    /// True when every selected item is already in Unpacked (no packing assignment).
+    private var selectedItemsAreAllUnpacked: Bool {
+        guard !selectedItems.isEmpty else { return true }
+        return selectedItems.allSatisfy { item in
+            guard let itemId = item.id else { return true }
+            return itemToLocation[itemId] == nil
+        }
+    }
+
+    /// Single storage section for this wardrobe, if exactly one exists.
+    private var soleStorageLocation: PackingStorageLocation? {
+        guard storageLocations.count == 1 else { return nil }
+        return storageLocations.first
+    }
+
+    /// Every selected item is already assigned to the only storage location (nowhere else to pack except Unpacked; Pack is hidden per product rule).
+    private var allSelectedPackedInSoleStorageLocation: Bool {
+        guard let only = soleStorageLocation, let onlyId = only.id else { return false }
+        guard !selectedItems.isEmpty else { return false }
+        return selectedItems.allSatisfy { item in
+            guard let itemId = item.id else { return false }
+            return itemToLocation[itemId] == onlyId
+        }
+    }
+
+    private var packToolbarButtonDisabled: Bool {
+        selectedItems.isEmpty || allSelectedPackedInSoleStorageLocation
+    }
+
+    /// Selected items are all already assigned to this storage location (cannot "move" to same section).
+    private func allSelectedItemsAlready(in location: PackingStorageLocation) -> Bool {
+        guard !selectedItems.isEmpty, let lid = location.id else { return false }
+        return selectedItems.allSatisfy { item in
+            guard let itemId = item.id else { return false }
+            return itemToLocation[itemId] == lid
+        }
+    }
+
+    private func requestPackMoveConfirmation(target: PackMoveConfirmationTarget) {
+        guard !selectedItems.isEmpty else { return }
+        packMoveAlertItemCount = selectedItems.count
+        switch target {
+        case .unpacked:
+            packMoveAlertIsUnpack = true
+            packMoveAlertStorageObjectID = nil
+        case .storage(let location):
+            packMoveAlertIsUnpack = false
+            packMoveAlertStorageObjectID = location.objectID
+        }
+        showPackMoveConfirmAlert = true
+    }
+
+    private var packMoveAlertConfirmButtonTitle: String {
+        packMoveAlertIsUnpack ? "Unpack" : "Pack"
+    }
+
+    private var packMoveAlertMessage: String {
+        let n = packMoveAlertItemCount
+        if packMoveAlertIsUnpack {
+            return n == 1 ? "Unpack 1 item?" : "Unpack \(n) items?"
+        }
+        guard let oid = packMoveAlertStorageObjectID,
+              let loc = try? viewContext.existingObject(with: oid) as? PackingStorageLocation else {
+            return n == 1 ? "Pack 1 item?" : "Pack \(n) items?"
+        }
+        let name = loc.name ?? "this section"
+        return n == 1
+            ? "Pack 1 item into \"\(name)\"?"
+            : "Pack \(n) items into \"\(name)\"?"
+    }
+
+    private func performPendingPackMove() {
+        if packMoveAlertIsUnpack {
+            moveSelectedItems(to: nil)
+        } else if let oid = packMoveAlertStorageObjectID,
+                  let loc = try? viewContext.existingObject(with: oid) as? PackingStorageLocation {
+            moveSelectedItems(to: loc)
+        }
+        showPackMoveConfirmAlert = false
+    }
+
     var body: some View {
         Group {
             if items.isEmpty {
-                EmptyItemStateView(wardrobe: selectedWardrobe, wardrobeType: wardrobeType)
+                EmptyItemStateView(wardrobe: selectedWardrobe)
             } else {
                 ScrollView(showsIndicators: false) {
                     ForEach(storageLocations, id: \.objectID) { location in
@@ -69,6 +165,7 @@ struct TravelPackingView: View {
                                 return true
                             }
                     }
+                    Divider()
                     unpackedSectionContent(items: itemsForLocation(nil))
                         .dropDestination(for: PackingItemRef.self) { refs, _ in
                             guard let ref = refs.first else { return false }
@@ -78,32 +175,88 @@ struct TravelPackingView: View {
                 }
             }
         }
-        .navigationTitle(selectedWardrobe.name ?? "Pack")
+        .navigationTitle(isInSelectionMode ? "" : (selectedWardrobe.name ?? "Pack"))
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(isInSelectionMode)
         .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button {
-                    newStorageLocationName = ""
-                    showAddStorageLocationAlert = true
-                } label: {
-                    Image(systemName: "plus")
+            ToolbarItemGroup(placement: .navigationBarLeading) {
+                if isInSelectionMode {
+                    packingSelectionModeLeadingToolbar()
+                }
+            }
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                if isInSelectionMode {
+                    let hasSelection = !selectedItems.isEmpty
+                    Button(hasSelection ? "Done" : "Cancel") {
+                        isInSelectionMode = false
+                        selectedItems.removeAll()
+                    }
+                } else {
+                    if !items.isEmpty {
+                        Button("Select") {
+                            collapsedStorageSectionIDs.removeAll()
+                            isInSelectionMode = true
+                        }
+                    }
+                    Button {
+                        assignSelectedItemsToNewStorageAfterCreate = false
+                        newStorageLocationName = ""
+                        showAddStorageLocationAlert = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                }
+            }
+            ToolbarItem(placement: .principal) {
+                if isInSelectionMode {
+                    Text("\(selectedItems.count) Selected")
+                        .font(.headline)
+                }
+            }
+            if isInSelectionMode {
+                ToolbarItemGroup(placement: .bottomBar) {
+                    Button {
+                        showMoveToSectionSheet = true
+                    } label: {
+                        VStack {
+                            Image(systemName: "suitcase")
+                            Text("Pack")
+                                .font(.caption)
+                        }
+                    }
+                    .disabled(packToolbarButtonDisabled)
+                    Button {
+                        requestPackMoveConfirmation(target: .unpacked)
+                    } label: {
+                        VStack {
+                            Image(systemName: "arrow.uturn.backward")
+                            Text("Unpack")
+                                .font(.caption)
+                        }
+                    }
+                    .disabled(selectedItems.isEmpty || selectedItemsAreAllUnpacked)
                 }
             }
         }
+        .toolbar(isInSelectionMode ? .hidden : .automatic, for: .tabBar)
         .alert("New Storage Location", isPresented: $showAddStorageLocationAlert) {
             TextField("i.e. Carry-on luggage, Handbag", text: $newStorageLocationName)
-            Button("Create") {
+            Button("Add") {
                 createStorageLocation(named: newStorageLocationName)
                 newStorageLocationName = ""
             }
             Button("Cancel", role: .cancel) {
                 newStorageLocationName = ""
+                assignSelectedItemsToNewStorageAfterCreate = false
             }
         } message: {
             Text("Enter a name for the storage container")
         }
         .sheet(isPresented: $showRenameStorageLocationSheet) {
             renameStorageLocationSheet()
+        }
+        .sheet(isPresented: $showMoveToSectionSheet) {
+            moveToSectionSheet()
         }
         .alert("Delete Section?", isPresented: $showDeleteStorageLocationConfirmation) {
             Button("Cancel", role: .cancel) {
@@ -118,12 +271,23 @@ struct TravelPackingView: View {
         } message: {
             Text("Deleting this section will move all items in it to Unpacked.")
         }
+        .alert("Confirm", isPresented: $showPackMoveConfirmAlert) {
+            Button("Cancel", role: .cancel) {
+                showPackMoveConfirmAlert = false
+            }
+            Button(packMoveAlertConfirmButtonTitle) {
+                performPendingPackMove()
+            }
+        } message: {
+            Text(packMoveAlertMessage)
+        }
         .onAppear {
             fetchItems()
             fetchStorageLocations()
             fetchPackingAssignments()
         }
         .onChange(of: selectedWardrobe.objectID) {
+            collapsedStorageSectionIDs.removeAll()
             fetchItems()
             fetchStorageLocations()
             fetchPackingAssignments()
@@ -158,17 +322,42 @@ struct TravelPackingView: View {
 
     @ViewBuilder
     private func sectionContent(location: PackingStorageLocation, items sectionItems: [Item]) -> some View {
+        let expanded = !collapsedStorageSectionIDs.contains(location.objectID)
         Section {
-            LazyVGrid(columns: gridColumns, spacing: 2) {
-                ForEach(sectionItems, id: \.objectID) { item in
-                    packingItemView(item)
+            Group {
+                if expanded {
+                    LazyVGrid(columns: gridColumns, spacing: 2) {
+                        ForEach(sectionItems, id: \.objectID) { item in
+                            packingItemView(item)
+                        }
+                    }
+                    .frame(minHeight: sectionItems.isEmpty ? 80 : nil)
+                    .contentShape(Rectangle())
+                    .transition(
+                        .asymmetric(
+                            insertion: .move(edge: .bottom).combined(with: .opacity),
+                            removal: .move(edge: .top).combined(with: .opacity)
+                        )
+                    )
+                } else {
+                    Color.clear
+                        .frame(minHeight: 1)
+                        .contentShape(Rectangle())
                 }
             }
-            .padding(.top, 2)
-            .frame(minHeight: sectionItems.isEmpty ? 80 : nil)
-            .contentShape(Rectangle())
         } header: {
-            storageSectionHeader(location: location, count: sectionItems.count)
+            storageSectionHeader(location: location, sectionItems: sectionItems, isExpanded: expanded)
+        }
+    }
+
+    private func toggleStorageSectionExpansion(_ location: PackingStorageLocation) {
+        let id = location.objectID
+        withAnimation(.easeInOut(duration: 0.28)) {
+            if collapsedStorageSectionIDs.contains(id) {
+                collapsedStorageSectionIDs.remove(id)
+            } else {
+                collapsedStorageSectionIDs.insert(id)
+            }
         }
     }
 
@@ -180,50 +369,158 @@ struct TravelPackingView: View {
                     packingItemView(item)
                 }
             }
-            .padding(.top, 2)
             .frame(minHeight: sectionItems.isEmpty ? 80 : nil)
             .contentShape(Rectangle())
         } header: {
-            sectionHeader("Unpacked", count: sectionItems.count)
+            sectionHeader(title: "Unpacked", sectionItems: sectionItems)
         }
     }
 
     @ViewBuilder
     private func packingItemView(_ item: Item) -> some View {
-        let itemView = ItemView(item: item)
+        if !isInSelectionMode, let itemId = item.id {
+            packingItemCell(item)
+                .draggable(PackingItemRef(itemId: itemId))
+        } else {
+            packingItemCell(item)
+        }
+    }
+
+    private func packingItemCell(_ item: Item) -> some View {
+        ItemView(item: item)
+            .overlay(
+                Group {
+                    if isInSelectionMode && selectedItems.contains(item) {
+                        Rectangle()
+                            .fill(Color.white.opacity(0.35))
+                    }
+                }
+            )
+            .overlay(
+                Group {
+                    if isInSelectionMode && selectedItems.contains(item) {
+                        VStack {
+                            Spacer()
+                            HStack {
+                                Spacer()
+                                Image(systemName: "checkmark.circle")
+                                    .foregroundColor(.white)
+                                    .background(
+                                        Circle()
+                                            .fill(Color.blue)
+                                            .padding(2)
+                                    )
+                                    .font(.system(size: 22))
+                                    .shadow(radius: 1)
+                                    .padding(8)
+                            }
+                        }
+                    }
+                }
+            )
             .contentShape(Rectangle())
             .onTapGesture {
-                selectedItemForNavigation = item
+                handlePackingItemTap(item)
             }
-        if let itemId = item.id {
-            itemView.draggable(PackingItemRef(itemId: itemId))
+    }
+
+    private func handlePackingItemTap(_ item: Item) {
+        if isInSelectionMode {
+            if selectedItems.contains(item) {
+                selectedItems.remove(item)
+            } else {
+                selectedItems.insert(item)
+            }
+            if selectedItems.isEmpty {
+                isInSelectionMode = false
+            }
         } else {
-            itemView
+            selectedItemForNavigation = item
         }
     }
 
     @ViewBuilder
-    private func sectionHeader(_ title: String, count: Int) -> some View {
-        Text("\(title) (\(count))")
-            .font(.headline)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal)
-            .padding(.top, 8)
-            .padding(.bottom, 4)
+    private func packingSelectionModeLeadingToolbar() -> some View {
+        let allSelected = !items.isEmpty && selectedItems.count == items.count
+        Button {
+            if allSelected {
+                selectedItems.removeAll()
+                isInSelectionMode = false
+            } else {
+                selectedItems = Set(items)
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: allSelected ? "checkmark.circle.fill" : "circle")
+                Text("All")
+            }
+        }
     }
 
     @ViewBuilder
-    private func storageSectionHeader(location: PackingStorageLocation, count: Int) -> some View {
-        let title = location.name ?? "Untitled"
+    private func sectionSelectionSelectAllControl(sectionItems: [Item]) -> some View {
+        if isInSelectionMode {
+            let sectionSet = Set(sectionItems)
+            let allSelected = !sectionItems.isEmpty && sectionItems.allSatisfy { selectedItems.contains($0) }
+            Button {
+                if allSelected {
+                    selectedItems.subtract(sectionSet)
+                    if selectedItems.isEmpty {
+                        isInSelectionMode = false
+                    }
+                } else {
+                    selectedItems.formUnion(sectionSet)
+                }
+            } label: {
+                Image(systemName: allSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundColor(allSelected ? .blue : .secondary)
+            }
+            .buttonStyle(.plain)
+            .disabled(sectionItems.isEmpty)
+            .contentShape(Rectangle())
+        }
+    }
+
+    @ViewBuilder
+    private func sectionHeader(title: String, sectionItems: [Item]) -> some View {
         HStack(alignment: .center, spacing: 8) {
-            Text("\(title) (\(count))")
+            sectionSelectionSelectAllControl(sectionItems: sectionItems)
+            Text("\(title) (\(sectionItems.count))")
                 .font(.headline)
                 .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal)
+    }
+
+    @ViewBuilder
+    private func storageSectionHeader(location: PackingStorageLocation, sectionItems: [Item], isExpanded: Bool) -> some View {
+        let title = location.name ?? "Untitled"
+        HStack(alignment: .center, spacing: 8) {
+            sectionSelectionSelectAllControl(sectionItems: sectionItems)
+            Button {
+                toggleStorageSectionExpansion(location)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.secondary)
+                    Text("\(title) (\(sectionItems.count))")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                        .multilineTextAlignment(.leading)
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isInSelectionMode)
             Menu {
                 Button {
                     unpackAllItems(in: location)
                 } label: {
-                    Label("Unpack All Items", systemImage: "arrow.uturn.up")
+                    Label("Unpack All Items", systemImage: "arrow.uturn.backward")
                 }
                 Button {
                     editingStorageLocation = location
@@ -243,12 +540,13 @@ struct TravelPackingView: View {
                 Image(systemName: "ellipsis")
                     .font(.body.weight(.medium))
                     .foregroundColor(.blue)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .disabled(isInSelectionMode)
         }
         .padding(.horizontal)
-        .padding(.top, 8)
-        .padding(.bottom, 4)
     }
 
     @ViewBuilder
@@ -310,6 +608,67 @@ struct TravelPackingView: View {
         renameStorageLocationError = ""
     }
 
+    @ViewBuilder
+    private func packSheetHeaderBar() -> some View {
+        ZStack {
+            Text("Pack")
+                .font(.headline)
+                .foregroundColor(.black)
+                .frame(maxWidth: .infinity)
+                .padding(.top)
+                .padding(.bottom)
+            HStack {
+                Spacer()
+                Button {
+                    assignSelectedItemsToNewStorageAfterCreate = !selectedItems.isEmpty
+                    newStorageLocationName = ""
+                    showAddStorageLocationAlert = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.body.weight(.medium))
+                        .foregroundColor(.blue)
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 16)
+            }
+        }
+        .background(Color(UIColor.secondarySystemBackground))
+    }
+
+    @ViewBuilder
+    private func moveToSectionSheet() -> some View {
+        VStack(spacing: 0) {
+            packSheetHeaderBar()
+            List {
+                ForEach(storageLocations, id: \.objectID) { location in
+                    Button {
+                        requestPackMoveConfirmation(target: .storage(location))
+                    } label: {
+                        Text(location.name ?? "Untitled")
+                    }
+                    .disabled(selectedItems.isEmpty || allSelectedItemsAlready(in: location))
+                }
+            }
+            .listStyle(.plain)
+        }
+        .presentationDetents([.medium])
+    }
+
+    private func moveSelectedItems(to destination: PackingStorageLocation?) {
+        let targets = Array(selectedItems)
+        for item in targets {
+            guard let itemId = item.id else { continue }
+            if let location = destination {
+                assignItem(itemId, to: location)
+            } else {
+                unassignItem(itemId)
+            }
+        }
+        selectedItems.removeAll()
+        isInSelectionMode = false
+        showMoveToSectionSheet = false
+    }
+
     private func deleteStorageLocation(_ location: PackingStorageLocation) {
         guard location.wardrobe == selectedWardrobe else { return }
         if let id = location.id {
@@ -344,7 +703,10 @@ struct TravelPackingView: View {
     
     private func createStorageLocation(named name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty else {
+            assignSelectedItemsToNewStorageAfterCreate = false
+            return
+        }
 
         let location = PackingStorageLocation(context: viewContext)
         location.id = UUID()
@@ -358,7 +720,22 @@ struct TravelPackingView: View {
         do {
             try viewContext.save()
             fetchStorageLocations()
+
+            let shouldAssignSelection = assignSelectedItemsToNewStorageAfterCreate
+            assignSelectedItemsToNewStorageAfterCreate = false
+
+            if shouldAssignSelection {
+                let targets = Array(selectedItems)
+                for item in targets {
+                    guard let itemId = item.id else { continue }
+                    assignItem(itemId, to: location)
+                }
+                selectedItems.removeAll()
+                isInSelectionMode = false
+                showMoveToSectionSheet = false
+            }
         } catch {
+            assignSelectedItemsToNewStorageAfterCreate = false
             print("❌ TravelPackingView failed to create storage location: \(error)")
         }
     }

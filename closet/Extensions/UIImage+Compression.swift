@@ -156,5 +156,19 @@ extension UIImage {
         }
         return working.jpegData(compressionQuality: 0.35)
     }
+
+    /// Square center-crop, then composite on white so the result is opaque JPEG-friendly (matches R2 worker `Content-Type: image/jpeg` for `avatar.jpg`).
+    func profileAvatarImageForUpload(side: CGFloat = 1024) -> UIImage {
+        let cropped = squareAspectFillCenterCropped(side: side)
+        let format = UIGraphicsImageRendererFormat()
+        format.opaque = true
+        format.scale = cropped.scale
+        let renderer = UIGraphicsImageRenderer(size: cropped.size, format: format)
+        return renderer.image { _ in
+            UIColor.white.setFill()
+            UIBezierPath(rect: CGRect(origin: .zero, size: cropped.size)).fill()
+            cropped.draw(at: .zero)
+        }
+    }
 }
 

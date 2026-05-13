@@ -24,6 +24,7 @@ struct closetApp: App {
     @StateObject private var syncService = SyncService.shared
     @StateObject private var networkMonitor = NetworkMonitor.shared
     @StateObject private var bulkItemImportCoordinator = BulkItemImportCoordinator()
+    @Environment(\.scenePhase) private var scenePhase
     
     init() {
         _ = Self.didPrint
@@ -35,7 +36,13 @@ struct closetApp: App {
     
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            Group {
+                if supabaseService.isAuthenticated {
+                    ContentView()
+                } else {
+                    AuthView()
+                }
+            }
                 .environment(\.managedObjectContext, persistenceController.container.viewContext)
                 .environmentObject(deepLinkRouter)
                 .environmentObject(userService)
@@ -43,6 +50,12 @@ struct closetApp: App {
                 .environmentObject(syncService)
                 .environmentObject(networkMonitor)
                 .environmentObject(bulkItemImportCoordinator)
+                .onChange(of: scenePhase) { phase in
+                    // On foreground/activation, purge any tombstones that have already been deleted in Supabase.
+                    if phase == .active {
+                        syncService.schedulePurgeLocalTombstones(delayNanoseconds: 1_200_000_000)
+                    }
+                }
                 .onChange(of: networkMonitor.isConnected) { isConnected in
                     // Auto-sync when connection is restored (if user is authenticated)
                     if isConnected && supabaseService.isAuthenticated {

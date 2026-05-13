@@ -11,6 +11,8 @@ import CoreData
 struct OutfitCategoryFilterListView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Binding var selectedCategory: String?
+    /// Only outfit categories used by this user's outfits.
+    var userId: String? = nil
     
     @State private var categories: [String] = []
 
@@ -55,10 +57,12 @@ struct OutfitCategoryFilterListView: View {
     private func fetchCategories() {
         let request: NSFetchRequest<Outfit> = Outfit.fetchRequest()
         request.propertiesToFetch = ["category"]
-        
+        if let uid = userId {
+            request.predicate = NSPredicate(format: "userId == %@", uid)
+        }
+
         do {
             let allOutfits = try viewContext.fetch(request)
-            // Get unique, non-empty categories
             let allCategories = allOutfits.compactMap { $0.category }.filter { !$0.isEmpty }
             categories = Array(Set(allCategories)).sorted()
         } catch {

@@ -12,6 +12,7 @@ import UIKit
 
 struct OutfitCalendarView: View {
     @Environment(\.managedObjectContext) private var viewContext
+    @EnvironmentObject private var supabaseService: SupabaseService
     @State private var events: [Event] = []
 
     @State private var selectedDate: Date? = nil
@@ -118,13 +119,16 @@ struct OutfitCalendarView: View {
                 
             }
         }
-        .onAppear { fetchEvents() }
+        .task(id: supabaseService.currentUser?.id) {
+            fetchEvents()
+        }
         .sheet(isPresented: $showingEventDrawer) {
             Group {
                 if let selectedDate = selectedDate {
                     NavigationView {
                         EventDrawerView(
                             selectedDate: selectedDate,
+                            ownerUserId: supabaseService.currentUser?.id.uuidString,
                             onDismiss: {
                                 showingEventDrawer = false
                                 self.selectedDate = nil
@@ -357,6 +361,18 @@ struct OutfitCalendarView: View {
     private func fetchEvents() {
         let request = NSFetchRequest<Event>(entityName: "Event")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Event.createdAt, ascending: false)]
+        let notDeleted = NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
+        if let uid = supabaseService.currentUser?.id.uuidString {
+            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+                NSPredicate(format: "userId == %@", uid),
+                notDeleted,
+            ])
+        } else {
+            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+                NSPredicate(value: false),
+                notDeleted,
+            ])
+        }
         do {
             let results = try viewContext.fetch(request)
             DispatchQueue.main.async { self.events = results }

@@ -32,6 +32,7 @@ class ItemFilterModel: ObservableObject {
     @Published var maxPrice: Decimal?
     @Published var selectedTags: Set<Tag> = []
     @Published var filterByWeight: Bool = false
+    @Published var favoritesOnly: Bool = false
     @Published var sortOrder: ItemSortOrder = .newestFirst
 
     func clearAll() {
@@ -47,6 +48,7 @@ class ItemFilterModel: ObservableObject {
         maxPrice = nil
         selectedTags.removeAll()
         filterByWeight = false
+        favoritesOnly = false
     }
 }
 

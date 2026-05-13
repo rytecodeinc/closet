@@ -18,7 +18,7 @@ struct SeasonSelectionView: View {
 
     var body: some View {
         Section(header: SelectionHeader(title: "Select Season")) {
-            SeasonListView(selectedSeasonNames: $selectedSeasonNames)
+            SeasonListView(selectedSeasonNames: $selectedSeasonNames, userId: item.userId)
         }
         .onAppear {
             if let seasons = item.seasons as? Set<Season> {
@@ -52,7 +52,11 @@ struct SeasonSelectionView: View {
 
     private func fetchOrCreateSeason(named name: String) -> Season {
         let request: NSFetchRequest<Season> = Season.fetchRequest()
-        request.predicate = NSPredicate(format: "name ==[c] %@", name)
+        if let uid = item.userId, !uid.isEmpty {
+            request.predicate = NSPredicate(format: "name ==[c] %@ AND userId == %@", name, uid)
+        } else {
+            request.predicate = NSPredicate(format: "name ==[c] %@", name)
+        }
         do {
             if let match = try viewContext.fetch(request).first {
                 return match
@@ -64,6 +68,8 @@ struct SeasonSelectionView: View {
         let newSeason = Season(context: viewContext)
         newSeason.name = name
         newSeason.id = UUID()
+        newSeason.isVisible = true
+        newSeason.userId = item.userId
         return newSeason
     }
 }

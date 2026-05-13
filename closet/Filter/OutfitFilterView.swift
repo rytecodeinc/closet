@@ -13,12 +13,28 @@ struct OutfitFilterView: View {
     @ObservedObject var filterModel: OutfitFilterModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var viewContext
+    @EnvironmentObject private var supabaseService: SupabaseService
+
+    private var currentUserId: String? {
+        supabaseService.currentUser?.id.uuidString
+    }
 
     var body: some View {
         NavigationStack {
             List {
+                // Sort row
+                Picker("Sort", selection: $filterModel.sortOrder) {
+                    ForEach(ItemSortOrder.allCases, id: \.self) { order in
+                        Text(order.rawValue).tag(order)
+                    }
+                }
+                .pickerStyle(.menu)
+                
+                // Favorites-only filter (matches ItemFilterView)
+                Toggle("Favorites", isOn: $filterModel.favoritesOnly)
+                
                 // Category filter
-                NavigationLink(destination: OutfitCategoryFilterListView(selectedCategory: $filterModel.selectedCategory)) {
+                NavigationLink(destination: OutfitCategoryFilterListView(selectedCategory: $filterModel.selectedCategory, userId: currentUserId)) {
                     HStack {
                         Text("Category")
                         Spacer()
@@ -31,7 +47,7 @@ struct OutfitFilterView: View {
                 }
                 
                 // Tag filter (nil = show all tags, since outfits can use tags from items and outfits)
-                NavigationLink(destination: TagListView(selectedTags: $filterModel.selectedTags, wardrobeType: nil)) {
+                NavigationLink(destination: TagListView(selectedTags: $filterModel.selectedTags, wardrobeType: nil, userId: currentUserId)) {
                     HStack {
                         Text("Tags")
                         Spacer()

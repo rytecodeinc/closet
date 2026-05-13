@@ -15,6 +15,8 @@ struct TagListView: View {
     @Binding var selectedTags: Set<Tag>
     /// When "wishlist", only tags from wishlist items. When "closet", only from closet items. When nil (e.g. outfit filter), all tags.
     var wardrobeType: String? = "closet"
+    /// When set, tags are limited to those used by this user's items/outfits.
+    var userId: String? = nil
 
     @State private var tags: [Tag] = []
 
@@ -64,10 +66,43 @@ struct TagListView: View {
 
     private func fetchTags() {
         let request: NSFetchRequest<Tag> = Tag.fetchRequest()
-        if let type = wardrobeType {
-            request.predicate = NSPredicate(format: "SUBQUERY(items, $i, ANY $i.wardrobes.type == %@).@count > 0", type)
-        }
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Tag.name, ascending: true)]
+
+        guard let uid = userId else {
+            if let type = wardrobeType {
+                request.predicate = NSPredicate(format: "SUBQUERY(items, $i, ANY $i.wardrobes.type == %@).@count > 0", type)
+            }
+            do {
+                tags = try viewContext.fetch(request)
+            } catch {
+                print("❌ Failed to fetch tags: \(error.localizedDescription)")
+                tags = []
+            }
+            return
+        }
+
+        let owned = NSPredicate(format: "userId == %@", uid)
+
+        if let type = wardrobeType {
+            let fromWardrobe = NSPredicate(
+                format: "SUBQUERY(items, $i, ANY $i.wardrobes.type == %@ AND $i.userId == %@ AND ($i.isSoftDeleted != YES OR $i.isSoftDeleted == nil)).@count > 0",
+                type,
+                uid
+            )
+            request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, fromWardrobe])
+        } else {
+            let fromItems = NSPredicate(
+                format: "SUBQUERY(items, $i, $i.userId == %@ AND ($i.isSoftDeleted != YES OR $i.isSoftDeleted == nil)).@count > 0",
+                uid
+            )
+            let fromOutfits = NSPredicate(
+                format: "SUBQUERY(outfits, $o, $o.userId == %@ AND ($o.isSoftDeleted != YES OR $o.isSoftDeleted == nil)).@count > 0",
+                uid
+            )
+            let used = NSCompoundPredicate(orPredicateWithSubpredicates: [fromItems, fromOutfits])
+            request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, used])
+        }
+
         do {
             tags = try viewContext.fetch(request)
         } catch {

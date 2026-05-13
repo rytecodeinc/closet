@@ -112,6 +112,14 @@ struct SetLocationView: View {
     private func fetchLocations() {
         let request: NSFetchRequest<Location> = Location.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Location.name, ascending: true)]
+        if let uid = item.userId, !uid.isEmpty {
+            let owned = NSPredicate(format: "userId == %@", uid)
+            let usedByUser = NSPredicate(
+                format: "SUBQUERY(item, $i, $i.userId == %@ AND ($i.isSoftDeleted != YES OR $i.isSoftDeleted == nil)).@count > 0",
+                uid
+            )
+            request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, usedByUser])
+        }
         do {
             locations = try viewContext.fetch(request)
         } catch {
@@ -154,6 +162,7 @@ struct SetLocationView: View {
         let newLocation = Location(context: viewContext)
         newLocation.id = UUID()
         newLocation.name = trimmed
+        newLocation.userId = item.userId
 
         item.location = newLocation
         

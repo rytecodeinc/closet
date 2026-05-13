@@ -14,6 +14,15 @@ struct ProfileView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject var supabaseService: SupabaseService
     
+    /// All active wardrobes; scoped to the signed-in user via computed properties (FetchRequest cannot use dynamic `userId`).
+    @FetchRequest(
+        sortDescriptors: [NSSortDescriptor(keyPath: \Wardrobe.createdAt, ascending: true)],
+        predicate: NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
+    ) private var allActiveWardrobes: FetchedResults<Wardrobe>
+    
+    /// Matches `ItemGridView` tab pattern: segmented control + paged `TabView` for swiping.
+    @State private var selectedProfileWardrobeTab: String = "Closet"
+    
     @FetchRequest(
         entity: Item.entity(),
         sortDescriptors: []
@@ -30,12 +39,26 @@ struct ProfileView: View {
     @State private var isLoadingNotifications = false
     @State private var notificationsError: String?
     @State private var respondingNotificationIds: Set<UUID> = []
-    @State private var friendCount: Int = 0
     @State private var isFriendsSheetPresented = false
     @State private var friends: [PublicUserProfile] = []
     @State private var isLoadingFriends = false
     @State private var friendsError: String?
     
+    @State private var isProfilePhotoActionDialogPresented = false
+    @State private var isProfileLibraryPickerPresented = false
+    @State private var profilePickerImage: UIImage?
+    @State private var profileImagePickerSource: UIImagePickerController.SourceType = .photoLibrary
+    @State private var isAvatarUploading = false
+    @State private var avatarUploadError: String?
+    /// Prevents `getUsername` + `refreshAllObjects` on every navigation back (was reloading the avatar / AsyncImage).
+    @State private var didBootstrapProfileFromServerForUserId: String?
+
+    @State private var isEditingDisplayName = false
+    @State private var editedDisplayName: String = ""
+    @State private var isSavingDisplayName = false
+    @State private var errorMessage: String?
+    @State private var refreshToken = UUID()
+
     // Filter user profiles by current user (if authenticated)
     private var userProfiles: [UserProfile] {
         guard let userId = supabaseService.currentUser?.id.uuidString else {
@@ -48,20 +71,38 @@ struct ProfileView: View {
     private var userProfile: UserProfile? {
         userProfiles.first
     }
+
+    private var currentUserId: String? {
+        supabaseService.currentUser?.id.uuidString
+    }
+
+    private var userClosets: [Wardrobe] {
+        guard let uid = currentUserId else { return [] }
+        return allActiveWardrobes.filter { wardrobe in
+            (wardrobe.type ?? "").lowercased() == "closet" && wardrobe.userId == uid
+        }
+    }
+
+    private var userWishlists: [Wardrobe] {
+        guard let uid = currentUserId else { return [] }
+        return allActiveWardrobes.filter { wardrobe in
+            (wardrobe.type ?? "").lowercased() == "wishlist" && wardrobe.userId == uid
+        }
+    }
     
     // MARK: - Helper Functions
     
     private func itemsForWardrobeType(_ wardrobeType: String) -> [Item] {
-        // Filter items that belong to wardrobes of the specified type, excluding drafts
-        // Use a dictionary keyed by item ID to ensure each item is only counted once
+        // Same baseline inclusion as ItemGridView.fetchItems (no attribute filters): userId, not draft, not soft-deleted, wardrobe type match.
         var uniqueItems: [UUID: Item] = [:]
-        
+        guard let uid = currentUserId else { return [] }
+
         for item in allItems {
-            // Skip drafts
-            guard !item.isDraft else { continue }
-            
+            guard item.userId == uid else { continue }
+            guard itemIncludedLikeItemGrid(item) else { continue }
+
             guard let wardrobes = item.wardrobes as? Set<Wardrobe>,
-                  wardrobes.contains(where: { $0.type == wardrobeType }) else {
+                  wardrobes.contains(where: { ($0.type ?? "").lowercased() == wardrobeType.lowercased() }) else {
                 continue
             }
             
@@ -125,140 +166,279 @@ struct ProfileView: View {
         userProfile?.username
     }
     
-    private var displayName: String? {
+    private var currentDisplayName: String? {
         userProfile?.displayName
     }
+
+    /// Header avatar uses the same remote URL + initials pattern as friend lists.
+    private var profileForAvatar: PublicUserProfile? {
+        guard let uid = supabaseService.currentUser?.id else { return nil }
+        return PublicUserProfile(
+            userId: uid,
+            username: username ?? supabaseService.cachedUsername ?? "",
+            displayName: currentDisplayName,
+            avatarUrl: userProfile?.storedProfileAvatarURL
+        )
+    }
+
+    /// Stable identity for forcing image reload when avatar bytes change at the same URL (single R2 key).
+    private var avatarHeaderViewIdentity: String {
+        let url = userProfile?.storedProfileAvatarURL ?? ""
+        let t = userProfile?.updatedAt?.timeIntervalSinceReferenceDate ?? 0
+        return "\(url)#\(t)"
+    }
     
-    private var friendsCount: Int { friendCount }
+    private var friendsCount: Int { supabaseService.cachedFriendCount ?? 0 }
     
     private var unreadNotificationsCount: Int {
         notifications.filter { !$0.is_read }.count
     }
+    
+    /// Items linked to this wardrobe that ItemGridView would show with no extra filters (userId, not draft, not soft-deleted).
+    private func nonDraftItemCount(for wardrobe: Wardrobe) -> Int {
+        guard let uid = currentUserId else { return 0 }
+        guard let set = wardrobe.items as? Set<Item> else { return 0 }
+        return set.filter { item in
+            item.userId == uid && itemIncludedLikeItemGrid(item)
+        }.count
+    }
+
+    /// Mirrors ItemGridView base predicates: `isDraft != YES`, `isSoftDeleted != YES OR nil`.
+    private func itemIncludedLikeItemGrid(_ item: Item) -> Bool {
+        if item.value(forKey: "isDraft") as? Bool == true { return false }
+        if item.value(forKey: "isSoftDeleted") as? Bool == true { return false }
+        return true
+    }
+    
+    private func wardrobeTypeLabel(for wardrobe: Wardrobe) -> String {
+        switch wardrobe.type?.lowercased() {
+        case "wishlist": return "Wishlist"
+        default: return "Closet"
+        }
+    }
+    
+    private func wardrobeSubtitle(for wardrobe: Wardrobe) -> String {
+        let type = wardrobeTypeLabel(for: wardrobe)
+        let n = nonDraftItemCount(for: wardrobe)
+        let countPart = n == 1 ? "1 item" : "\(n) items"
+        return "\(type) · \(countPart)"
+    }
+    
+    @ViewBuilder
+    private func profileWardrobePage(wardrobes: [Wardrobe], emptyNoun: String) -> some View {
+        List {
+            if wardrobes.isEmpty {
+                Text("No \(emptyNoun) yet")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .listRowInsets(EdgeInsets(top: 12, leading: 20, bottom: 12, trailing: 20))
+            } else {
+                ForEach(wardrobes, id: \.objectID) { wardrobe in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(wardrobe.name ?? "Untitled")
+                        Text(wardrobeSubtitle(for: wardrobe))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 10, trailing: 20))
+                }
+            }
+        }
+        .listStyle(.plain)
+    }
+
+    private func startEditingDisplayName() {
+        editedDisplayName = currentDisplayName ?? ""
+        isEditingDisplayName = true
+    }
+
+    private func saveDisplayName() async {
+        let trimmed = editedDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let currentTrimmed = (currentDisplayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard trimmed != currentTrimmed else {
+            errorMessage = nil
+            isEditingDisplayName = false
+            return
+        }
+
+        isSavingDisplayName = true
+        errorMessage = nil
+
+        do {
+            try await supabaseService.updateDisplayName(trimmed)
+            // Display name is automatically synced to Core Data by updateDisplayName()
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            viewContext.refreshAllObjects()
+            refreshToken = UUID()
+            isEditingDisplayName = false
+        } catch {
+            errorMessage = error.localizedDescription
+            // Keep editing mode on error so user can try again
+        }
+
+        isSavingDisplayName = false
+    }
 
     var body: some View {
-        List {
-                // Profile Header Section
-                HStack(spacing: 16) {
-                    // Profile Image
-                    Image(systemName: "person.circle.fill")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 80, height: 80)
-                        .foregroundColor(.gray)
-                        .clipShape(Circle())
-                    
-                    // Name Info
-                    VStack(alignment: .leading, spacing: 4) {
-                        // Display Name (show displayName if available, otherwise show placeholder)
-                        // Don't fallback to username here to avoid showing username twice
-                        Text(displayName ?? "Name")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                        
-                        // Description
-                        Text("Lifestyle | Vintage | Fashion")
-                            .font(.subheadline)
-                            .foregroundColor(.gray)
-                        
-                        // Friends count (e.g., "123 friends")
-                        Button {
-                            isFriendsSheetPresented = true
-                        } label: {
-                            Text("\(friendsCount) friends")
-                                .font(.subheadline)
+        VStack(spacing: 0) {
+            // Profile Header Section (trailing edit control applies to whole profile info block)
+            HStack(alignment: .top, spacing: 16) {
+                // Profile Image (R2 URL when set; initials fallback)
+                Button {
+                    isProfilePhotoActionDialogPresented = true
+                } label: {
+                    ZStack {
+                        if let p = profileForAvatar {
+                            PublicUserProfileAvatarView(profile: p, size: 80)
+                                // Same CDN URL after replace — bump id when profile updates so AsyncImage refetches bytes.
+                                .id(avatarHeaderViewIdentity)
+                        } else {
+                            Image(systemName: "person.circle.fill")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 80, height: 80)
                                 .foregroundColor(.gray)
                         }
-                        .buttonStyle(.plain)
+                        if isAvatarUploading {
+                            Circle()
+                                .fill(.ultraThinMaterial)
+                            ProgressView()
+                        }
                     }
-                    
-                    Spacer()
+                    .frame(width: 80, height: 80)
+                    .clipShape(Circle())
+                    .contentShape(Circle())
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal)
-                .listRowInsets(EdgeInsets())
-                .listRowSeparator(.hidden)
-                /*
-                // Closet Value Row
-                HStack {
-                    Text("Closet")
-                        .foregroundColor(.primary)
-                    Spacer()
-                    Text(formattedTotalValue)
+                .buttonStyle(.plain)
+                .disabled(isAvatarUploading)
+                .confirmationDialog(
+                    "Profile Photo",
+                    isPresented: $isProfilePhotoActionDialogPresented,
+                    titleVisibility: .visible
+                ) {
+                    Button("Take Photo") { }
+                    Button("Choose from Library") {
+                        profileImagePickerSource = .photoLibrary
+                        isProfileLibraryPickerPresented = true
+                    }
+                    Button("Remove Current Photo", role: .destructive) {
+                        Task { await removeProfileAvatarFromR2AndServer() }
+                    }
+                    Button("Cancel", role: .cancel) { }
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    if isEditingDisplayName {
+                        TextField("Display Name", text: $editedDisplayName)
+                            .textFieldStyle(.roundedBorder)
+                            .autocapitalization(.words)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Text(currentDisplayName ?? "Name")
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                    }
+
+                    if let error = errorMessage {
+                        Text(error)
+                            .foregroundColor(.red)
+                            .font(.caption)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    Text("Lifestyle | Vintage | Fashion")
+                        .font(.subheadline)
                         .foregroundColor(.gray)
-                }
-                
-                // Wishlist Value Row
-                HStack {
-                    Text("Wishlist")
-                        .foregroundColor(.primary)
-                    Spacer()
-                    Text(formattedWishlistValue)
-                        .foregroundColor(.gray)
-                }
-                
-                // Share links
-                HStack {
-                    Text("Share Links")
-                }
-                
-                // Check Photo Sizes (Debug)
-                Button {
-                    checkPhotoSizes(context: viewContext)
-                } label: {
-                    HStack {
-                        Image(systemName: "chart.bar.doc.horizontal")
-                        Text("Check Photo Sizes")
+
+                    Button {
+                        isFriendsSheetPresented = true
+                    } label: {
+                        Text("\(friendsCount) friends")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
                     }
-                    .foregroundColor(.blue)
+                    .buttonStyle(.plain)
                 }
-                
-                // Vacuum Database (Reclaim Space)
-                Button {
-                    vacuumCoreData(context: viewContext)
-                } label: {
-                    HStack {
-                        Image(systemName: "trash.circle")
-                        Text("Reclaim Database Space")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .id(refreshToken)
+
+                if supabaseService.isAuthenticated {
+                    Button {
+                        if isEditingDisplayName {
+                            Task { await saveDisplayName() }
+                        } else {
+                            startEditingDisplayName()
+                        }
+                    } label: {
+                        if isSavingDisplayName {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle())
+                                .scaleEffect(0.8)
+                        } else if isEditingDisplayName {
+                            Image(systemName: "checkmark")
+                                .foregroundColor(.green)
+                        } else {
+                            Image(systemName: "pencil")
+                                .foregroundColor(.accentColor)
+                        }
                     }
-                    .foregroundColor(.orange)
-                }*/
+                    .buttonStyle(.plain)
+                    .disabled(isSavingDisplayName)
+                    .accessibilityLabel(isEditingDisplayName ? "Save profile" : "Edit profile")
+                }
             }
-            .listStyle(.plain)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal)
+            .padding(.vertical, 12)
+            
+            Picker("", selection: $selectedProfileWardrobeTab) {
+                Text("Closet (\(userClosets.count))")
+                    .tag("Closet")
+                Text("Wishlist (\(userWishlists.count))")
+                    .tag("Wishlist")
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(Color(.systemBackground))
+            
+            TabView(selection: $selectedProfileWardrobeTab) {
+                profileWardrobePage(wardrobes: userClosets, emptyNoun: "closets")
+                    .tag("Closet")
+                profileWardrobePage(wardrobes: userWishlists, emptyNoun: "wishlists")
+                    .tag("Wishlist")
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
             .navigationTitle(username ?? supabaseService.cachedUsername ?? "@username")
             .navigationBarTitleDisplayMode(.inline)
-            .task {
-                // Load username and displayName from Supabase if not in Core Data and authenticated
-                if supabaseService.isAuthenticated {
-                    // Load username if needed
-                    if username == nil && supabaseService.cachedUsername == nil {
-                        do {
-                            _ = try await supabaseService.getUsername()
-                            // Refresh after loading
-                            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-                            viewContext.refreshAllObjects()
-                        } catch {
-                            print("⚠️ Error loading username in ProfileView: \(error.localizedDescription)")
-                        }
-                    }
-                    
-                    // Load displayName if not in Core Data
-                    if displayName == nil {
-                        do {
-                            // getUsername() also loads displayName and syncs it to Core Data
-                            _ = try await supabaseService.getUsername()
-                            // Refresh after loading
-                            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-                            viewContext.refreshAllObjects()
-                        } catch {
-                            print("⚠️ Error loading display name in ProfileView: \(error.localizedDescription)")
-                        }
+            .task(id: supabaseService.currentUser?.id) {
+                guard supabaseService.isAuthenticated, let uid = supabaseService.currentUser?.id else { return }
+                if didBootstrapProfileFromServerForUserId != uid.uuidString {
+                    do {
+                        _ = try await supabaseService.getUsername(forceRefresh: true)
+                        try? await Task.sleep(nanoseconds: 100_000_000)
+                        viewContext.refreshAllObjects()
+                        didBootstrapProfileFromServerForUserId = uid.uuidString
+                    } catch {
+                        print("⚠️ Error loading profile in ProfileView: \(error.localizedDescription)")
                     }
                 }
-            }
-            .task(id: supabaseService.currentUser?.id) {
-                // Preload notifications so the bell badge shows without opening the sheet
+                // Bell badge: refresh when returning to Profile is OK; profile bootstrap above runs once per user session.
                 await loadNotifications()
-                await loadFriendCount()
+            }
+            .onChange(of: supabaseService.currentUser?.id) { _, newId in
+                if newId == nil {
+                    didBootstrapProfileFromServerForUserId = nil
+                    isEditingDisplayName = false
+                    editedDisplayName = ""
+                    errorMessage = nil
+                }
             }
             .onChange(of: userProfiles.count) { _ in
                 // Refresh when user profile changes
@@ -271,6 +451,25 @@ struct ProfileView: View {
             .onChange(of: userProfile?.username) { _ in
                 // Refresh when username changes
                 viewContext.refreshAllObjects()
+            }
+            .alert("Photo", isPresented: Binding(
+                get: { avatarUploadError != nil },
+                set: { if !$0 { avatarUploadError = nil } }
+            )) {
+                Button("OK", role: .cancel) { avatarUploadError = nil }
+            } message: {
+                Text(avatarUploadError ?? "")
+            }
+            .sheet(isPresented: $isProfileLibraryPickerPresented) {
+                ImagePicker(
+                    image: $profilePickerImage,
+                    sourceType: $profileImagePickerSource,
+                    allowsEditing: true
+                ) { image in
+                    isProfileLibraryPickerPresented = false
+                    guard let image else { return }
+                    Task { await uploadProfileAvatarFromLibrary(image) }
+                }
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -382,13 +581,16 @@ struct ProfileView: View {
                                 .padding()
                         } else {
                             List(friends) { friend in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(friend.username)
-                                        .font(.headline)
-                                    if let name = friend.displayName, !name.isEmpty {
-                                        Text(name)
-                                            .font(.subheadline)
-                                            .foregroundColor(.secondary)
+                                HStack(spacing: 12) {
+                                    PublicUserProfileAvatarView(profile: friend, size: 44)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(friend.username)
+                                            .font(.headline)
+                                        if let name = friend.displayName, !name.isEmpty {
+                                            Text(name)
+                                                .font(.subheadline)
+                                                .foregroundColor(.secondary)
+                                        }
                                     }
                                 }
                                 .padding(.vertical, 4)
@@ -494,21 +696,6 @@ extension ProfileView {
         notification.type == "friend_request"
     }
     
-    private func loadFriendCount() async {
-        guard supabaseService.isAuthenticated else {
-            await MainActor.run { friendCount = 0 }
-            return
-        }
-        
-        do {
-            let count = try await supabaseService.fetchFriendCount()
-            await MainActor.run { friendCount = count }
-        } catch {
-            // Keep UI resilient; default to 0 if fetch fails
-            await MainActor.run { friendCount = 0 }
-        }
-    }
-    
     private func respondToFriendRequest(notification: NotificationRecord, accept: Bool) async {
         guard let friendshipIdString = notification.payload?["friendship_id"],
               let friendshipId = UUID(uuidString: friendshipIdString) else {
@@ -522,6 +709,9 @@ extension ProfileView {
         do {
             try await supabaseService.respondToFriendRequest(friendshipId: friendshipId, accept: accept)
             try await supabaseService.markNotificationRead(id: notification.id)
+            if accept {
+                supabaseService.applyFriendCountDelta(1)
+            }
             await loadNotifications()
         } catch {
             await MainActor.run {
@@ -534,6 +724,65 @@ extension ProfileView {
         }
     }
     
+    /// Square-crops, flattens to opaque JPEG, then `encodeForR2Upload` enforces the worker’s sub‑5 MB limit.
+    /// R2 uses a fixed key per user (`…/profile/avatar.jpg`); this upload **replaces** the previous file — one object, one `avatar_url`.
+    private func uploadProfileAvatarFromLibrary(_ image: UIImage) async {
+        guard let userId = supabaseService.currentUser?.id else { return }
+        let prepared = image.profileAvatarImageForUpload()
+        guard let data = prepared.encodeForR2Upload() else {
+            await MainActor.run {
+                avatarUploadError = "Could not process image."
+            }
+            return
+        }
+
+        await MainActor.run {
+            isAvatarUploading = true
+            avatarUploadError = nil
+        }
+        defer {
+            Task { @MainActor in
+                isAvatarUploading = false
+            }
+        }
+
+        do {
+            let url = try await supabaseService.uploadProfileAvatar(imageData: data, userId: userId)
+            try await supabaseService.updateProfileAvatarURL(url)
+            await MainActor.run {
+                viewContext.refreshAllObjects()
+            }
+        } catch {
+            await MainActor.run {
+                avatarUploadError = error.localizedDescription
+            }
+        }
+    }
+
+    private func removeProfileAvatarFromR2AndServer() async {
+        guard let userId = supabaseService.currentUser?.id else { return }
+        await MainActor.run {
+            isAvatarUploading = true
+            avatarUploadError = nil
+        }
+        defer {
+            Task { @MainActor in
+                isAvatarUploading = false
+            }
+        }
+        do {
+            try? await supabaseService.deleteProfileAvatar(userId: userId)
+            try await supabaseService.updateProfileAvatarURL(nil)
+            await MainActor.run {
+                viewContext.refreshAllObjects()
+            }
+        } catch {
+            await MainActor.run {
+                avatarUploadError = error.localizedDescription
+            }
+        }
+    }
+
     private func loadFriends() async {
         guard supabaseService.isAuthenticated else {
             await MainActor.run { friends = [] }

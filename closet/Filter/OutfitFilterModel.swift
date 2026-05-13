@@ -12,10 +12,14 @@ import Foundation
 class OutfitFilterModel: ObservableObject {
     @Published var selectedCategory: String?
     @Published var selectedTags: Set<Tag> = []
+    @Published var favoritesOnly: Bool = false
+    @Published var sortOrder: ItemSortOrder = .newestFirst
     
     func clearAll() {
         selectedCategory = nil
         selectedTags.removeAll()
+        favoritesOnly = false
+        sortOrder = .newestFirst
     }
 }
 
@@ -33,6 +37,12 @@ func makeOutfitPredicate(for filterModel: OutfitFilterModel) -> NSPredicate? {
         let tagNames = filterModel.selectedTags.compactMap { $0.name }
         let tagPredicate = NSPredicate(format: "ANY tags.name IN %@", tagNames)
         subpredicates.append(tagPredicate)
+    }
+    
+    // Favorites-only filter
+    if filterModel.favoritesOnly {
+        let favoritesPredicate = NSPredicate(format: "isFavorite == YES")
+        subpredicates.append(favoritesPredicate)
     }
     
     if subpredicates.isEmpty {

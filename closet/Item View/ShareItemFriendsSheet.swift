@@ -166,8 +166,7 @@ private struct ShareItemFriendRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            FriendAvatarView(profile: profile)
-                .frame(width: 48, height: 48)
+            PublicUserProfileAvatarView(profile: profile, size: 48)
 
             VStack(alignment: .leading, spacing: 2) {
                 if trimmedDisplayName.isEmpty {
@@ -194,42 +193,5 @@ private struct ShareItemFriendRow: View {
             }
         }
         .contentShape(Rectangle())
-    }
-}
-
-// MARK: - Avatar (initials until profile photos exist in API)
-
-private struct FriendAvatarView: View {
-    let profile: PublicUserProfile
-
-    private var initials: String {
-        let name = profile.displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !name.isEmpty {
-            let parts = name.split(separator: " ").filter { !$0.isEmpty }
-            if parts.count >= 2 {
-                let a = parts[0].prefix(1)
-                let b = parts[parts.count - 1].prefix(1)
-                return "\(a)\(b)".uppercased()
-            }
-            return String(name.prefix(2)).uppercased()
-        }
-        return String(profile.username.prefix(2)).uppercased()
-    }
-
-    private var background: Color {
-        var hasher = Hasher()
-        hasher.combine(profile.userId)
-        let h = abs(hasher.finalize()) % 360
-        return Color(hue: Double(h) / 360.0, saturation: 0.38, brightness: 0.88)
-    }
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(background)
-            Text(initials)
-                .font(.system(size: 17, weight: .semibold, design: .rounded))
-                .foregroundStyle(.primary.opacity(0.85))
-        }
     }
 }

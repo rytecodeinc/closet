@@ -187,6 +187,14 @@ struct SetSizeView: View {
             NSSortDescriptor(keyPath: \Size.sortOrder, ascending: true),
             NSSortDescriptor(keyPath: \Size.value,     ascending: true)
         ]
+        if let uid = item.userId, !uid.isEmpty {
+            let owned = NSPredicate(format: "userId == %@", uid)
+            let usedByUser = NSPredicate(
+                format: "SUBQUERY(items, $i, $i.userId == %@ AND ($i.isSoftDeleted != YES OR $i.isSoftDeleted == nil)).@count > 0",
+                uid
+            )
+            request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, usedByUser])
+        }
 
         do { sizes = try viewContext.fetch(request) }
         catch {

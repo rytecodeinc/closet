@@ -13,6 +13,8 @@ import CoreData
 struct EventDrawerView: View {
     @Environment(\.managedObjectContext) private var viewContext
     let selectedDate: Date
+    /// Events are scoped to this Supabase user id; when nil, the list is empty.
+    let ownerUserId: String?
     let onDismiss: () -> Void
     let onNavigateDate: (Date) -> Void
 
@@ -30,8 +32,14 @@ struct EventDrawerView: View {
 
     @FetchRequest private var events: FetchedResults<Event>
 
-    init(selectedDate: Date, onDismiss: @escaping () -> Void, onNavigateDate: @escaping (Date) -> Void) {
+    init(
+        selectedDate: Date,
+        ownerUserId: String?,
+        onDismiss: @escaping () -> Void,
+        onNavigateDate: @escaping (Date) -> Void
+    ) {
         self.selectedDate = selectedDate
+        self.ownerUserId = ownerUserId
         self.onDismiss = onDismiss
         self.onNavigateDate = onNavigateDate
         
@@ -41,10 +49,18 @@ struct EventDrawerView: View {
         let request: NSFetchRequest<Event> = Event.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Event.createdAt, ascending: false)]
 
-        // Use startDate instead of date, and exclude soft-deleted events
+        // Use startDate instead of date, exclude soft-deleted events, and scope to account
         let datePredicate = NSPredicate(format: "startDate >= %@ AND startDate < %@", startOfDay as NSDate, endOfDay as NSDate)
         let softDeleteFilter = NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
-        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [datePredicate, softDeleteFilter])
+        let userPredicate: NSPredicate
+        if let uid = ownerUserId, !uid.isEmpty {
+            userPredicate = NSPredicate(format: "userId == %@", uid)
+        } else {
+            userPredicate = NSPredicate(value: false)
+        }
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            datePredicate, softDeleteFilter, userPredicate,
+        ])
 
         _events = FetchRequest(fetchRequest: request)
     }

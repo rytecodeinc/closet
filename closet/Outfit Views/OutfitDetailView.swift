@@ -42,6 +42,7 @@ struct OutfitDetailView: View {
     @State private var outfitHeroCropSlot: OutfitHeroImageSlot = .collage
     @State private var isOutfitCropReplacePickerPresented = false
     @State private var outfitCropEditorSessionID = UUID()
+    @State private var selectedItemForNavigation: Item?
 
     private var screenWidth: CGFloat { UIScreen.main.bounds.width }
     
@@ -86,10 +87,22 @@ struct OutfitDetailView: View {
                             }
                         }
                     ),
+                    favoriteSelection: outfit.isFavorite,
+                    onLike: {
+                        outfit.isFavorite.toggle()
+                        setUpdatedAt(outfit)
+                        do {
+                            try viewContext.save()
+                            SyncService.shared.syncOutfitIfNeeded(outfit)
+                        } catch {
+                            // Revert if save fails (keeps UI consistent with persisted state)
+                            viewContext.rollback()
+                        }
+                    },
                     onShare: { shareOutfitImage() }
                 )
                 
-                // Featured Items Toggle Row
+                // Featured Items Toggle Section Header
                 featuredItemsToggleRow()
                   //  .padding(.horizontal, 6)
                 // Divider before Featured Items
@@ -105,13 +118,14 @@ struct OutfitDetailView: View {
                         ]
                         LazyVGrid(columns: gridItems, spacing: 4) {
                             ForEach(orderedItems, id: \.objectID) { item in
-                                NavigationLink(destination: ItemDetailView(item: item)) {
+                                Button {
+                                    selectedItemForNavigation = item
+                                } label: {
                                     ItemView(item: item)
                                 }
+                                .buttonStyle(.plain)
                             }
                         }
-                      //  .padding(.horizontal, 10)
-                      //  .padding(.top, 4)
                     }
                 }
                 
@@ -126,6 +140,9 @@ struct OutfitDetailView: View {
         }
         .navigationTitle("Outfit Details")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $selectedItemForNavigation) { item in
+            ItemDetailView(item: item)
+        }
         .onAppear {
             heroCarouselPage = 0
         }

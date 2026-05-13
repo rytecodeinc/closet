@@ -158,6 +158,7 @@ struct EventOutfitSelectionView: View {
         for outfit in selectedOutfits {
             event.addToOutfits(outfit)
         }
+        syncEventUserIdFromLinkedEntities(event)
         
         // Only save context if event is already persisted (not a temporary/new event)
         if !event.objectID.isTemporaryID {

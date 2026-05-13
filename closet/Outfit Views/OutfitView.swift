@@ -26,6 +26,32 @@ struct OutfitView: View {
                     .aspectRatio(1, contentMode: .fill)
                     .frame(minWidth: 120, minHeight: 120)
                     .clipped()
+                    .overlay(alignment: .bottomLeading) {
+                        if outfit.isFavorite {
+                            // Match `ItemView` favorites styling
+                            RadialGradient(
+                                gradient: Gradient(colors: [
+                                    Color.black.opacity(0.85),
+                                    Color.black.opacity(0.65),
+                                    Color.black.opacity(0.55),
+                                    Color.gray.opacity(0.55),
+                                    Color.clear
+                                ]),
+                                center: UnitPoint(x: -0.2, y: 1.5),
+                                startRadius: 0,
+                                endRadius: 100
+                            )
+                        }
+                    }
+                    .overlay(alignment: .bottomLeading) {
+                        if outfit.isFavorite {
+                            Image(systemName: "heart.fill")
+                                .foregroundColor(.white)
+                                .font(.system(size: 12))
+                                .padding(.leading, 6)
+                                .padding(.bottom, 6)
+                        }
+                    }
                    // .background(backgroundColor)
             } else {
                 Rectangle()
@@ -37,6 +63,31 @@ struct OutfitView: View {
                             .foregroundColor(.secondary)
                             .font(.system(size: 20))
                     )
+                    .overlay(alignment: .bottomLeading) {
+                        if outfit.isFavorite {
+                            RadialGradient(
+                                gradient: Gradient(colors: [
+                                    Color.black.opacity(0.85),
+                                    Color.black.opacity(0.65),
+                                    Color.black.opacity(0.55),
+                                    Color.gray.opacity(0.55),
+                                    Color.clear
+                                ]),
+                                center: UnitPoint(x: -0.2, y: 1.5),
+                                startRadius: 0,
+                                endRadius: 100
+                            )
+                        }
+                    }
+                    .overlay(alignment: .bottomLeading) {
+                        if outfit.isFavorite {
+                            Image(systemName: "heart.fill")
+                                .foregroundColor(.white)
+                                .font(.system(size: 12))
+                                .padding(.leading, 6)
+                                .padding(.bottom, 6)
+                        }
+                    }
             }
 
             /* Optional outfit info below the image

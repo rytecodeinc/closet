@@ -181,6 +181,14 @@ struct SetCategoryView: View {
     private func fetchCategories() {
         let request = NSFetchRequest<Category>(entityName: "Category")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Category.name, ascending: true)]
+        if let uid = item.userId, !uid.isEmpty {
+            let owned = NSPredicate(format: "userId == %@", uid)
+            let usedByUserItems = NSPredicate(
+                format: "SUBQUERY(items, $i, $i.userId == %@ AND ($i.isSoftDeleted != YES OR $i.isSoftDeleted == nil)).@count > 0",
+                uid
+            )
+            request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, usedByUserItems])
+        }
         do {
             categories = try viewContext.fetch(request)
             print("✅ Fetched \(categories.count) categories")
@@ -192,7 +200,19 @@ struct SetCategoryView: View {
 
     private func sortedSubcategories(for category: Category) -> [Subcategory] {
         let set = (category.subcategories as? Set<Subcategory>) ?? []
-        return set.sorted {
+        let filtered: [Subcategory]
+        if let uid = item.userId, !uid.isEmpty {
+            filtered = set.filter { sub in
+                if sub.userId == uid { return true }
+                let items = sub.items as? Set<Item> ?? []
+                return items.contains {
+                    $0.userId == uid && ($0.isSoftDeleted != true)
+                }
+            }
+        } else {
+            filtered = Array(set)
+        }
+        return filtered.sorted {
             if $0.sortOrder != $1.sortOrder { return $0.sortOrder < $1.sortOrder }
             return ($0.name ?? "") < ($1.name ?? "")
         }
@@ -200,7 +220,11 @@ struct SetCategoryView: View {
 
     private func fetchOrCreateCategory(named name: String) -> Category {
         let request = NSFetchRequest<Category>(entityName: "Category")
-        request.predicate = NSPredicate(format: "name ==[c] %@", name)
+        if let uid = item.userId, !uid.isEmpty {
+            request.predicate = NSPredicate(format: "name ==[c] %@ AND userId == %@", name, uid)
+        } else {
+            request.predicate = NSPredicate(format: "name ==[c] %@", name)
+        }
         do {
             if let match = try viewContext.fetch(request).first {
                 return match
@@ -212,13 +236,18 @@ struct SetCategoryView: View {
         let newCategory = Category(context: viewContext)
         newCategory.name = name
         newCategory.id = UUID()
+        newCategory.userId = item.userId
         return newCategory
     }
 
     private func fetchSubcategory(named name: String, in category: Category) -> Subcategory? {
         let req = NSFetchRequest<Subcategory>(entityName: "Subcategory")
         req.fetchLimit = 1
-        req.predicate = NSPredicate(format: "name ==[c] %@ AND category == %@", name, category)
+        if let uid = item.userId, !uid.isEmpty {
+            req.predicate = NSPredicate(format: "name ==[c] %@ AND category == %@ AND userId == %@", name, category, uid)
+        } else {
+            req.predicate = NSPredicate(format: "name ==[c] %@ AND category == %@", name, category)
+        }
         return try? viewContext.fetch(req).first
     }
 

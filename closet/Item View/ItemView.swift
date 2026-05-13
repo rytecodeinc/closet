@@ -844,4 +844,43 @@ func migrateTimestampToCreatedAt(context: NSManagedObjectContext) {
     }
 }
 
+/// Assigns `userId` on events missing it by inferring from linked items/outfits (safe for multi-account devices).
+func migrateEventUserIdsFromRelationships(context: NSManagedObjectContext) {
+    let req = Event.fetchRequest()
+    req.predicate = NSPredicate(format: "userId == nil OR userId == \"\"")
+    guard let events = try? context.fetch(req), !events.isEmpty else { return }
+    var altered = 0
+    for event in events {
+        guard let uid = inferredUserIdForEvent(event), !uid.isEmpty else { continue }
+        event.userId = uid
+        setUpdatedAt(event)
+        altered += 1
+    }
+    guard altered > 0, context.hasChanges else { return }
+    do {
+        try context.save()
+        print("✅ Migrated \(altered) calendar event(s): inferred userId from linked items/outfits")
+    } catch {
+        print("❌ migrateEventUserIdsFromRelationships: \(error)")
+    }
+}
+
+/// One-time: set `isDefault` on canonical closet/wishlist per user (earliest timestamp, then createdAt). See `WardrobeBootstrap.normalizeDefaultFlagsForUser`.
+func migrateWardrobeIsDefaultBackfill(context: NSManagedObjectContext) {
+    let migrationKey = "hasMigratedWardrobeIsDefaultBackfill_v1"
+    if UserDefaults.standard.bool(forKey: migrationKey) {
+        return
+    }
+    do {
+        try WardrobeBootstrap.normalizeAllWardrobeDefaultFlags(in: context)
+        if context.hasChanges {
+            try context.save()
+        }
+        UserDefaults.standard.set(true, forKey: migrationKey)
+        print("✅ Wardrobe isDefault backfill completed")
+    } catch {
+        print("❌ Wardrobe isDefault backfill failed: \(error)")
+    }
+}
+
 

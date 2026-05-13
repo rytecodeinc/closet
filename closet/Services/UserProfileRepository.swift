@@ -61,19 +61,29 @@ class UserProfileRepository {
     ///   - userId: Optional user ID from Supabase session. If nil, will try to get from profile.
     func updateWeight(weightKg: Double, unit: String, userId: String? = nil) throws {
         let profile = getOrCreateProfile(userId: userId)
+
+        let weightUnchanged = abs(profile.weightKg - weightKg) < 1e-9
+        let unitSame = (profile.weightUnit ?? "") == unit
+        if weightUnchanged && unitSame {
+            if let userId = userId, !userId.isEmpty, profile.userId != userId {
+                profile.userId = userId
+                guard context.hasChanges else { return }
+                try context.save()
+            }
+            return
+        }
+
         profile.weightKg = weightKg
         profile.weightUnit = unit
         profile.updatedAt = Date()
-        
-        // Ensure userId is set (for sync) - use provided userId or keep existing
+
         if let userId = userId, !userId.isEmpty {
             profile.userId = userId
         }
-        
+
         guard context.hasChanges else { return }
         try context.save()
-        
-        // Trigger sync after saving
+
         SyncService.shared.syncUserProfileIfNeeded(profile)
     }
     
@@ -121,18 +131,27 @@ class UserProfileRepository {
     ///   - userId: Optional user ID from Supabase session. If nil, will try to get from profile.
     func updateUsername(_ username: String, userId: String? = nil) throws {
         let profile = getOrCreateProfile(userId: userId)
-        profile.username = username
+        let next = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        let current = (profile.username ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if current == next {
+            if let userId = userId, !userId.isEmpty, profile.userId != userId {
+                profile.userId = userId
+                guard context.hasChanges else { return }
+                try context.save()
+            }
+            return
+        }
+
+        profile.username = next
         profile.updatedAt = Date()
-        
-        // Ensure userId is set (for sync) - use provided userId or keep existing
+
         if let userId = userId, !userId.isEmpty {
             profile.userId = userId
         }
-        
+
         guard context.hasChanges else { return }
         try context.save()
-        
-        // Trigger sync after saving
+
         SyncService.shared.syncUserProfileIfNeeded(profile)
     }
     
@@ -142,19 +161,89 @@ class UserProfileRepository {
     ///   - userId: Optional user ID from Supabase session. If nil, will try to get from profile.
     func updateDisplayName(_ displayName: String, userId: String? = nil) throws {
         let profile = getOrCreateProfile(userId: userId)
-        profile.displayName = displayName
+        let next = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let current = (profile.displayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if current == next {
+            if let userId = userId, !userId.isEmpty, profile.userId != userId {
+                profile.userId = userId
+                guard context.hasChanges else { return }
+                try context.save()
+            }
+            return
+        }
+
+        profile.displayName = next
+        profile.updatedAt = Date()
+
+        if let userId = userId, !userId.isEmpty {
+            profile.userId = userId
+        }
+
+        guard context.hasChanges else { return }
+        try context.save()
+
+        SyncService.shared.syncUserProfileIfNeeded(profile)
+    }
+
+    /// Sets the profile avatar public URL (R2 CDN). Pass `nil` to clear.
+    func updateAvatarUrl(_ url: String?, userId: String? = nil) throws {
+        let profile = getOrCreateProfile(userId: userId)
+        let incomingTrimmed = url?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let incoming = (incomingTrimmed?.isEmpty == false) ? incomingTrimmed : nil
+        if incoming == profile.storedProfileAvatarURL {
+            if let userId = userId, !userId.isEmpty, profile.userId != userId {
+                profile.userId = userId
+                guard context.hasChanges else { return }
+                try context.save()
+            }
+            return
+        }
+
+        profile.setStoredProfileAvatarURL(url)
+        profile.updatedAt = Date()
+
+        if let userId = userId, !userId.isEmpty {
+            profile.userId = userId
+        }
+
+        guard context.hasChanges else { return }
+        try context.save()
+
+        SyncService.shared.syncUserProfileIfNeeded(profile)
+    }
+
+    /// Gets the cached friend count (last known value) from Core Data.
+    /// Returns nil if not present.
+    func getFriendCount() -> Int? {
+        let request: NSFetchRequest<UserProfile> = UserProfile.fetchRequest()
+        request.fetchLimit = 1
+        
+        do {
+            guard let profile = try context.fetch(request).first else {
+                return nil
+            }
+            // friendCount is optional in the model; treat missing as nil
+            let raw = profile.value(forKey: "friendCount") as? Int64
+            return raw.map { Int($0) }
+        } catch {
+            print("⚠️ Error fetching friend count: \(error)")
+            return nil
+        }
+    }
+    
+    /// Updates (persists) the cached friend count in Core Data.
+    func updateFriendCount(_ count: Int, userId: String? = nil) throws {
+        let profile = getOrCreateProfile(userId: userId)
+        profile.setValue(Int64(count), forKey: "friendCount")
+        profile.setValue(Date(), forKey: "friendCountUpdatedAt")
         profile.updatedAt = Date()
         
-        // Ensure userId is set (for sync) - use provided userId or keep existing
         if let userId = userId, !userId.isEmpty {
             profile.userId = userId
         }
         
         guard context.hasChanges else { return }
         try context.save()
-        
-        // Trigger sync after saving
-        SyncService.shared.syncUserProfileIfNeeded(profile)
     }
     
     /// Gets the user's username from Core Data
@@ -200,7 +289,10 @@ class UserProfileRepository {
                 // Clear user-specific data but keep the profile entity
                 profile.username = nil
                 profile.displayName = nil
+                profile.setStoredProfileAvatarURL(nil)
                 profile.userId = nil
+                profile.setValue(nil, forKey: "friendCount")
+                profile.setValue(nil, forKey: "friendCountUpdatedAt")
                 // Note: We keep weight data as it might be useful for the next user
                 // If you want to clear everything, you can delete the profile instead:
                 // context.delete(profile)

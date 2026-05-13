@@ -12,8 +12,32 @@ struct PublicUserProfile: Decodable, Identifiable {
     let userId: UUID
     let username: String
     let displayName: String?
-    
+    /// Public avatar URL when exposed by RPC (e.g. `avatar_url` on `user_profiles`). Optional for backward compatibility.
+    let avatarUrl: String?
+
     var id: UUID { userId }
+
+    init(userId: UUID, username: String, displayName: String?, avatarUrl: String? = nil) {
+        self.userId = userId
+        self.username = username
+        self.displayName = displayName
+        self.avatarUrl = avatarUrl
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case userId = "user_id"
+        case username
+        case displayName = "display_name"
+        case avatarUrl = "avatar_url"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        userId = try c.decode(UUID.self, forKey: .userId)
+        username = try c.decode(String.self, forKey: .username)
+        displayName = try c.decodeIfPresent(String.self, forKey: .displayName)
+        avatarUrl = try c.decodeIfPresent(String.self, forKey: .avatarUrl)
+    }
 }
 
 struct FriendshipRecord: Decodable, Identifiable {
@@ -92,11 +116,13 @@ class SupabaseService: ObservableObject {
     @Published var currentSession: Session?
     @Published var currentUser: User?
     @Published var cachedUsername: String?
+    @Published var cachedFriendCount: Int?
     
     // MARK: - Private Properties
     
     private let client: SupabaseClient
     private var hasLoadedSession = false
+    private var hasLoadedFriendCountCache = false
     
     // MARK: - Initialization
     
@@ -138,6 +164,9 @@ class SupabaseService: ObservableObject {
         // Ensure profile exists after successful sign in
         await ensureUserProfileExists(userId: session.user.id)
         
+        // Load cached friend count from Core Data (and seed from server if missing)
+        await loadFriendCountCacheForCurrentUserIfNeeded(seedFromServerIfMissing: true)
+        
         // Force a username refresh after sign-in (don't rely on cache check)
         _ = try? await getUsername(forceRefresh: true)
         
@@ -160,6 +189,9 @@ class SupabaseService: ObservableObject {
         // Create user profile after successful sign up
         await ensureUserProfileExists(userId: session.user.id)
         
+        // Load cached friend count from Core Data (and seed from server if missing)
+        await loadFriendCountCacheForCurrentUserIfNeeded(seedFromServerIfMissing: true)
+        
         // Force a username refresh after sign-up (don't rely on cache check)
         _ = try? await getUsername(forceRefresh: true)
         
@@ -176,7 +208,9 @@ class SupabaseService: ObservableObject {
         self.currentSession = nil
         self.currentUser = nil
         self.cachedUsername = nil
+        self.cachedFriendCount = nil
         self.hasLoadedSession = false  // Reset to allow re-initialization on next login
+        self.hasLoadedFriendCountCache = false
         
         // Clear UserProfile data from Core Data for this user
         if let userId = userId {
@@ -255,12 +289,18 @@ class SupabaseService: ObservableObject {
             let user_id: UUID
             let username: String
             let display_name: String?
+            let avatar_url: String?
         }
         
         let decoder = JSONDecoder()
         let rows = try decoder.decode([FriendRow].self, from: response.data)
         return rows.map { row in
-            PublicUserProfile(userId: row.user_id, username: row.username, displayName: row.display_name)
+            PublicUserProfile(
+                userId: row.user_id,
+                username: row.username,
+                displayName: row.display_name,
+                avatarUrl: row.avatar_url
+            )
         }
     }
 
@@ -486,6 +526,9 @@ class SupabaseService: ObservableObject {
             // Ensure profile exists when restoring session
             await ensureUserProfileExists(userId: session.user.id)
             
+            // Load cached friend count from Core Data (and seed from server if missing)
+            await loadFriendCountCacheForCurrentUserIfNeeded(seedFromServerIfMissing: true)
+            
             // Force a username refresh when restoring session (don't rely on cache)
             _ = try? await getUsername(forceRefresh: true)
             
@@ -495,7 +538,58 @@ class SupabaseService: ObservableObject {
             self.currentSession = nil
             self.currentUser = nil
             self.cachedUsername = nil
+            self.cachedFriendCount = nil
+            self.hasLoadedFriendCountCache = false
         }
+    }
+
+    // MARK: - Friend Count Cache
+    
+    /// Loads cached friend count from Core Data into memory. Optionally seeds from server
+    /// if Core Data doesn't have a value yet.
+    func loadFriendCountCacheForCurrentUserIfNeeded(seedFromServerIfMissing: Bool) async {
+        guard !hasLoadedFriendCountCache else { return }
+        hasLoadedFriendCountCache = true
+        
+        guard let userId = currentUser?.id.uuidString else {
+            cachedFriendCount = nil
+            return
+        }
+        
+        let context = PersistenceController.shared.container.viewContext
+        let repo = UserProfileRepository(context: context)
+        
+        if let stored = repo.getFriendCount() {
+            cachedFriendCount = stored
+            return
+        }
+        
+        guard seedFromServerIfMissing else {
+            cachedFriendCount = nil
+            return
+        }
+        
+        do {
+            let count = try await fetchFriendCount()
+            cachedFriendCount = count
+            try? repo.updateFriendCount(count, userId: userId)
+        } catch {
+            // Keep stability: if we can't fetch, leave nil (UI can show 0 or placeholder)
+            print("⚠️ Failed to seed friend count from server: \(error.localizedDescription)")
+        }
+    }
+    
+    /// Applies a delta (+1 / -1) to the cached friend count and persists it.
+    /// If no cached value exists yet, this will treat it as 0 and still persist.
+    func applyFriendCountDelta(_ delta: Int) {
+        guard let userId = currentUser?.id.uuidString else { return }
+        
+        let newValue = max(0, (cachedFriendCount ?? 0) + delta)
+        cachedFriendCount = newValue
+        
+        let context = PersistenceController.shared.container.viewContext
+        let repo = UserProfileRepository(context: context)
+        try? repo.updateFriendCount(newValue, userId: userId)
     }
     
     /// Refreshes the current session
@@ -630,6 +724,29 @@ class SupabaseService: ObservableObject {
             throw error
         }
     }
+
+    /// Persists the profile avatar public URL (e.g. R2 CDN) on `user_profiles`, then syncs Core Data.
+    func updateProfileAvatarURL(_ url: String?) async throws {
+        guard let userId = currentUser?.id else {
+            throw NSError(domain: "SupabaseService", code: -1,
+                         userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+
+        let trimmed = url?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value: String? = (trimmed?.isEmpty == false) ? trimmed : nil
+        let now = ISO8601DateFormatter().string(from: Date())
+
+        try await client.from("user_profiles")
+            .update([
+                "avatar_url": value,
+                "updated_at": now
+            ])
+            .eq("user_id", value: userId.uuidString)
+            .execute()
+
+        await SyncService.shared.syncAvatarUrlToCoreData(value)
+        print("✅ Profile avatar URL updated")
+    }
     
     /// Gets the current user's username from cache or user_profiles
     /// - Parameter forceRefresh: If true, fetches from server even if cached
@@ -642,9 +759,9 @@ class SupabaseService: ObservableObject {
             return cached
         }
         
-        // Fetch from server (include display_name for full profile sync)
+        // Fetch from server (display_name + avatar_url)
         let response = try await client.from("user_profiles")
-            .select("user_id, username, display_name")
+            .select("user_id, username, display_name, avatar_url")
             .eq("user_id", value: userId.uuidString)
             .execute()
         
@@ -693,6 +810,10 @@ class SupabaseService: ObservableObject {
             if let displayName = profile.display_name, !displayName.isEmpty {
                 await SyncService.shared.syncDisplayNameToCoreData(displayName)
             }
+
+            let trimmedAvatar = profile.avatar_url?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let avatarToStore = (trimmedAvatar?.isEmpty == false) ? trimmedAvatar : nil
+            await SyncService.shared.syncAvatarUrlToCoreData(avatarToStore)
             
             // Return username if available
             if let username = profile.username, !username.isEmpty {
@@ -856,6 +977,14 @@ class SupabaseService: ObservableObject {
             userId: userId
         )
     }
+
+    func uploadProfileAvatar(imageData: Data, userId: UUID) async throws -> String {
+        try await CloudflareR2Service.shared.uploadProfileAvatar(imageData: imageData, userId: userId)
+    }
+
+    func deleteProfileAvatar(userId: UUID) async throws {
+        try await CloudflareR2Service.shared.deleteProfileAvatar(userId: userId)
+    }
     
     // MARK: - Computed Properties
     
@@ -887,6 +1016,7 @@ private struct SupabaseUserProfile: Codable {
     let user_id: String?
     let username: String?
     let display_name: String?
+    let avatar_url: String?
     let created_at: String?
     let updated_at: String?
 }

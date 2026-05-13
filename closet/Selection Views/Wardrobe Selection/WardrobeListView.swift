@@ -66,10 +66,10 @@ struct WardrobeListView: View {
         return filtered
     }
     
-    // Get the default wardrobe (first one of the default type)
+    /// Canonical wardrobe for the filtered type (`isDefault`), else first row in display order.
     private var defaultWardrobe: Wardrobe? {
-        guard let defaultType = defaultWardrobeType else { return nil }
-        return displayedWardrobes.first { $0.type?.lowercased() == defaultType.lowercased() }
+        guard defaultWardrobeType != nil else { return nil }
+        return displayedWardrobes.first(where: { $0.isDefault == true }) ?? displayedWardrobes.first
     }
 
     var body: some View {

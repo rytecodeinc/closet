@@ -22,6 +22,7 @@ struct ItemDetailView: View {
     @State private var isImageFullScreen = false
     @State private var isAttributesExpanded = true
     @State private var isSetsExpanded = true
+    @State private var isOutfitsExpanded = false
     
     private let currencySymbol = Locale.current.currencySymbol ?? "$"
 
@@ -49,18 +50,16 @@ struct ItemDetailView: View {
     @State private var showDeleteConfirmation = false
     @State private var showHeroDisplayOptionsDialog = false
     @State private var showPairItemSelection = false
+    @State private var showViewAllPairsSheet = false
+    @State private var showViewAllOutfitsSheet = false
     @State private var selectedPairedItemForNavigation: Item?
+    @State private var selectedOutfitURIForNavigation: String?
     
-    private enum AllOutfitsGridNavigation: Hashable {
-        case grid
-    }
-
     private enum CreateOutfitNavigation: Hashable {
         case create
     }
-
-    @State private var allOutfitsGridNavigation: AllOutfitsGridNavigation?
     @State private var createOutfitNavigation: CreateOutfitNavigation?
+    @State private var createOutfitSessionID: UUID = UUID()
     
     // Computed property to get paired items, sorted by date/time added (oldest first)
     // Note: We use updatedAt as a proxy for when pairs were added, since Core Data doesn't
@@ -68,7 +67,9 @@ struct ItemDetailView: View {
     // We use createdAt as a tiebreaker to ensure stable sorting.
     private var pairedItems: [Item] {
         if let pairedItemsSet = item.pairedItems as? Set<Item> {
-            return Array(pairedItemsSet).sorted { item1, item2 in
+            // Exclude soft-deleted items to avoid "ghost" pairs lingering in UI.
+            let visiblePairedItems = pairedItemsSet.filter { ($0.isSoftDeleted == false) }
+            return Array(visiblePairedItems).sorted { item1, item2 in
                 // Primary sort: updatedAt ascending (oldest first)
                 // If updatedAt is nil, treat as oldest (put at beginning)
                 let date1 = item1.updatedAt ?? Date.distantPast
@@ -109,6 +110,10 @@ struct ItemDetailView: View {
 
     private var pairsSectionHeaderIconName: String {
         isSetsExpanded ? "minus" : "plus"
+    }
+
+    private var outfitsSectionHeaderIconName: String {
+        isOutfitsExpanded ? "minus" : "plus"
     }
     
     private func initializeSelectedImageType() {
@@ -196,8 +201,14 @@ struct ItemDetailView: View {
                             PairsSection(
                                 pairedItems: pairedItems,
                                 onManagePairs: { showPairItemSelection = true },
+                                onViewAll: {
+                                    let uri = item.objectID.uriRepresentation().absoluteString
+                                    print("🧭 [ItemDetailView] View All pairs tapped. itemURI=\(uri) pairsCount=\(pairedItems.count)")
+                                    showViewAllPairsSheet = true
+                                },
                                 onSelectPairedItem: { selectedPairedItemForNavigation = $0 }
                             )
+                            .transition(.opacity.combined(with: .slide))
                         }
                     } header: {
                         HStack {
@@ -220,21 +231,35 @@ struct ItemDetailView: View {
                     .padding(.horizontal)
                     
                     Section {
-                        FeaturedOutfitsSection(outfits: outfits) {
-                            createOutfitNavigation = .create
+                        if isOutfitsExpanded {
+                            FeaturedOutfitsSection(
+                                outfits: outfits,
+                                onSelectOutfit: { outfit in
+                                    selectedOutfitURIForNavigation = outfit.objectID.uriRepresentation().absoluteString
+                                },
+                                onViewAllOutfits: { showViewAllOutfitsSheet = true }
+                            ) {
+                                let uri = item.objectID.uriRepresentation().absoluteString
+                                createOutfitSessionID = UUID()
+                                print("🧭 [ItemDetailView] Create Outfit tapped. itemURI=\(uri) sessionID=\(createOutfitSessionID.uuidString)")
+                                createOutfitNavigation = .create
+                            }
+                            .transition(.opacity.combined(with: .slide))
                         }
                     } header: {
                         HStack {
                             Text("OUTFITS")
                                 .fontWeight(.semibold)
                             Spacer()
-                            Button {
-                                allOutfitsGridNavigation = .grid
-                            } label: {
-                                Image(systemName: "arrow.right")
-                                    .font(.subheadline)
+                            Image(systemName: outfitsSectionHeaderIconName)
+                                .foregroundColor(.gray)
+                                .font(.caption)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation {
+                                isOutfitsExpanded.toggle()
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                     .listRowInsets(EdgeInsets(.zero))
@@ -260,6 +285,13 @@ struct ItemDetailView: View {
                 isSetsExpanded = true
             }
         }
+        .onChange(of: outfits.count) { oldCount, newCount in
+            if newCount == 0 {
+                isOutfitsExpanded = false
+            } else if oldCount == 0 && newCount > 0 {
+                isOutfitsExpanded = true
+            }
+        }
 
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
@@ -283,19 +315,49 @@ struct ItemDetailView: View {
                 .accessibilityLabel("Delete item")
             }
         }
-        // fix this later
-       /* .navigationDestination(item: $allOutfitsGridNavigation) { _ in
-            AllOutfitsGridView(item: item)
-        }
         .navigationDestination(item: $createOutfitNavigation) { _ in
-            OutfitAddView(
+            let uri = item.objectID.uriRepresentation().absoluteString
+            return OutfitAddView(
                 outfitToEdit: nil,
                 wardrobeType: "closet",
-                initialWardrobe: preferredWardrobeForNewOutfit
+                initialWardrobe: preferredWardrobeForNewOutfit,
+                preselectedItemURI: uri,
+                sessionID: createOutfitSessionID
             )
-        }*/
+            .id(createOutfitSessionID)
+            .onAppear {
+                // Critical: prevent destination from being re-evaluated in a loop.
+                print("🧭 [ItemDetailView] OutfitAddView appeared; resetting createOutfitNavigation to nil.")
+                createOutfitNavigation = nil
+            }
+        }
         .navigationDestination(item: $selectedPairedItemForNavigation) { pairedItem in
             ItemDetailView(item: pairedItem)
+                .onAppear {
+                    // Prevent SwiftUI from repeatedly re-triggering this navigation.
+                    let uri = pairedItem.objectID.uriRepresentation().absoluteString
+                    print("🧭 [ItemDetailView] Paired ItemDetailView appeared; resetting selectedPairedItemForNavigation to nil. pairedItemURI=\(uri)")
+                    selectedPairedItemForNavigation = nil
+                }
+        }
+        .navigationDestination(item: $selectedOutfitURIForNavigation) { uriString in
+            Group {
+                if let url = URL(string: uriString),
+                   let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url),
+                   let outfit = try? viewContext.existingObject(with: objectID) as? Outfit {
+                    OutfitDetailView(outfit: outfit)
+                        .onAppear {
+                            print("🧭 [ItemDetailView] OutfitDetailView appeared; resetting selectedOutfitURIForNavigation to nil. outfitURI=\(uriString)")
+                            selectedOutfitURIForNavigation = nil
+                        }
+                } else {
+                    EmptyView()
+                        .onAppear {
+                            print("❌ [ItemDetailView] Failed to resolve outfit for navigation. uri=\(uriString)")
+                            selectedOutfitURIForNavigation = nil
+                        }
+                }
+            }
         }
         .sheet(isPresented: $isImagePickerPresented) {
             ImagePicker(
@@ -429,6 +491,30 @@ struct ItemDetailView: View {
         .sheet(isPresented: $showPairItemSelection) {
             PairItemSelectionView(item: item)
         }
+        .sheet(isPresented: $showViewAllPairsSheet) {
+            NavigationView {
+                PairsViewAllSheet(
+                    pairedItems: pairedItems,
+                    onSelect: { selected in
+                        selectedPairedItemForNavigation = selected
+                        showViewAllPairsSheet = false
+                    }
+                )
+            }
+            .presentationDetents(pairedItems.count > 6 ? [.medium, .large] : [.medium])
+        }
+        .sheet(isPresented: $showViewAllOutfitsSheet) {
+            NavigationView {
+                OutfitsViewAllSheet(
+                    outfits: outfits,
+                    onSelect: { outfit in
+                        selectedOutfitURIForNavigation = outfit.objectID.uriRepresentation().absoluteString
+                        showViewAllOutfitsSheet = false
+                    }
+                )
+            }
+            .presentationDetents(outfits.count > 6 ? [.medium, .large] : [.medium])
+        }
         .sheet(isPresented: $showShareFriendsSheet) {
             ShareItemFriendsSheet()
                 .environmentObject(supabaseService)
@@ -461,12 +547,17 @@ struct ItemDetailView: View {
         // Set updatedAt on item since we're modifying it
         setUpdatedAt(item)
 
+        let outfitsToSync = OutfitSanitizer.regenerateCollagesForOutfitsContaining(item: item, in: viewContext)
+
         do {
             try viewContext.save()
             print("✅ Replaced front photo.")
             selectedImageType = .front
             heroCarouselPage = 0
-            
+
+            for outfit in outfitsToSync {
+                SyncService.shared.syncOutfitIfNeeded(outfit)
+            }
             // Trigger automatic sync for the modified item
             SyncService.shared.syncItemIfNeeded(item)
         } catch {
@@ -561,7 +652,9 @@ struct ItemDetailView: View {
             
             // Set updatedAt on item since we're modifying it
             setUpdatedAt(item)
-            
+
+            let outfitsToSync = OutfitSanitizer.regenerateCollagesForOutfitsContaining(item: item, in: viewContext)
+
             do {
                 try viewContext.save()
                 print("✅ Deleted \(placeholderText(for: type)) photo.")
@@ -570,7 +663,10 @@ struct ItemDetailView: View {
                     selectedImageType = .front
                     heroCarouselPage = 0
                 }
-                
+
+                for outfit in outfitsToSync {
+                    SyncService.shared.syncOutfitIfNeeded(outfit)
+                }
                 // Trigger automatic sync for the modified item
                 SyncService.shared.syncItemIfNeeded(item)
             } catch {
@@ -1083,9 +1179,14 @@ struct ItemDetailView: View {
 
     
     private func fetchWardrobe(type: String) -> Wardrobe? {
+        if let uid = item.userId, !uid.isEmpty,
+           let w = try? WardrobeBootstrap.fetchPrimaryWardrobe(forType: type, userIdString: uid, in: viewContext) {
+            return w
+        }
         let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
         request.predicate = NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", type)
-        return try? viewContext.fetch(request).first
+        let rows = (try? viewContext.fetch(request)) ?? []
+        return WardrobeBootstrap.primaryWardrobe(in: rows)
     }
     
     private func fetchOutfits() {
@@ -1197,6 +1298,26 @@ struct ItemDetailView: View {
     func deleteItem() {
         // Store the brand before deletion to check if cleanup is needed
         let itemBrand = item.brand
+
+        let sanitizerResult = OutfitSanitizer.sanitizeOutfitsAfterDeleting(deletedItems: [item], in: viewContext)
+        let removedFromOutfitsCount = sanitizerResult.affectedOutfits.count
+
+        // Sanitize pairs before soft-delete (soft delete won't trigger Core Data delete rules).
+        // Remove this item from other items' pairedItems, and clear its own pairedItems.
+        let paired = (item.pairedItems as? Set<Item>) ?? []
+        var modifiedPairedItems: Set<Item> = []
+        for other in paired {
+            var othersPairs = (other.pairedItems as? Set<Item>) ?? []
+            if othersPairs.remove(item) != nil {
+                other.pairedItems = othersPairs as NSSet
+                setUpdatedAt(other)
+                modifiedPairedItems.insert(other)
+            }
+        }
+        if !paired.isEmpty {
+            item.pairedItems = NSSet()
+            setUpdatedAt(item)
+        }
         
         // Soft delete the item (for sync)
         softDelete(item)
@@ -1206,6 +1327,24 @@ struct ItemDetailView: View {
             
             // Trigger sync for the soft-deleted item
             SyncService.shared.syncItemIfNeeded(item)
+
+            // Sync any items whose pair relationships were updated
+            for pairedItem in modifiedPairedItems {
+                SyncService.shared.syncItemIfNeeded(pairedItem)
+            }
+
+            // Sync outfits that were sanitized (after the single save)
+            for outfit in sanitizerResult.affectedOutfits {
+                SyncService.shared.syncOutfitIfNeeded(outfit)
+            }
+
+            NotificationCenter.default.post(
+                name: Notification.Name("Closet.ItemDeletionToast"),
+                object: nil,
+                userInfo: [
+                    "message": "Deleted item. Removed from \(removedFromOutfitsCount) outfit\(removedFromOutfitsCount == 1 ? "" : "s")."
+                ]
+            )
             
             // Cleanup brand if it's now orphaned (has 0 items)
             if let brand = itemBrand {
@@ -1218,6 +1357,7 @@ struct ItemDetailView: View {
             print("Failed to delete item: \(error.localizedDescription)")
         }
     }
+    // Outfit sanitation is handled by `OutfitSanitizer` at delete-time.
     
     // MARK: - Cleanup Orphaned Brand
     private func cleanupBrandIfOrphaned(_ brand: Brand) {

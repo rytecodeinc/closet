@@ -64,6 +64,9 @@ struct SetTagView: View {
     private func fetchTags() {
         let request: NSFetchRequest<Tag> = Tag.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Tag.name, ascending: true)]
+        if let uid = item.userId, !uid.isEmpty {
+            request.predicate = NSPredicate(format: "userId == %@", uid)
+        }
         do {
             tags = try viewContext.fetch(request)
         } catch {

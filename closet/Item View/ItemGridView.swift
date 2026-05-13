@@ -62,6 +62,8 @@ struct ItemGridView: View {
     @State private var showTagAddedConfirmation = false
     @State private var addedTagName: String = ""
     @State private var addedTagItemCount: Int = 0
+    @State private var showDeletionToast = false
+    @State private var deletionToastMessage: String = ""
     @State private var showTagSelectionConfirmAlert = false
     @State private var pendingTagSelectionTarget: Tag?
     @State private var pendingTagSelectionWillRemove = false
@@ -96,6 +98,7 @@ struct ItemGridView: View {
         key += filterModel.selectedSubcategoryName ?? ""
         key += filterModel.selectedSizeValue ?? ""
         key += filterModel.selectedLocation?.objectID.uriRepresentation().absoluteString ?? ""
+        key += filterModel.favoritesOnly ? "favoritesOnly" : "allItems"
         if filterModel.filterByWeight {
             // Include user weight in key so it refreshes when user updates their weight
             let repository = UserProfileRepository(context: viewContext)
@@ -111,16 +114,24 @@ struct ItemGridView: View {
         var key = ""
         key += outfitFilterModel.selectedCategory ?? ""
         key += outfitFilterModel.selectedTags.map { $0.objectID.uriRepresentation().absoluteString }.sorted().joined(separator: ",")
+        key += outfitFilterModel.favoritesOnly ? "favoritesOnly" : "allOutfits"
+        key += outfitFilterModel.sortOrder.sortAscending ? "sortAsc" : "sortDesc"
         return key
     }
 
     var body: some View {
         VStack(spacing: 0) {
-          //  Divider()
-            UnderlineTabBar(
-                selectedTab: $selectedTab,
-                tabs: ["Items (\(closetItems.count))", "Outfits (\(outfits.count))"]
-            )
+            Picker("", selection: $selectedTab) {
+                Text("Items (\(closetItems.count))")
+                    .tag("Items")
+                Text("Outfits (\(outfits.count))")
+                    .tag("Outfits")
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(Color(.systemBackground))
             .disabled(isInSelectionMode)
             
          /*   if !isControlsHidden {
@@ -174,6 +185,11 @@ struct ItemGridView: View {
                context === viewContext || context.parent === viewContext {
                 fetchItems()
                 fetchOutfits()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("Closet.ItemDeletionToast"))) { notification in
+            if let message = notification.userInfo?["message"] as? String {
+                showToast(message)
             }
         }
         .toolbar {
@@ -361,6 +377,21 @@ struct ItemGridView: View {
         } message: {
             Text("Tag \"\(addedTagName)\" has been added to \(addedTagItemCount) item\(addedTagItemCount == 1 ? "" : "s").")
         }
+        .overlay(alignment: .top) {
+            if showDeletionToast {
+                Text(deletionToastMessage)
+                    .font(.subheadline)
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(.black.opacity(0.8))
+                    .clipShape(Capsule())
+                    .padding(.top, 10)
+                    .padding(.horizontal, 16)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
         .navigationDestination(item: $selectedItemForNavigation) { item in
             ItemDetailView(item: item)
         }
@@ -470,6 +501,12 @@ struct ItemGridView: View {
             subpredicates.append(locationPredicate)
         }
         
+        // Favorites-only filter
+        if filterModel.favoritesOnly {
+            let favoritesPredicate = NSPredicate(format: "isFavorite == YES")
+            subpredicates.append(favoritesPredicate)
+        }
+        
         // Weight filter - only show items that can support user's weight
         if filterModel.filterByWeight {
             let repository = UserProfileRepository(context: viewContext)
@@ -575,7 +612,7 @@ struct ItemGridView: View {
         }
         
         let request = NSFetchRequest<Outfit>(entityName: "Outfit")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.createdAt, ascending: filterModel.sortOrder.sortAscending)]
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.createdAt, ascending: outfitFilterModel.sortOrder.sortAscending)]
         
         // Build predicate from outfit filter model
         let filterPredicate = makeOutfitPredicate(for: outfitFilterModel)
@@ -674,7 +711,7 @@ struct ItemGridView: View {
     private var itemsTab: some View {
         Group {
             if closetItems.isEmpty {
-                EmptyItemStateView(wardrobe: selectedWardrobe, wardrobeType: wardrobeType)
+                EmptyItemStateView(wardrobe: selectedWardrobe)
             } else {
                 ScrollView(showsIndicators: false) {
                     LazyVGrid(columns: gridColumns, spacing: 2) {
@@ -882,7 +919,10 @@ struct ItemGridView: View {
     
     @ViewBuilder
     private func selectionModeTrailingToolbar() -> some View {
-        Button("Cancel") {
+        let hasSelection =
+            (selectedTab == "Items" && !selectedItems.isEmpty)
+            || (selectedTab == "Outfits" && !selectedOutfits.isEmpty)
+        Button(hasSelection ? "Done" : "Cancel") {
             isInSelectionMode = false
             if selectedTab == "Items" {
                 selectedItems.removeAll()
@@ -998,10 +1038,10 @@ struct ItemGridView: View {
             List {
                 ForEach(wardrobes, id: \.self) { wardrobe in
                     let allItemsInWardrobe = areAllSelectedItemsInWardrobe(wardrobe)
-                    let isDefault = wardrobe == wardrobes.first
+                    let isDefaultRow = wardrobe.isDefault == true
                     
                     Button {
-                        let isNonDefaultCurrentWardrobe = selectedWardrobe != wardrobes.first
+                        let isNonDefaultCurrentWardrobe = selectedWardrobe.isDefault != true
                         if isNonDefaultCurrentWardrobe {
                             pendingWardrobeSelectionTarget = wardrobe
                             pendingWardrobeSelectionWillRemove = allItemsInWardrobe
@@ -1014,8 +1054,7 @@ struct ItemGridView: View {
                         HStack {
                             Text(wardrobe.name ?? "Untitled")
                             
-                            // Add "Default" label next to the first wardrobe
-                            if isDefault {
+                            if isDefaultRow {
                                 Text("Default")
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
@@ -1080,90 +1119,108 @@ struct ItemGridView: View {
                 .padding(.horizontal)
                 .padding(.vertical, 8)
                 
-                if isSearchingSharedUsers {
-                    ProgressView("Searching…")
-                        .padding()
-                } else if isLoadingConnectedFriends && sharedUsersSearchText.isEmpty {
-                    ProgressView("Loading friends…")
-                        .padding()
-                } else if let error = sharedUsersError {
-                    Text(error)
-                        .foregroundColor(.red)
-                        .font(.caption)
-                        .padding()
-                } else if sharedUserResults.isEmpty && !sharedUsersSearchText.isEmpty {
-                    Text("No users found for “\(sharedUsersSearchText)”")
-                        .foregroundColor(.secondary)
-                        .padding()
-                } else if sharedUserResults.isEmpty && connectedFriends.isEmpty {
-                    Text("Search by username to find other users.")
-                        .foregroundColor(.secondary)
-                        .padding()
-                } else {
-                    List(sharedUsersSearchText.isEmpty ? connectedFriends : sharedUserResults) { profile in
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(profile.username)
-                                    .font(.headline)
-                                if let name = profile.displayName, !name.isEmpty {
-                                    Text(name)
-                                        .font(.subheadline)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            Spacer()
-                            if sharedUsersSearchText.isEmpty || friendUserIds.contains(profile.userId) {
+                Group {
+                    if isSearchingSharedUsers {
+                        ProgressView("Searching…")
+                            .padding()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if isLoadingConnectedFriends && sharedUsersSearchText.isEmpty {
+                        ProgressView("Loading friends…")
+                            .padding()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if let error = sharedUsersError {
+                        Text(error)
+                            .foregroundColor(.red)
+                            .font(.caption)
+                            .padding()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if sharedUserResults.isEmpty && !sharedUsersSearchText.isEmpty {
+                        Text("No users found for “\(sharedUsersSearchText)”")
+                            .foregroundColor(.secondary)
+                            .padding()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if sharedUserResults.isEmpty && connectedFriends.isEmpty {
+                        Text("Search by username to find other users.")
+                            .foregroundColor(.secondary)
+                            .padding()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        List(sharedUsersSearchText.isEmpty ? connectedFriends : sharedUserResults) { profile in
+                            HStack(spacing: 12) {
                                 Button {
-                                    unfriendTargetUserId = profile.userId
-                                    showUnfriendAlert = true
+                                    // Placeholder until public profile view exists
                                 } label: {
-                                    HStack(spacing: 6) {
-                                        Text("Friends")
-                                        Image(systemName: "checkmark")
-                                    }
-                                }
-                                .buttonStyle(.bordered)
-                                .font(.caption)
-                            } else if pendingFriendRequestUserIds.contains(profile.userId) {
-                                Button("Request Sent") {
-                                    Task {
-                                        do {
-                                            try await supabaseService.cancelFriendRequest(toUserId: profile.userId)
-                                            await MainActor.run {
-                                                pendingFriendRequestUserIds.remove(profile.userId)
+                                    HStack(spacing: 12) {
+                                        PublicUserProfileAvatarView(profile: profile, size: 44)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(profile.username)
+                                                .font(.headline)
+                                                .foregroundStyle(.primary)
+                                            if let name = profile.displayName, !name.isEmpty {
+                                                Text(name)
+                                                    .font(.subheadline)
+                                                    .foregroundStyle(.secondary)
                                             }
-                                        } catch {
-                                            print("Failed to cancel friend request: \(error.localizedDescription)")
+                                        }
+                                        Spacer(minLength: 0)
+                                    }
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                if sharedUsersSearchText.isEmpty || friendUserIds.contains(profile.userId) {
+                                    Button {
+                                        unfriendTargetUserId = profile.userId
+                                        showUnfriendAlert = true
+                                    } label: {
+                                        HStack(spacing: 6) {
+                                            Text("Friends")
+                                            Image(systemName: "checkmark")
                                         }
                                     }
-                                }
-                                .buttonStyle(.bordered)
-                                .font(.caption)
-                            } else {
-                                Button("Add Friend") {
-                                    Task {
-                                        do {
-                                            try await supabaseService.sendFriendRequest(
-                                                toUserId: profile.userId,
-                                                toUsername: profile.username,
-                                                toDisplayName: profile.displayName
-                                            )
-                                            await MainActor.run {
-                                                pendingFriendRequestUserIds.insert(profile.userId)
+                                    .buttonStyle(.bordered)
+                                    .font(.caption)
+                                } else if pendingFriendRequestUserIds.contains(profile.userId) {
+                                    Button("Request Sent") {
+                                        Task {
+                                            do {
+                                                try await supabaseService.cancelFriendRequest(toUserId: profile.userId)
+                                                await MainActor.run {
+                                                    pendingFriendRequestUserIds.remove(profile.userId)
+                                                }
+                                            } catch {
+                                                print("Failed to cancel friend request: \(error.localizedDescription)")
                                             }
-                                        } catch {
-                                            print("Failed to send friend request: \(error.localizedDescription)")
                                         }
                                     }
+                                    .buttonStyle(.bordered)
+                                    .font(.caption)
+                                } else {
+                                    Button("Add Friend") {
+                                        Task {
+                                            do {
+                                                try await supabaseService.sendFriendRequest(
+                                                    toUserId: profile.userId,
+                                                    toUsername: profile.username,
+                                                    toDisplayName: profile.displayName
+                                                )
+                                                await MainActor.run {
+                                                    pendingFriendRequestUserIds.insert(profile.userId)
+                                                }
+                                            } catch {
+                                                print("Failed to send friend request: \(error.localizedDescription)")
+                                            }
+                                        }
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .font(.caption)
                                 }
-                                .buttonStyle(.bordered)
-                                .font(.caption)
                             }
                         }
+                        .listStyle(.plain)
+                        .scrollContentBackground(.hidden)
                     }
-                    .listStyle(.plain)
                 }
-                Spacer()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationTitle("Shared Users")
@@ -1190,6 +1247,7 @@ struct ItemGridView: View {
                                 friendUserIds.remove(targetId)
                                 connectedFriends.removeAll { $0.userId == targetId }
                             }
+                            supabaseService.applyFriendCountDelta(-1)
                         } catch {
                             print("Failed to unfriend: \(error.localizedDescription)")
                         }
@@ -1400,9 +1458,42 @@ struct ItemGridView: View {
         }
     }
 
+    /// Removes deleted items from other items' `pairedItems` and clears deleted items' own pairs.
+    /// Returns the set of non-deleted items that were modified and should be synced.
+    private func sanitizePairsAfterDeleting(deletedItems: Set<Item>) -> Set<Item> {
+        guard !deletedItems.isEmpty else { return [] }
+
+        var modifiedPairedItems: Set<Item> = []
+
+        for deleted in deletedItems {
+            let paired = (deleted.pairedItems as? Set<Item>) ?? []
+
+            // Remove the deleted item from any still-active paired items.
+            for other in paired where !deletedItems.contains(other) {
+                var othersPairs = (other.pairedItems as? Set<Item>) ?? []
+                if othersPairs.remove(deleted) != nil {
+                    other.pairedItems = othersPairs as NSSet
+                    setUpdatedAt(other)
+                    modifiedPairedItems.insert(other)
+                }
+            }
+
+            // Clear pairs on the deleted item itself to prevent "ghost" pairs in UI.
+            if !paired.isEmpty {
+                deleted.pairedItems = NSSet()
+                setUpdatedAt(deleted)
+            }
+        }
+
+        return modifiedPairedItems
+    }
+
     private func deleteSelectedItems() {
         guard !selectedItems.isEmpty else { return }
         
+        let sanitizerResult = OutfitSanitizer.sanitizeOutfitsAfterDeleting(deletedItems: selectedItems, in: viewContext)
+        let removedFromOutfitsCount = sanitizerResult.affectedOutfits.count
+
         // Store brands before deletion to check if cleanup is needed
         var brandsToCheck: Set<Brand> = []
         for item in selectedItems {
@@ -1410,6 +1501,9 @@ struct ItemGridView: View {
                 brandsToCheck.insert(brand)
             }
         }
+
+        // Sanitize pairs before soft-delete (soft delete won't trigger Core Data delete rules).
+        let modifiedPairedItems = sanitizePairsAfterDeleting(deletedItems: selectedItems)
         
         // Soft delete all selected items (for sync)
         for item in selectedItems {
@@ -1424,6 +1518,24 @@ struct ItemGridView: View {
             for item in selectedItems {
                 SyncService.shared.syncItemIfNeeded(item)
             }
+
+            // Also sync any items whose pair relationships were updated
+            for item in modifiedPairedItems {
+                SyncService.shared.syncItemIfNeeded(item)
+            }
+
+            // Sync outfits that were sanitized (after the single save)
+            for outfit in sanitizerResult.affectedOutfits {
+                SyncService.shared.syncOutfitIfNeeded(outfit)
+            }
+
+            NotificationCenter.default.post(
+                name: Notification.Name("Closet.ItemDeletionToast"),
+                object: nil,
+                userInfo: [
+                    "message": "Deleted \(selectedItems.count) item\(selectedItems.count == 1 ? "" : "s"). Removed from \(removedFromOutfitsCount) outfit\(removedFromOutfitsCount == 1 ? "" : "s")."
+                ]
+            )
             
             // Cleanup orphaned brands
             for brand in brandsToCheck {
@@ -1438,6 +1550,20 @@ struct ItemGridView: View {
             print("❌ Failed to delete items: \(error.localizedDescription)")
         }
     }
+
+    private func showToast(_ message: String) {
+        deletionToastMessage = message
+        withAnimation(.easeInOut(duration: 0.18)) {
+            showDeletionToast = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+            withAnimation(.easeInOut(duration: 0.22)) {
+                showDeletionToast = false
+            }
+        }
+    }
+
+    // Outfit sanitation is handled by `OutfitSanitizer` at delete-time.
     
     private func deleteSelectedOutfits() {
         guard !selectedOutfits.isEmpty else { return }

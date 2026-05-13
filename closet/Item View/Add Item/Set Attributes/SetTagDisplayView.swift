@@ -113,8 +113,18 @@ struct SetTagDisplayView: View {
     // MARK: - Fetch Tags
     private func fetchTags() {
         let request: NSFetchRequest<Tag> = Tag.fetchRequest()
-        request.predicate = NSPredicate(format: "SUBQUERY(items, $i, ANY $i.wardrobes.type == %@).@count > 0", wardrobeTypeForTags)
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Tag.name, ascending: true)]
+        if let uid = item.userId, !uid.isEmpty {
+            let owned = NSPredicate(format: "userId == %@", uid)
+            let fromWardrobe = NSPredicate(
+                format: "SUBQUERY(items, $i, ANY $i.wardrobes.type == %@ AND $i.userId == %@ AND ($i.isSoftDeleted != YES OR $i.isSoftDeleted == nil)).@count > 0",
+                wardrobeTypeForTags,
+                uid
+            )
+            request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, fromWardrobe])
+        } else {
+            request.predicate = NSPredicate(format: "SUBQUERY(items, $i, ANY $i.wardrobes.type == %@).@count > 0", wardrobeTypeForTags)
+        }
         do {
             tags = try viewContext.fetch(request)
         } catch {
@@ -160,6 +170,7 @@ struct SetTagDisplayView: View {
         let newTag = Tag(context: viewContext)
         newTag.name = trimmed
         newTag.id = UUID()
+        newTag.userId = item.userId
 
         item.addToTags(newTag)
         
