@@ -13,12 +13,12 @@ struct ItemFilterView: View {
     @ObservedObject var filterModel: ItemFilterModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var viewContext
-    @EnvironmentObject private var supabaseService: SupabaseService
+    @EnvironmentObject private var authSession: AuthSession
     
     var wardrobeType: String = "closet" // Default to "closet" for backward compatibility
 
     private var currentUserId: String? {
-        supabaseService.currentUser?.id.uuidString
+        authSession.userId?.uuidString
     }
 
     var body: some View {

@@ -70,7 +70,12 @@ struct SeasonListView: View {
             ])
         }
         do {
-            seasons = try viewContext.fetch(request)
+            let fetched = try viewContext.fetch(request)
+            if let uid = userId {
+                seasons = dedupeNamedReferenceRows(fetched, preferredUserId: uid)
+            } else {
+                seasons = fetched
+            }
         } catch {
             print("❌ Failed to fetch seasons: \(error.localizedDescription)")
             seasons = []

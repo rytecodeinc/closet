@@ -77,8 +77,8 @@ struct BrandListView: View {
         }
         do {
             let allBrands = try viewContext.fetch(request)
-            if userId != nil {
-                brands = allBrands
+            if let uid = userId {
+                brands = dedupeNamedReferenceRows(allBrands, preferredUserId: uid)
             } else {
                 brands = allBrands.filter { brand in
                     if let items = brand.items as? Set<Item> {

@@ -78,7 +78,12 @@ struct ColorListView: View {
             request.predicate = visible
         }
         do {
-            colors = try viewContext.fetch(request)
+            let fetched = try viewContext.fetch(request)
+            if let uid = userId {
+                colors = dedupeNamedReferenceRows(fetched, preferredUserId: uid)
+            } else {
+                colors = fetched
+            }
         } catch {
             print("❌ Failed to fetch colors: \(error.localizedDescription)")
             colors = []

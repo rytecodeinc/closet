@@ -68,7 +68,12 @@ struct LocationListView: View {
             request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, usedByUser])
         }
         do {
-            locations = try viewContext.fetch(request)
+            let fetched = try viewContext.fetch(request)
+            if let uid = userId {
+                locations = dedupeNamedReferenceRows(fetched, preferredUserId: uid)
+            } else {
+                locations = fetched
+            }
         } catch {
             print("❌ Failed to fetch locations: \(error.localizedDescription)")
             locations = []

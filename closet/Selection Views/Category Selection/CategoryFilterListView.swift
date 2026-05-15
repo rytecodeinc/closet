@@ -123,7 +123,12 @@ struct CategoryFilterListView: View {
             request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, usedByUserItems])
         }
         do {
-            categories = try viewContext.fetch(request)
+            let fetched = try viewContext.fetch(request)
+            if let uid = userId {
+                categories = dedupeNamedReferenceRows(fetched, preferredUserId: uid)
+            } else {
+                categories = fetched
+            }
         } catch {
             print("❌ Failed to fetch categories: \(error.localizedDescription)")
             categories = []
@@ -144,7 +149,13 @@ struct CategoryFilterListView: View {
         } else {
             filtered = Array(set)
         }
-        return filtered.sorted {
+        let deduped: [Subcategory]
+        if let uid = userId {
+            deduped = dedupeNamedReferenceRows(filtered, preferredUserId: uid)
+        } else {
+            deduped = filtered
+        }
+        return deduped.sorted {
             if $0.sortOrder != $1.sortOrder { return $0.sortOrder < $1.sortOrder }
             return ($0.name ?? "") < ($1.name ?? "")
         }
