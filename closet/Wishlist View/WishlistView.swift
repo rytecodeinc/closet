@@ -11,7 +11,7 @@ import CoreData
 
 struct WishlistView: View {
     @Environment(\.managedObjectContext) private var viewContext
-    @EnvironmentObject private var supabaseService: SupabaseService
+    @EnvironmentObject private var authSession: AuthSession
     @StateObject var filterModel = ItemFilterModel()
     
     @FetchRequest(
@@ -20,7 +20,7 @@ struct WishlistView: View {
     ) private var allWishlistsOfType: FetchedResults<Wardrobe>
 
     private var currentUserId: String? {
-        supabaseService.currentUser?.id.uuidString
+        authSession.userId?.uuidString
     }
 
     /// Wishlists for the signed-in user only.
@@ -46,7 +46,7 @@ struct WishlistView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { navigationBarToolbar() }
                 .onAppear {
-                    if let uid = supabaseService.currentUser?.id {
+                    if let uid = authSession.userId {
                         try? WardrobeBootstrap.ensureDefaultWardrobes(for: uid, in: viewContext)
                     }
                     setInitialWishlist()
@@ -120,7 +120,11 @@ private extension WishlistView {
     func addItemButton() -> some View {
         if let selectedWishlist = selectedWishlist {
             NavigationLink(
-                destination: ItemAddView(parentContext: viewContext, selectedWardrobe: selectedWishlist)
+                destination: ItemAddView(
+                    parentContext: viewContext,
+                    selectedWardrobe: selectedWishlist,
+                    sessionAccountId: authSession.userId?.uuidString
+                )
             ) {
                 Image(systemName: "plus")
             }
@@ -299,7 +303,7 @@ private extension WishlistView {
         newWishlist.name = normalized
         
         // Set userId for sync
-        if let userId = SupabaseService.shared.currentUser?.id.uuidString {
+        if let userId = authSession.userId?.uuidString {
             newWishlist.userId = userId
         }
         
@@ -324,7 +328,7 @@ private extension WishlistView {
     private func deleteWishlist(_ wishlist: Wardrobe) {
         // Ensure userId is set if missing (needed for sync)
         if wishlist.userId == nil || wishlist.userId?.isEmpty == true,
-           let userId = SupabaseService.shared.currentUser?.id.uuidString {
+           let userId = authSession.userId?.uuidString {
             wishlist.userId = userId
         }
         
@@ -357,7 +361,7 @@ private extension WishlistView {
         
         // Ensure userId is set if missing
         if wardrobe.userId == nil || wardrobe.userId?.isEmpty == true,
-           let userId = SupabaseService.shared.currentUser?.id.uuidString {
+           let userId = authSession.userId?.uuidString {
             wardrobe.userId = userId
         }
         

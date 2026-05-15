@@ -12,12 +12,17 @@ struct SetSeasonView: View {
     @ObservedObject var item: Item
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authSession: AuthSession
 
     @State private var selectedSeasonNames: Set<String> = []
 
+    private var referenceUserId: String? {
+        effectiveReferenceDataUserId(signedInUserId: authSession.userId, entityUserId: item.userId)
+    }
+
     var body: some View {
         Section(header: SelectionHeader(title: "Select Season")) {
-            SeasonListView(selectedSeasonNames: $selectedSeasonNames, userId: item.userId)
+            SeasonListView(selectedSeasonNames: $selectedSeasonNames, userId: referenceUserId)
         }
         .onAppear {
             if let seasons = item.seasons as? Set<Season> {
@@ -74,7 +79,7 @@ struct SetSeasonView: View {
 
     private func fetchOrCreateSeason(named name: String) -> Season {
         let request: NSFetchRequest<Season> = Season.fetchRequest()
-        if let uid = item.userId, !uid.isEmpty {
+        if let uid = referenceUserId, !uid.isEmpty {
             request.predicate = NSPredicate(format: "name ==[c] %@ AND userId == %@", name, uid)
         } else {
             request.predicate = NSPredicate(format: "name ==[c] %@", name)
@@ -92,7 +97,7 @@ struct SetSeasonView: View {
         newSeason.name = name
         newSeason.id = UUID()
         newSeason.isVisible = true
-        newSeason.userId = item.userId
+        newSeason.userId = referenceUserId ?? item.userId
         return newSeason
     }
 }

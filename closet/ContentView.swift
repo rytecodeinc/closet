@@ -12,6 +12,7 @@ struct ContentView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject var deepLinkRouter: DeepLinkRouter
     @EnvironmentObject var supabaseService: SupabaseService
+    @EnvironmentObject var authSession: AuthSession
     @EnvironmentObject var bulkItemImportCoordinator: BulkItemImportCoordinator
 
     @FetchRequest(
@@ -28,9 +29,9 @@ struct ContentView: View {
     @State private var hasAppeared = false
     @State private var showDeepLinkItemAdd = false
     
-    // Computed property for current user ID
+    // Signed-in account id (mirrors `ItemFilterView` / `AuthSession`).
     private var currentUserId: String? {
-        supabaseService.currentUser?.id.uuidString
+        authSession.userId?.uuidString
     }
     
     // Filter items by userId (since @FetchRequest can't use dynamic predicates)
@@ -92,8 +93,8 @@ struct ContentView: View {
                 Text("Profile")
             }
         }
-        .task(id: supabaseService.currentUser?.id) {
-            guard let userId = supabaseService.currentUser?.id else { return }
+        .task(id: authSession.userId) {
+            guard let userId = authSession.userId else { return }
             do {
                 try WardrobeBootstrap.ensureDefaultWardrobes(for: userId, in: viewContext)
                 try ReferenceDataBootstrap.ensureUserDefaults(for: userId, in: viewContext)
@@ -106,7 +107,7 @@ struct ContentView: View {
                 migrateItemImages(context: viewContext)
                 migratePhotoTypes(context: viewContext)
                 migrateWishlistItems(context: viewContext)
-                deduplicateWardrobes(context: viewContext, userId: SupabaseService.shared.currentUser?.id.uuidString)
+                deduplicateWardrobes(context: viewContext, userId: authSession.userId?.uuidString)
                 compressExistingPhotos(context: viewContext)
                 resolveSizeConstraintConflicts(context: viewContext)
                 migrateUserWeightFromUserDefaults(context: viewContext)
@@ -139,7 +140,8 @@ struct ContentView: View {
                     parentContext: viewContext,
                     selectedWardrobe: closets.first,
                     initialURL: url,
-                    initialImage: image
+                    initialImage: image,
+                    sessionAccountId: authSession.userId?.uuidString
                 )
                 .environmentObject(bulkItemImportCoordinator)
                 .onDisappear {
@@ -184,5 +186,6 @@ struct ContentView: View {
         .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
         .environmentObject(DeepLinkRouter.shared)
         .environmentObject(SupabaseService.shared)
+        .environmentObject(AuthSession())
         .environmentObject(BulkItemImportCoordinator())
 }

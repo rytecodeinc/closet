@@ -12,6 +12,7 @@ struct SingleWardrobeSelectionView: View {
     @Binding var selectedWardrobe: Wardrobe?
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authSession: AuthSession
     
     let wardrobeType: String
     
@@ -27,7 +28,7 @@ struct SingleWardrobeSelectionView: View {
     
     // Filter wardrobes by type, excluding soft-deleted and unowned wardrobes
     private var wardrobes: [Wardrobe] {
-        let userId = SupabaseService.shared.currentUser?.id.uuidString
+        let userId = authSession.userId?.uuidString
         return allWardrobes.filter {
             $0.type == wardrobeType &&
             $0.isSoftDeleted != true &&
@@ -61,7 +62,7 @@ struct SingleWardrobeSelectionView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             // Run deduplication to ensure no duplicates are shown
-            deduplicateWardrobes(context: viewContext, userId: SupabaseService.shared.currentUser?.id.uuidString)
+            deduplicateWardrobes(context: viewContext, userId: authSession.userId?.uuidString)
             if viewContext.hasChanges {
                 try? viewContext.save()
             }

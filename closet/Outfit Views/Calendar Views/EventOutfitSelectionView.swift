@@ -11,6 +11,7 @@ import CoreData
 struct EventOutfitSelectionView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authSession: AuthSession
 
     @ObservedObject var event: Event
     
@@ -24,12 +25,9 @@ struct EventOutfitSelectionView: View {
     
     private var squareSize = UIScreen.main.bounds.width / 2.0
     
-    // MARK: - Current user ID
-        private var currentUserID: String? {
-            SupabaseService.shared.currentUser?.id.uuidString
-        }
-
-    
+    private var currentUserID: String? {
+        authSession.userId?.uuidString
+    }
     // MARK: - Explicit initializer
     init(event: Event) {
         self.event = event

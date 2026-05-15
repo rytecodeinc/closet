@@ -11,7 +11,7 @@ import CoreData
 
 struct ClosetView: View {
     @Environment(\.managedObjectContext) private var viewContext
-    @EnvironmentObject private var supabaseService: SupabaseService
+    @EnvironmentObject private var authSession: AuthSession
     @StateObject var filterModel = ItemFilterModel()
     
     @FetchRequest(
@@ -20,7 +20,7 @@ struct ClosetView: View {
     ) private var allClosetsOfType: FetchedResults<Wardrobe>
 
     private var currentUserId: String? {
-        supabaseService.currentUser?.id.uuidString
+        authSession.userId?.uuidString
     }
 
     /// Closets belonging to the signed-in user only (same-store multi-account safe).
@@ -46,7 +46,7 @@ struct ClosetView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { navigationBarToolbar() }
                 .onAppear {
-                    if let uid = supabaseService.currentUser?.id {
+                    if let uid = authSession.userId {
                         try? WardrobeBootstrap.ensureDefaultWardrobes(for: uid, in: viewContext)
                     }
                     setInitialCloset()
@@ -122,7 +122,11 @@ private extension ClosetView {
     func addItemButton() -> some View {
         if let selectedWardrobe = selectedWardrobe {
             NavigationLink(
-                destination: ItemAddView(parentContext: viewContext, selectedWardrobe: selectedWardrobe)
+                destination: ItemAddView(
+                    parentContext: viewContext,
+                    selectedWardrobe: selectedWardrobe,
+                    sessionAccountId: authSession.userId?.uuidString
+                )
             ) {
                 Image(systemName: "plus")
             }
@@ -306,7 +310,7 @@ private extension ClosetView {
         newCloset.name = normalized
         
         // Set userId for sync
-        if let userId = SupabaseService.shared.currentUser?.id.uuidString {
+        if let userId = authSession.userId?.uuidString {
             newCloset.userId = userId
         }
         
@@ -337,7 +341,7 @@ private extension ClosetView {
         
         // Ensure userId is set if missing (needed for sync)
         if closet.userId == nil || closet.userId?.isEmpty == true,
-           let userId = SupabaseService.shared.currentUser?.id.uuidString {
+           let userId = authSession.userId?.uuidString {
             closet.userId = userId
         }
         
@@ -372,7 +376,7 @@ private extension ClosetView {
         
         // Ensure userId is set if missing
         if wardrobe.userId == nil || wardrobe.userId?.isEmpty == true,
-           let userId = SupabaseService.shared.currentUser?.id.uuidString {
+           let userId = authSession.userId?.uuidString {
             wardrobe.userId = userId
         }
         

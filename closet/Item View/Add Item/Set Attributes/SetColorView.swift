@@ -12,12 +12,17 @@ struct SetColorView: View {
     @ObservedObject var item: Item
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authSession: AuthSession
 
     @State private var selectedColorNames: Set<String> = []
 
+    private var referenceUserId: String? {
+        effectiveReferenceDataUserId(signedInUserId: authSession.userId, entityUserId: item.userId)
+    }
+
     var body: some View {
         Section(header: SelectionHeader(title: "Select Color")) {
-            ColorListView(selectedColorNames: $selectedColorNames, userId: item.userId)
+            ColorListView(selectedColorNames: $selectedColorNames, userId: referenceUserId)
         }
         .onAppear {
             if let colors = item.colors as? Set<AppColor> {
@@ -74,7 +79,7 @@ struct SetColorView: View {
 
     private func fetchOrCreateColor(named name: String) -> AppColor {
         let fetchRequest: NSFetchRequest<AppColor> = AppColor.fetchRequest()
-        if let uid = item.userId, !uid.isEmpty {
+        if let uid = referenceUserId, !uid.isEmpty {
             fetchRequest.predicate = NSPredicate(format: "name ==[c] %@ AND userId == %@", name, uid)
         } else {
             fetchRequest.predicate = NSPredicate(format: "name ==[c] %@", name)
@@ -92,7 +97,7 @@ struct SetColorView: View {
         newColor.id = UUID()
         newColor.name = name
         newColor.isVisible = true
-        newColor.userId = item.userId
+        newColor.userId = referenceUserId ?? item.userId
         return newColor
     }
 }

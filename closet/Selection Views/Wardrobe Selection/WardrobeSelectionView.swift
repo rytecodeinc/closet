@@ -12,6 +12,7 @@ struct WardrobeSelectionView: View {
     @ObservedObject var item: Item
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authSession: AuthSession
 
     @State private var selectedWardrobes: Set<Wardrobe> = []
     
@@ -60,7 +61,7 @@ struct WardrobeSelectionView: View {
                 selectedWardrobes: $selectedWardrobes,
                 defaultWardrobeType: defaultWardrobeType,
                 excludeWardrobeType: excludeWardrobeType,
-                userId: SupabaseService.shared.currentUser?.id.uuidString
+                userId: effectiveReferenceDataUserId(signedInUserId: authSession.userId, entityUserId: item.userId)
             )
         }
         .onAppear {
@@ -94,7 +95,7 @@ struct WardrobeSelectionView: View {
         let hasDefaultWardrobe = selectedWardrobes.contains { $0.type?.lowercased() == defaultType.lowercased() }
         
         if !hasDefaultWardrobe {
-            if let uid = item.userId ?? SupabaseService.shared.currentUser?.id.uuidString,
+            if let uid = effectiveReferenceDataUserId(signedInUserId: authSession.userId, entityUserId: item.userId),
                let w = try? WardrobeBootstrap.fetchPrimaryWardrobe(forType: defaultType, userIdString: uid, in: viewContext) {
                 selectedWardrobes.insert(w)
             } else {

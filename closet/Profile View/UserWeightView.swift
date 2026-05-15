@@ -12,6 +12,7 @@ struct UserWeightView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject var supabaseService: SupabaseService
+    @EnvironmentObject var authSession: AuthSession
     
     @State private var manualWeightInput: String = ""
     @State private var selectedUnit: WeightUnit = Locale.current.measurementSystem == .metric ? .kilograms : .pounds
@@ -212,7 +213,7 @@ struct UserWeightView: View {
         // Save to CoreData
         do {
             // Get userId from SupabaseService
-            let userId = supabaseService.currentUser?.id.uuidString
+            let userId = authSession.userId?.uuidString
             try profileRepository.updateWeight(
                 weightKg: weightKg,
                 unit: isKilograms ? "kg" : "lbs",

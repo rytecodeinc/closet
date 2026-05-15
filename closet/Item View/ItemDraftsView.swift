@@ -96,7 +96,6 @@ struct ItemDraftsView: View {
                                 }
                         }
                     }
-                    .padding(.top, 2)
                 }
             }
         }

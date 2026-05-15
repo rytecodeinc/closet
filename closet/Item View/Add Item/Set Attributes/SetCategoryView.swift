@@ -12,11 +12,16 @@ struct SetCategoryView: View {
     @ObservedObject var item: Item
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authSession: AuthSession
 
     @State private var selectedCategoryName: String?
     @State private var selectedSubcategoryName: String?
     @State private var categories: [Category] = []
     @State private var expanded: Set<NSManagedObjectID> = []
+
+    private var referenceUserId: String? {
+        effectiveReferenceDataUserId(signedInUserId: authSession.userId, entityUserId: item.userId)
+    }
 
     var body: some View {
         VStack {
@@ -181,7 +186,7 @@ struct SetCategoryView: View {
     private func fetchCategories() {
         let request = NSFetchRequest<Category>(entityName: "Category")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Category.name, ascending: true)]
-        if let uid = item.userId, !uid.isEmpty {
+        if let uid = referenceUserId, !uid.isEmpty {
             let owned = NSPredicate(format: "userId == %@", uid)
             let usedByUserItems = NSPredicate(
                 format: "SUBQUERY(items, $i, $i.userId == %@ AND ($i.isSoftDeleted != YES OR $i.isSoftDeleted == nil)).@count > 0",
@@ -190,7 +195,12 @@ struct SetCategoryView: View {
             request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, usedByUserItems])
         }
         do {
-            categories = try viewContext.fetch(request)
+            let fetched = try viewContext.fetch(request)
+            if let uid = referenceUserId, !uid.isEmpty {
+                categories = dedupeNamedReferenceRows(fetched, preferredUserId: uid)
+            } else {
+                categories = fetched
+            }
             print("✅ Fetched \(categories.count) categories")
         } catch {
             print("❌ Failed to fetch categories: \(error)")
@@ -201,7 +211,7 @@ struct SetCategoryView: View {
     private func sortedSubcategories(for category: Category) -> [Subcategory] {
         let set = (category.subcategories as? Set<Subcategory>) ?? []
         let filtered: [Subcategory]
-        if let uid = item.userId, !uid.isEmpty {
+        if let uid = referenceUserId, !uid.isEmpty {
             filtered = set.filter { sub in
                 if sub.userId == uid { return true }
                 let items = sub.items as? Set<Item> ?? []
@@ -212,7 +222,13 @@ struct SetCategoryView: View {
         } else {
             filtered = Array(set)
         }
-        return filtered.sorted {
+        let deduped: [Subcategory]
+        if let uid = referenceUserId, !uid.isEmpty {
+            deduped = dedupeNamedReferenceRows(filtered, preferredUserId: uid)
+        } else {
+            deduped = filtered
+        }
+        return deduped.sorted {
             if $0.sortOrder != $1.sortOrder { return $0.sortOrder < $1.sortOrder }
             return ($0.name ?? "") < ($1.name ?? "")
         }
@@ -220,7 +236,7 @@ struct SetCategoryView: View {
 
     private func fetchOrCreateCategory(named name: String) -> Category {
         let request = NSFetchRequest<Category>(entityName: "Category")
-        if let uid = item.userId, !uid.isEmpty {
+        if let uid = referenceUserId, !uid.isEmpty {
             request.predicate = NSPredicate(format: "name ==[c] %@ AND userId == %@", name, uid)
         } else {
             request.predicate = NSPredicate(format: "name ==[c] %@", name)
@@ -236,14 +252,14 @@ struct SetCategoryView: View {
         let newCategory = Category(context: viewContext)
         newCategory.name = name
         newCategory.id = UUID()
-        newCategory.userId = item.userId
+        newCategory.userId = referenceUserId ?? item.userId
         return newCategory
     }
 
     private func fetchSubcategory(named name: String, in category: Category) -> Subcategory? {
         let req = NSFetchRequest<Subcategory>(entityName: "Subcategory")
         req.fetchLimit = 1
-        if let uid = item.userId, !uid.isEmpty {
+        if let uid = referenceUserId, !uid.isEmpty {
             req.predicate = NSPredicate(format: "name ==[c] %@ AND category == %@ AND userId == %@", name, category, uid)
         } else {
             req.predicate = NSPredicate(format: "name ==[c] %@ AND category == %@", name, category)

@@ -125,6 +125,43 @@ func notSoftDeletedPredicate() -> NSPredicate {
     return NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
 }
 
+// MARK: - Reference list deduplication
+
+/// User id for scoping reference-data pickers (same rule as `ItemFilterView`’s `currentUserId`): prefer the signed-in account, then non-empty `Item.userId` (e.g. drafts before session is stamped on the item).
+func effectiveReferenceDataUserId(signedInUserId: UUID?, entityUserId: String?) -> String? {
+    if let id = signedInUserId {
+        return id.uuidString
+    }
+    let trimmed = entityUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return trimmed.isEmpty ? nil : trimmed
+}
+
+/// After user-scoped defaults are merged (`ReferenceDataBootstrap`), legacy rows with `userId == nil` can still match "used by my items" while new rows match `userId == preferredUserId`, so the same display name appears twice in pickers. Prefer the user-scoped row when names collide (case-insensitive).
+func dedupeNamedReferenceRows<T: NSManagedObject>(_ rows: [T], preferredUserId: String) -> [T] {
+    var bestByKey: [String: T] = [:]
+    for row in rows {
+        let rawName = (row.value(forKey: "name") as? String) ?? ""
+        let key = rawName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !key.isEmpty else { continue }
+        let uid = (row.value(forKey: "userId") as? String) ?? ""
+        if let existing = bestByKey[key] {
+            let existingUid = (existing.value(forKey: "userId") as? String) ?? ""
+            let newIsOwned = uid == preferredUserId
+            let oldIsOwned = existingUid == preferredUserId
+            if newIsOwned && !oldIsOwned {
+                bestByKey[key] = row
+            }
+        } else {
+            bestByKey[key] = row
+        }
+    }
+    return bestByKey.values.sorted { a, b in
+        let na = (a.value(forKey: "name") as? String) ?? ""
+        let nb = (b.value(forKey: "name") as? String) ?? ""
+        return na.localizedCaseInsensitiveCompare(nb) == .orderedAscending
+    }
+}
+
 // MARK: - Calendar events (user scope)
 
 /// Infer `userId` from items linked to the event (ordered), then from outfits.

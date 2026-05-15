@@ -12,8 +12,13 @@ struct SetWardrobeView: View {
     @ObservedObject var item: Item
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authSession: AuthSession
 
     @State private var selectedWardrobes: Set<Wardrobe> = []
+
+    private var accountUserId: String? {
+        effectiveReferenceDataUserId(signedInUserId: authSession.userId, entityUserId: item.userId)
+    }
     
     // Determine default wardrobe type and exclusion based on item's current wardrobes
     private var defaultWardrobeType: String? {
@@ -60,11 +65,11 @@ struct SetWardrobeView: View {
                 selectedWardrobes: $selectedWardrobes,
                 defaultWardrobeType: defaultWardrobeType,
                 excludeWardrobeType: excludeWardrobeType,
-                userId: SupabaseService.shared.currentUser?.id.uuidString
+                userId: accountUserId
             )
         }
         .onAppear {
-            let currentUserId = SupabaseService.shared.currentUser?.id.uuidString
+            let currentUserId = accountUserId
             // Run deduplication on the parent context to ensure no duplicates
             // Get the parent context from the child context
             if let parentContext = viewContext.parent {
@@ -146,7 +151,7 @@ struct SetWardrobeView: View {
         let hasDefaultWardrobe = selectedWardrobes.contains { $0.type?.lowercased() == defaultType.lowercased() }
         
         if !hasDefaultWardrobe {
-            if let uid = item.userId ?? SupabaseService.shared.currentUser?.id.uuidString,
+            if let uid = accountUserId,
                let defaultWardrobe = try? WardrobeBootstrap.fetchPrimaryWardrobe(forType: defaultType, userIdString: uid, in: viewContext) {
                 selectedWardrobes.insert(defaultWardrobe)
             } else {
@@ -164,7 +169,7 @@ struct SetWardrobeView: View {
     private func applyWardrobeSelectionToItem() {
         // Ensure at least one wardrobe is selected
         if selectedWardrobes.isEmpty {
-            if let uid = item.userId ?? SupabaseService.shared.currentUser?.id.uuidString,
+            if let uid = accountUserId,
                let defaultType = defaultWardrobeType,
                let primary = try? WardrobeBootstrap.fetchPrimaryWardrobe(forType: defaultType, userIdString: uid, in: viewContext) {
                 selectedWardrobes = [primary]
@@ -207,7 +212,7 @@ struct SetWardrobeView: View {
         // Safety net: ensure the primary wardrobe of the correct type is always present.
         // This catches any case where the user somehow ended up with it deselected.
         if let wardrobeType = selectedWardrobes.first?.type ?? (defaultWardrobeType),
-           let uid = item.userId ?? SupabaseService.shared.currentUser?.id.uuidString,
+           let uid = accountUserId,
            let primary = try? WardrobeBootstrap.fetchPrimaryWardrobe(forType: wardrobeType, userIdString: uid, in: viewContext) {
             selectedWardrobes.insert(primary)
         }

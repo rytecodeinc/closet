@@ -14,12 +14,13 @@ import CoreData
 struct CreateEventView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authSession: AuthSession
     
     let eventToEdit: Event?
     
     /// Account that owns new calendar rows (matches `Event.userId` filtering elsewhere).
     private var calendarAccountUserId: String? {
-        SupabaseService.shared.currentUser?.id.uuidString
+        authSession.userId?.uuidString
     }
     
     @State private var eventName = ""

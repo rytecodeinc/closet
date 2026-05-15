@@ -12,6 +12,7 @@ struct PairItemSelectionView: View {
     @ObservedObject var item: Item
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authSession: AuthSession
     
     @State private var closetItems: [Item] = []
     @State private var selectedWardrobe: Wardrobe?
@@ -107,7 +108,7 @@ struct PairItemSelectionView: View {
     }
     
     private func fetchClosetItems() {
-        let uid = item.userId ?? SupabaseService.shared.currentUser?.id.uuidString
+        let uid = item.userId ?? authSession.userId?.uuidString
         if let uid, !uid.isEmpty,
            let wardrobe = try? WardrobeBootstrap.fetchPrimaryWardrobe(forType: "closet", userIdString: uid, in: viewContext) {
             selectedWardrobe = wardrobe

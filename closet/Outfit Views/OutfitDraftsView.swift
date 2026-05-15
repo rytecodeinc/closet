@@ -128,7 +128,6 @@ struct OutfitDraftsView: View {
                             }
                         }
                     }
-                    .padding(.top, 2)
                 }
             }
         }

@@ -13,6 +13,7 @@ import CoreData
 struct ProfileView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject var supabaseService: SupabaseService
+    @EnvironmentObject var authSession: AuthSession
     
     /// All active wardrobes; scoped to the signed-in user via computed properties (FetchRequest cannot use dynamic `userId`).
     @FetchRequest(
@@ -61,7 +62,7 @@ struct ProfileView: View {
 
     // Filter user profiles by current user (if authenticated)
     private var userProfiles: [UserProfile] {
-        guard let userId = supabaseService.currentUser?.id.uuidString else {
+        guard let userId = authSession.userId?.uuidString else {
             return []
         }
         return allUserProfiles.filter { $0.userId == userId }
@@ -73,7 +74,7 @@ struct ProfileView: View {
     }
 
     private var currentUserId: String? {
-        supabaseService.currentUser?.id.uuidString
+        authSession.userId?.uuidString
     }
 
     private var userClosets: [Wardrobe] {
@@ -172,7 +173,7 @@ struct ProfileView: View {
 
     /// Header avatar uses the same remote URL + initials pattern as friend lists.
     private var profileForAvatar: PublicUserProfile? {
-        guard let uid = supabaseService.currentUser?.id else { return nil }
+        guard let uid = authSession.userId else { return nil }
         return PublicUserProfile(
             userId: uid,
             username: username ?? supabaseService.cachedUsername ?? "",
@@ -365,7 +366,7 @@ struct ProfileView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .id(refreshToken)
 
-                if supabaseService.isAuthenticated {
+                if authSession.isAuthenticated {
                     Button {
                         if isEditingDisplayName {
                             Task { await saveDisplayName() }
@@ -417,8 +418,8 @@ struct ProfileView: View {
         }
             .navigationTitle(username ?? supabaseService.cachedUsername ?? "@username")
             .navigationBarTitleDisplayMode(.inline)
-            .task(id: supabaseService.currentUser?.id) {
-                guard supabaseService.isAuthenticated, let uid = supabaseService.currentUser?.id else { return }
+            .task(id: authSession.userId) {
+                guard authSession.isAuthenticated, let uid = authSession.userId else { return }
                 if didBootstrapProfileFromServerForUserId != uid.uuidString {
                     do {
                         _ = try await supabaseService.getUsername(forceRefresh: true)
@@ -432,7 +433,7 @@ struct ProfileView: View {
                 // Bell badge: refresh when returning to Profile is OK; profile bootstrap above runs once per user session.
                 await loadNotifications()
             }
-            .onChange(of: supabaseService.currentUser?.id) { _, newId in
+            .onChange(of: authSession.userId) { _, newId in
                 if newId == nil {
                     didBootstrapProfileFromServerForUserId = nil
                     isEditingDisplayName = false
@@ -653,7 +654,7 @@ extension ProfileView {
     }
     
     private func loadNotifications(markPassiveAsRead: Bool = false) async {
-        guard supabaseService.isAuthenticated else {
+        guard authSession.isAuthenticated else {
             notifications = []
             return
         }
@@ -727,7 +728,7 @@ extension ProfileView {
     /// Square-crops, flattens to opaque JPEG, then `encodeForR2Upload` enforces the worker’s sub‑5 MB limit.
     /// R2 uses a fixed key per user (`…/profile/avatar.jpg`); this upload **replaces** the previous file — one object, one `avatar_url`.
     private func uploadProfileAvatarFromLibrary(_ image: UIImage) async {
-        guard let userId = supabaseService.currentUser?.id else { return }
+        guard let userId = authSession.userId else { return }
         let prepared = image.profileAvatarImageForUpload()
         guard let data = prepared.encodeForR2Upload() else {
             await MainActor.run {
@@ -760,7 +761,7 @@ extension ProfileView {
     }
 
     private func removeProfileAvatarFromR2AndServer() async {
-        guard let userId = supabaseService.currentUser?.id else { return }
+        guard let userId = authSession.userId else { return }
         await MainActor.run {
             isAvatarUploading = true
             avatarUploadError = nil
@@ -784,7 +785,7 @@ extension ProfileView {
     }
 
     private func loadFriends() async {
-        guard supabaseService.isAuthenticated else {
+        guard authSession.isAuthenticated else {
             await MainActor.run { friends = [] }
             return
         }

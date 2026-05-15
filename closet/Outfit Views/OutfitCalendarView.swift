@@ -12,7 +12,7 @@ import UIKit
 
 struct OutfitCalendarView: View {
     @Environment(\.managedObjectContext) private var viewContext
-    @EnvironmentObject private var supabaseService: SupabaseService
+    @EnvironmentObject private var authSession: AuthSession
     @State private var events: [Event] = []
 
     @State private var selectedDate: Date? = nil
@@ -119,7 +119,7 @@ struct OutfitCalendarView: View {
                 
             }
         }
-        .task(id: supabaseService.currentUser?.id) {
+        .task(id: authSession.userId) {
             fetchEvents()
         }
         .sheet(isPresented: $showingEventDrawer) {
@@ -128,7 +128,7 @@ struct OutfitCalendarView: View {
                     NavigationView {
                         EventDrawerView(
                             selectedDate: selectedDate,
-                            ownerUserId: supabaseService.currentUser?.id.uuidString,
+                            ownerUserId: authSession.userId?.uuidString,
                             onDismiss: {
                                 showingEventDrawer = false
                                 self.selectedDate = nil
@@ -362,7 +362,7 @@ struct OutfitCalendarView: View {
         let request = NSFetchRequest<Event>(entityName: "Event")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Event.createdAt, ascending: false)]
         let notDeleted = NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
-        if let uid = supabaseService.currentUser?.id.uuidString {
+        if let uid = authSession.userId?.uuidString {
             request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
                 NSPredicate(format: "userId == %@", uid),
                 notDeleted,

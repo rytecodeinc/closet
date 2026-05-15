@@ -15,6 +15,7 @@ private enum AuthNavigation: Hashable {
 
 struct AuthView: View {
     @EnvironmentObject private var supabaseService: SupabaseService
+    @EnvironmentObject private var authSession: AuthSession
     @EnvironmentObject private var syncService: SyncService
     @Environment(\.managedObjectContext) private var viewContext
 
@@ -73,7 +74,7 @@ struct AuthView: View {
                 }
             }
         }
-        .onChange(of: supabaseService.isAuthenticated) { _, isAuthed in
+        .onChange(of: authSession.isAuthenticated) { _, isAuthed in
             if isAuthed {
                 path.removeAll()
             }

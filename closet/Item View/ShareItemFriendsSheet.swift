@@ -10,6 +10,7 @@ import SwiftUI
 struct ShareItemFriendsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var supabaseService: SupabaseService
+    @EnvironmentObject private var authSession: AuthSession
 
     @State private var friends: [PublicUserProfile] = []
     @State private var isLoading = false
@@ -32,7 +33,7 @@ struct ShareItemFriendsSheet: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if supabaseService.isAuthenticated {
+                if authSession.isAuthenticated {
                     messageComposerBar
                 }
             }
@@ -54,7 +55,7 @@ struct ShareItemFriendsSheet: View {
 
     @ViewBuilder
     private var mainContent: some View {
-        if !supabaseService.isAuthenticated {
+        if !authSession.isAuthenticated {
             Text("Sign in to see your friends.")
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -130,7 +131,7 @@ struct ShareItemFriendsSheet: View {
     }
 
     private func loadFriends() async {
-        guard supabaseService.isAuthenticated else {
+        guard authSession.isAuthenticated else {
             await MainActor.run { friends = []; isLoading = false }
             return
         }

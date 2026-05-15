@@ -10,6 +10,7 @@ import CoreData
 
 struct LoginView: View {
     @EnvironmentObject var supabaseService: SupabaseService
+    @EnvironmentObject var authSession: AuthSession
     @EnvironmentObject var syncService: SyncService
     @Environment(\.managedObjectContext) private var viewContext
     @State private var email = ""
@@ -42,7 +43,7 @@ struct LoginView: View {
     
     // Filter user profiles by current user (if authenticated)
     private var userProfiles: [UserProfile] {
-        guard let userId = supabaseService.currentUser?.id.uuidString else {
+        guard let userId = authSession.userId?.uuidString else {
             return []
         }
         return allUserProfiles.filter { $0.userId == userId }
@@ -75,7 +76,7 @@ struct LoginView: View {
                         .frame(width: 80, height: 80)
                         .foregroundColor(.accentColor)
                     
-                    Text(supabaseService.isAuthenticated ? "Hello, \(supabaseService.currentUser?.email ?? "User")!" :"Login")
+                    Text(authSession.isAuthenticated ? "Hello, \(authSession.userEmail ?? "User")!" :"Login")
                         .font(.largeTitle)
                         .fontWeight(.bold)
                     
@@ -85,7 +86,7 @@ struct LoginView: View {
                 }
                 .padding(.top, 40)
                 
-                if supabaseService.isAuthenticated {
+                if authSession.isAuthenticated {
                     VStack(spacing: 16) {
                         Image(systemName: "checkmark.circle.fill")
                             .resizable()
@@ -256,7 +257,7 @@ struct LoginView: View {
                     }
                     .padding(.vertical, 20)
                     .task {
-                        if supabaseService.isAuthenticated {
+                        if authSession.isAuthenticated {
                             let needsUsername = currentUsername == nil
                             let needsDisplayName = currentDisplayName == nil
                             
@@ -278,7 +279,7 @@ struct LoginView: View {
                     .onChange(of: userProfile?.displayName) { _ in refreshToken = UUID() }
                     .onChange(of: userProfile?.username) { _ in refreshToken = UUID() }
                     .id(refreshToken)
-                    .onChange(of: supabaseService.isAuthenticated) { _ in }
+                    .onChange(of: authSession.isAuthenticated) { _ in }
                     
                 } else {
                     // Login form
@@ -338,7 +339,7 @@ struct LoginView: View {
                 .padding(.bottom, 20)
             }
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle(supabaseService.isAuthenticated ? "Account" : "Login")
+            .navigationTitle(authSession.isAuthenticated ? "Account" : "Login")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showSignUp) {
                 NavigationStack {
@@ -407,7 +408,7 @@ struct LoginView: View {
         isPurgingOrphanedWardrobes = true
         purgeOrphanedWardrobesMessage = nil
 
-        guard let currentUserId = supabaseService.currentUser?.id.uuidString else {
+        guard let currentUserId = authSession.userId?.uuidString else {
             purgeOrphanedWardrobesMessage = "❌ Not signed in."
             isPurgingOrphanedWardrobes = false
             return
@@ -501,7 +502,7 @@ struct LoginView: View {
     }
     
     private func loadUsername() async {
-        guard supabaseService.isAuthenticated else {
+        guard authSession.isAuthenticated else {
             return
         }
         
