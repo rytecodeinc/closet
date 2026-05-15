@@ -91,6 +91,16 @@ struct PersistenceController {
         container.viewContext.automaticallyMergesChangesFromParent = true
     }
     
+    /// Lightweight touch of the store and launch-related defaults after persistent stores exist.
+    @MainActor
+    func warmPersistentStoreForLaunch() {
+        _ = UserDefaults.standard.bool(forKey: Self.hasSeededDataKey)
+        let ctx = container.viewContext
+        let request = NSFetchRequest<NSManagedObject>(entityName: "Item")
+        request.fetchLimit = 1
+        _ = try? ctx.count(for: request)
+    }
+    
     private static func seedInitialDataIfNeeded(container: NSPersistentContainer) {
         let alreadySeeded = UserDefaults.standard.bool(forKey: hasSeededDataKey)
         print("🌱 Checking if data needs seeding... Already seeded: \(alreadySeeded)")

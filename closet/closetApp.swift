@@ -21,10 +21,12 @@ struct closetApp: App {
     @StateObject private var userService = UserService.shared
     // Supabase service - initializes client and loads existing session on app startup
     @StateObject private var supabaseService = SupabaseService.shared
+    @StateObject private var authSession = AuthSession()
     @StateObject private var syncService = SyncService.shared
     @StateObject private var networkMonitor = NetworkMonitor.shared
     @StateObject private var bulkItemImportCoordinator = BulkItemImportCoordinator()
     @Environment(\.scenePhase) private var scenePhase
+    @State private var launchBootstrapComplete = false
     
     init() {
         _ = Self.didPrint
@@ -37,7 +39,12 @@ struct closetApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if supabaseService.isAuthenticated {
+                if !launchBootstrapComplete {
+                    LaunchView(
+                        persistence: persistenceController,
+                        launchBootstrapComplete: $launchBootstrapComplete
+                    )
+                } else if authSession.isAuthenticated {
                     ContentView()
                 } else {
                     AuthView()
@@ -47,6 +54,7 @@ struct closetApp: App {
                 .environmentObject(deepLinkRouter)
                 .environmentObject(userService)
                 .environmentObject(supabaseService)
+                .environmentObject(authSession)
                 .environmentObject(syncService)
                 .environmentObject(networkMonitor)
                 .environmentObject(bulkItemImportCoordinator)
@@ -58,7 +66,7 @@ struct closetApp: App {
                 }
                 .onChange(of: networkMonitor.isConnected) { isConnected in
                     // Auto-sync when connection is restored (if user is authenticated)
-                    if isConnected && supabaseService.isAuthenticated {
+                    if isConnected && authSession.isAuthenticated {
                         Task {
                             print("🌐 Network connection restored, triggering sync...")
                             do {
