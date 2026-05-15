@@ -123,6 +123,10 @@ class SupabaseService: ObservableObject {
     private let client: SupabaseClient
     private var hasLoadedSession = false
     private var hasLoadedFriendCountCache = false
+    /// Cold-start session restore; created on first `awaitSessionRestoration()` so `self` is fully initialized.
+    private lazy var sessionRestorationTask: Task<Void, Never> = {
+        Task { await self.loadSession() }
+    }()
     
     // MARK: - Initialization
     
@@ -143,11 +147,11 @@ class SupabaseService: ObservableObject {
             supabaseURL: url,
             supabaseKey: SupabaseConfig.supabaseAnonKey
         )
-        
-        // Load existing session on initialization
-        Task {
-            await loadSession()
-        }
+    }
+    
+    /// Await until the initial stored-credentials session restore attempt has finished (signed in or not).
+    func awaitSessionRestoration() async {
+        await sessionRestorationTask.value
     }
     
     // MARK: - Authentication Methods
