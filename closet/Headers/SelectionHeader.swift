@@ -10,6 +10,8 @@ import SwiftUI
 
 struct SelectionHeader: View {
     var title: String = "Selection Header"
+    var backgroundColor: Color = Color(UIColor.secondarySystemBackground)
+
     var body: some View {
         VStack {
             Text(title)
@@ -19,6 +21,6 @@ struct SelectionHeader: View {
                 .padding(.bottom)
                 .frame(maxWidth: .infinity, alignment: .center)
         }
-        .background(Color(UIColor.secondarySystemBackground))
+        .background(backgroundColor)
     }
 }
