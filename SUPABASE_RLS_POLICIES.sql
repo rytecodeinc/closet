@@ -418,6 +418,34 @@ USING (user_id::text = auth.uid()::text)
 WITH CHECK (user_id::text = auth.uid()::text);
 
 -- ============================================
+-- PACKING CHECKLIST ITEMS POLICIES
+-- ============================================
+
+-- Ensure table exists (see SUPABASE_PACKING_CHECKLIST_ITEMS.sql) before running these statements.
+
+ALTER TABLE IF EXISTS packing_checklist_items ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users manage own packing_checklist_items" ON packing_checklist_items;
+CREATE POLICY "Users manage own packing_checklist_items"
+ON packing_checklist_items FOR ALL
+USING (user_id::text = auth.uid()::text)
+WITH CHECK (user_id::text = auth.uid()::text);
+
+-- ============================================
+-- PACKING CHECKLIST SECTIONS POLICIES
+-- ============================================
+
+-- Ensure table exists (see SUPABASE_PACKING_CHECKLIST_SECTIONS.sql) before running these statements.
+
+ALTER TABLE IF EXISTS packing_checklist_sections ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users manage own packing_checklist_sections" ON packing_checklist_sections;
+CREATE POLICY "Users manage own packing_checklist_sections"
+ON packing_checklist_sections FOR ALL
+USING (user_id::text = auth.uid()::text)
+WITH CHECK (user_id::text = auth.uid()::text);
+
+-- ============================================
 -- VERIFICATION
 -- ============================================
 
