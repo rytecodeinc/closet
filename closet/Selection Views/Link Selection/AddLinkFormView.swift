@@ -26,6 +26,7 @@ struct AddLinkFormView: View {
             Form {
                 Section {
                     TextField("Link name (e.g. Amazon)", text: $name)
+                        .textInputAutocapitalization(.words)
 
                     TextField("URL (e.g. amazon.com/product)", text: $urlString)
                         .keyboardType(.URL)

@@ -30,6 +30,7 @@ struct BrandSelectionView: View {
             HStack {
                 TextField("Add or select a brand", text: $newBrandName)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .textInputAutocapitalization(.words)
 
                 Button("Add") {
                     addBrand()

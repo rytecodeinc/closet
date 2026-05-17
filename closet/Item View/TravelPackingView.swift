@@ -40,6 +40,7 @@ struct TravelPackingView: View {
     var wardrobeType: String
     
     @Environment(\.managedObjectContext) private var viewContext
+    @EnvironmentObject private var authSession: AuthSession
     @State private var items: [Item] = []
     @State private var selectedItemForNavigation: Item?
     @State private var showAddStorageLocationAlert = false
@@ -63,6 +64,7 @@ struct TravelPackingView: View {
     @State private var packMoveAlertStorageObjectID: NSManagedObjectID?
     @State private var packMoveAlertItemCount = 0
     @State private var collapsedStorageSectionIDs: Set<NSManagedObjectID> = []
+    @State private var showPackingChecklistSheet = false
 
     let gridColumns = [
         GridItem(.flexible(), spacing: 2),
@@ -193,10 +195,18 @@ struct TravelPackingView: View {
                     }
                 } else {
                     if !items.isEmpty {
-                        Button("Select") {
+                        Button {
                             collapsedStorageSectionIDs.removeAll()
                             isInSelectionMode = true
+                        } label: {
+                            Image(systemName: "checkmark.circle")
                         }
+                        .accessibilityLabel("Select")
+                    }
+                    Button {
+                        showPackingChecklistSheet = true
+                    } label: {
+                        Image(systemName: "pencil.and.list.clipboard")
                     }
                     Button {
                         assignSelectedItemsToNewStorageAfterCreate = false
@@ -257,6 +267,9 @@ struct TravelPackingView: View {
         }
         .sheet(isPresented: $showMoveToSectionSheet) {
             moveToSectionSheet()
+        }
+        .sheet(isPresented: $showPackingChecklistSheet) {
+            PackingChecklistView(selectedWardrobe: selectedWardrobe)
         }
         .alert("Delete Section?", isPresented: $showDeleteStorageLocationConfirmation) {
             Button("Cancel", role: .cancel) {
@@ -712,7 +725,7 @@ struct TravelPackingView: View {
         location.id = UUID()
         location.name = trimmed
         location.wardrobe = selectedWardrobe
-        if let userId = SupabaseService.shared.currentUser?.id.uuidString {
+        if let userId = authSession.userId?.uuidString {
             location.userId = userId
         }
         setCreatedAndUpdatedAt(location)
@@ -756,7 +769,7 @@ struct TravelPackingView: View {
                 assignment.id = UUID()
                 assignment.item = item
                 assignment.wardrobe = selectedWardrobe
-                if let userId = SupabaseService.shared.currentUser?.id.uuidString {
+                if let userId = authSession.userId?.uuidString {
                     assignment.userId = userId
                 }
                 setCreatedAndUpdatedAt(assignment)
@@ -841,7 +854,7 @@ struct TravelPackingView: View {
     }
     
     private func fetchItems() {
-        guard let userId = SupabaseService.shared.currentUser?.id.uuidString else {
+        guard let userId = authSession.userId?.uuidString else {
             DispatchQueue.main.async { self.items = [] }
             return
         }

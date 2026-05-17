@@ -30,6 +30,7 @@ struct LocationSelectionView: View {
             HStack {
                 TextField("Where is this item stored?", text: $newLocationName)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .textInputAutocapitalization(.words)
 
                 Button("Add") {
                     addLocation()

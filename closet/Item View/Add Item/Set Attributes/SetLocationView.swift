@@ -29,6 +29,7 @@ struct SetLocationView: View {
             HStack {
                 TextField("Where is this item stored?", text: $newLocationName)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .textInputAutocapitalization(.words)
 
                 Button("Add") {
                     addLocation()
@@ -121,7 +122,12 @@ struct SetLocationView: View {
             request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, usedByUser])
         }
         do {
-            locations = try viewContext.fetch(request)
+            let fetched = try viewContext.fetch(request)
+            if let uid = item.userId, !uid.isEmpty {
+                locations = dedupeNamedReferenceRows(fetched, preferredUserId: uid)
+            } else {
+                locations = fetched
+            }
         } catch {
             print("❌ Failed to fetch locations: \(error)")
             locations = []

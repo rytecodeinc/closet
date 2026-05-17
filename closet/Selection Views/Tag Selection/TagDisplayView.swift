@@ -31,6 +31,7 @@ struct TagDisplayView: View {
             HStack {
                 TextField("Add or select a tag", text: $newTagName)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .textInputAutocapitalization(.words)
 
                 Button("Add") {
                     addTag()

@@ -29,6 +29,7 @@ struct SetBrandView: View {
             HStack {
                 TextField("Add or select a brand", text: $newBrandName)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .textInputAutocapitalization(.words)
 
                 Button("Add") {
                     addBrand()
@@ -133,7 +134,8 @@ struct SetBrandView: View {
             let scope = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, usedByUser])
             request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [visible, scope])
             do {
-                brands = try viewContext.fetch(request)
+                let fetched = try viewContext.fetch(request)
+                brands = dedupeNamedReferenceRows(fetched, preferredUserId: uid)
             } catch {
                 print("❌ Failed to fetch brands: \(error)")
                 brands = []
