@@ -34,6 +34,7 @@ struct SocialEngagementActionsRow: View {
     var favoriteSelection: Bool?
     var onLike: () -> Void
     var onShare: () -> Void
+    var onPhotoStorage: (() -> Void)?
 
     private var heartSystemImage: String {
         guard let isOn = favoriteSelection else { return "heart" }
@@ -49,12 +50,14 @@ struct SocialEngagementActionsRow: View {
         segmentSelection: Binding<SocialEngagementToolbarSegment> = .constant(.tshirt),
         favoriteSelection: Bool? = nil,
         onLike: @escaping () -> Void = {},
-        onShare: @escaping () -> Void = {}
+        onShare: @escaping () -> Void = {},
+        onPhotoStorage: (() -> Void)? = nil
     ) {
         _segmentSelection = segmentSelection
         self.favoriteSelection = favoriteSelection
         self.onLike = onLike
         self.onShare = onShare
+        self.onPhotoStorage = onPhotoStorage
     }
 
     var body: some View {
@@ -72,6 +75,15 @@ struct SocialEngagementActionsRow: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Share")
+
+            if let onPhotoStorage {
+                Button(action: onPhotoStorage) {
+                    Image(systemName: "internaldrive")
+                        .imageScale(.large)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Image storage")
+            }
 
             Spacer(minLength: 12)
 

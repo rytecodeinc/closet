@@ -11,7 +11,7 @@ import CoreData
 
 struct SettingsView: View {
     @Environment(\.managedObjectContext) private var viewContext
-    @EnvironmentObject private var supabaseService: SupabaseService
+    @EnvironmentObject private var authSession: AuthSession
 
     @AppStorage("userWeightKg") private var storedWeightKg: Double = 0
     @AppStorage("userWeightUnit") private var storedWeightUnit: String = ""
@@ -26,6 +26,11 @@ struct SettingsView: View {
     @State private var wishlistRepairAlertTitle = ""
     @State private var wishlistRepairAlertMessage = ""
     @State private var showWishlistRepairAlert = false
+
+    @State private var isCheckingPhotoStorage = false
+    @State private var photoStorageAlertTitle = ""
+    @State private var photoStorageAlertMessage = ""
+    @State private var showPhotoStorageAlert = false
     
     private var displayWeightText: String? {
         guard storedWeightKg > 0 else { return nil }
@@ -83,7 +88,7 @@ struct SettingsView: View {
                                 .foregroundColor(.primary)
                         }
                     }
-                    .disabled(isSeedingDefaultCatalog || supabaseService.currentUser == nil)
+                    .disabled(isSeedingDefaultCatalog || authSession.userId == nil)
                 } footer: {
                     Text("Adds any default colors, seasons, categories, subcategories, and sizes that are not already stored for your account (same lists as app defaults). Safe to run more than once.")
                 }
@@ -101,9 +106,27 @@ struct SettingsView: View {
                                 .foregroundColor(.primary)
                         }
                     }
-                    .disabled(isRunningWishlistRepair || supabaseService.currentUser == nil)
+                    .disabled(isRunningWishlistRepair || authSession.userId == nil)
                 } footer: {
                     Text("Removes your closet wardrobe link from items that are also on your wishlist. Safe to run again if duplicates reappear.")
+                }
+
+                Section {
+                    Button {
+                        reportPhotoStorageStats()
+                    } label: {
+                        HStack {
+                            if isCheckingPhotoStorage {
+                                ProgressView()
+                                    .padding(.trailing, 4)
+                            }
+                            Text("Photo storage report")
+                                .foregroundColor(.primary)
+                        }
+                    }
+                    .disabled(isCheckingPhotoStorage)
+                } footer: {
+                    Text("Logs total local photo data size and how many stored images (item photos, thumbnails, outfit images) are over 200 KB. Details also appear in the Xcode console.")
                 }
                 // Add more categories here later (Size, etc)
             }
@@ -122,11 +145,34 @@ struct SettingsView: View {
             } message: {
                 Text(wishlistRepairAlertMessage)
             }
+            .alert(photoStorageAlertTitle, isPresented: $showPhotoStorageAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(photoStorageAlertMessage)
+            }
+        }
+    }
+
+    private func reportPhotoStorageStats() {
+        isCheckingPhotoStorage = true
+        Task { @MainActor in
+            defer { isCheckingPhotoStorage = false }
+            do {
+                let stats = try collectPhotoStorageStats(context: viewContext)
+                printPhotoStorageStats(stats, context: viewContext)
+                photoStorageAlertTitle = "Photo storage"
+                photoStorageAlertMessage = stats.summaryMessage
+                showPhotoStorageAlert = true
+            } catch {
+                photoStorageAlertTitle = "Could not read storage"
+                photoStorageAlertMessage = error.localizedDescription
+                showPhotoStorageAlert = true
+            }
         }
     }
 
     private func runWishlistClosetRepair() {
-        guard let userId = supabaseService.currentUser?.id else {
+        guard let userId = authSession.userId else {
             wishlistRepairAlertTitle = "Not signed in"
             wishlistRepairAlertMessage = "Sign in to run this repair."
             showWishlistRepairAlert = true
@@ -151,7 +197,7 @@ struct SettingsView: View {
     }
 
     private func seedMissingDefaultCatalog() {
-        guard let userId = supabaseService.currentUser?.id else {
+        guard let userId = authSession.userId else {
             seedCatalogAlertTitle = "Not signed in"
             seedCatalogAlertMessage = "Sign in to update your catalog."
             showSeedCatalogAlert = true
