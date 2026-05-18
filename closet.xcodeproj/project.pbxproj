@@ -8,12 +8,10 @@
 
 /* Begin PBXBuildFile section */
 		6C0D2AEE2E98C1D800849F4C /* AppShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 6C0D2AE42E98C1D800849F4C /* AppShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
-		6C18C8D62F148FAF00F076FD /* StableDiffusion in Frameworks */ = {isa = PBXBuildFile; productRef = 6C18C8D52F148FAF00F076FD /* StableDiffusion */; };
 		6C18C8D92F148FC800F076FD /* SwiftSoup in Frameworks */ = {isa = PBXBuildFile; productRef = 6C18C8D82F148FC800F076FD /* SwiftSoup */; };
 		6C88E2332F3ADF0A00A8D6E2 /* Auth in Frameworks */ = {isa = PBXBuildFile; productRef = 6C88E2322F3ADF0A00A8D6E2 /* Auth */; };
 		6C88E2352F3ADF0A00A8D6E2 /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = 6C88E2342F3ADF0A00A8D6E2 /* PostgREST */; };
 		6C88E23F2F3AE90C00A8D6E2 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 6C88E23E2F3AE90C00A8D6E2 /* Supabase */; };
-		6CF5734F2F149B5800C2E4AC /* Models in Resources */ = {isa = PBXBuildFile; fileRef = 6CF5734E2F149B5800C2E4AC /* Models */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -75,6 +73,8 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				"Stable Diffusion/StableDiffusionService.swift",
+				"Stable Diffusion/VirtualFittingView.swift",
 			);
 			target = 6CD1D4742DAAF40C00913D5D /* closet */;
 		};
@@ -130,7 +130,6 @@
 			files = (
 				6C88E23F2F3AE90C00A8D6E2 /* Supabase in Frameworks */,
 				6C88E2352F3ADF0A00A8D6E2 /* PostgREST in Frameworks */,
-				6C18C8D62F148FAF00F076FD /* StableDiffusion in Frameworks */,
 				6C18C8D92F148FC800F076FD /* SwiftSoup in Frameworks */,
 				6C88E2332F3ADF0A00A8D6E2 /* Auth in Frameworks */,
 			);
@@ -251,7 +250,6 @@
 			dependencies = (
 				6C88E23D2F3AE48700A8D6E2 /* PBXTargetDependency */,
 				6CF573312F1499A200C2E4AC /* PBXTargetDependency */,
-				6CF5732F2F14999E00C2E4AC /* PBXTargetDependency */,
 				6C0D2AED2E98C1D800849F4C /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
@@ -259,7 +257,6 @@
 			);
 			name = closet;
 			packageProductDependencies = (
-				6C18C8D52F148FAF00F076FD /* StableDiffusion */,
 				6C18C8D82F148FC800F076FD /* SwiftSoup */,
 				6C88E2322F3ADF0A00A8D6E2 /* Auth */,
 				6C88E2342F3ADF0A00A8D6E2 /* PostgREST */,
@@ -351,7 +348,6 @@
 			mainGroup = 6CD1D46C2DAAF40C00913D5D;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				6C18C8D42F148FAF00F076FD /* XCRemoteSwiftPackageReference "ml-stable-diffusion" */,
 				6C18C8D72F148FC800F076FD /* XCRemoteSwiftPackageReference "SwiftSoup" */,
 				6C88E2312F3ADF0A00A8D6E2 /* XCRemoteSwiftPackageReference "supabase-swift" */,
 			);
@@ -390,7 +386,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				6CF5734F2F149B5800C2E4AC /* Models in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -460,10 +455,6 @@
 			isa = PBXTargetDependency;
 			target = 6CD1D4742DAAF40C00913D5D /* closet */;
 			targetProxy = 6CD1D4962DAAF40E00913D5D /* PBXContainerItemProxy */;
-		};
-		6CF5732F2F14999E00C2E4AC /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			productRef = 6CF5732E2F14999E00C2E4AC /* StableDiffusion */;
 		};
 		6CF573312F1499A200C2E4AC /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -655,6 +646,8 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = closet/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Redress;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Allow user to take photos of their closet items to directly upload";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -697,6 +690,8 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = closet/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Redress;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Allow user to take photos of their closet items to directly upload";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -866,14 +861,6 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		6C18C8D42F148FAF00F076FD /* XCRemoteSwiftPackageReference "ml-stable-diffusion" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/apple/ml-stable-diffusion.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.1.1;
-			};
-		};
 		6C18C8D72F148FC800F076FD /* XCRemoteSwiftPackageReference "SwiftSoup" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/scinfu/SwiftSoup.git";
@@ -893,11 +880,6 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		6C18C8D52F148FAF00F076FD /* StableDiffusion */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 6C18C8D42F148FAF00F076FD /* XCRemoteSwiftPackageReference "ml-stable-diffusion" */;
-			productName = StableDiffusion;
-		};
 		6C18C8D82F148FC800F076FD /* SwiftSoup */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 6C18C8D72F148FC800F076FD /* XCRemoteSwiftPackageReference "SwiftSoup" */;
@@ -922,11 +904,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 6C88E2312F3ADF0A00A8D6E2 /* XCRemoteSwiftPackageReference "supabase-swift" */;
 			productName = Supabase;
-		};
-		6CF5732E2F14999E00C2E4AC /* StableDiffusion */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 6C18C8D42F148FAF00F076FD /* XCRemoteSwiftPackageReference "ml-stable-diffusion" */;
-			productName = StableDiffusion;
 		};
 		6CF573302F1499A200C2E4AC /* SwiftSoup */ = {
 			isa = XCSwiftPackageProductDependency;

@@ -1,5 +1,5 @@
 {
-  "originHash" : "bbf81826d22ce49c4d4bf544b62d4210fbf3394c740972bd7cb3dc74a6400c41",
+  "originHash" : "915cc8c537707411bab01258fbfc831cd208633c582f392e227da0107830935a",
   "pins" : [
     {
       "identity" : "lrucache",
@@ -11,30 +11,12 @@
       }
     },
     {
-      "identity" : "ml-stable-diffusion",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/ml-stable-diffusion.git",
-      "state" : {
-        "revision" : "5a170d29cf38e674b80541d7ce22929c6a11cdde",
-        "version" : "1.1.1"
-      }
-    },
-    {
       "identity" : "supabase-swift",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/supabase/supabase-swift",
       "state" : {
         "revision" : "0f8bf83b55709e5530cd842a0185b9abba7a3c6c",
         "version" : "2.41.1"
-      }
-    },
-    {
-      "identity" : "swift-argument-parser",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-argument-parser.git",
-      "state" : {
-        "revision" : "c5d11a805e765f52ba34ec7284bd4fcd6ba68615",
-        "version" : "1.7.0"
       }
     },
     {
