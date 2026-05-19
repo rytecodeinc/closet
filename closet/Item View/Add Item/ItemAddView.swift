@@ -13,6 +13,7 @@ import CoreData
 struct ItemAddView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var bulkItemImportCoordinator: BulkItemImportCoordinator
+    @EnvironmentObject private var authSession: AuthSession
 
     @StateObject private var vm: ItemAddViewModel
     @ObservedObject private var queueCoordinator: ImageQueueCoordinator
@@ -73,8 +74,8 @@ struct ItemAddView: View {
     @State private var showingDraftSaveAlert = false
 
     // Original init for backward compatibility (creates dummy coordinator)
-    init(parentContext: NSManagedObjectContext, selectedWardrobe: Wardrobe?, initialURL: URL? = nil, initialImage: UIImage? = nil) {
-        let authUserId = SupabaseService.shared.currentUser?.id.uuidString
+    init(parentContext: NSManagedObjectContext, selectedWardrobe: Wardrobe?, initialURL: URL? = nil, initialImage: UIImage? = nil, sessionAccountId: String? = nil) {
+        let authUserId = sessionAccountId ?? SupabaseService.shared.currentUser?.id.uuidString
         _vm = StateObject(wrappedValue: ItemAddViewModel(
             parentContext: parentContext,
             selectedWardrobe: selectedWardrobe,
@@ -86,9 +87,9 @@ struct ItemAddView: View {
     }
     
     // New init with queue coordinator
-    init(parentContext: NSManagedObjectContext, selectedWardrobe: Wardrobe?, queueCoordinator: ImageQueueCoordinator, initialURL: URL? = nil) {
+    init(parentContext: NSManagedObjectContext, selectedWardrobe: Wardrobe?, queueCoordinator: ImageQueueCoordinator, initialURL: URL? = nil, sessionAccountId: String? = nil) {
         let initialImage = queueCoordinator.nextCroppedImage
-        let authUserId = SupabaseService.shared.currentUser?.id.uuidString
+        let authUserId = sessionAccountId ?? SupabaseService.shared.currentUser?.id.uuidString
         _vm = StateObject(wrappedValue: ItemAddViewModel(
             parentContext: parentContext,
             selectedWardrobe: selectedWardrobe,
@@ -100,8 +101,8 @@ struct ItemAddView: View {
     }
 
     // Init for editing an existing draft item
-    init(parentContext: NSManagedObjectContext, existingDraft: Item) {
-        let authUserId = SupabaseService.shared.currentUser?.id.uuidString
+    init(parentContext: NSManagedObjectContext, existingDraft: Item, sessionAccountId: String? = nil) {
+        let authUserId = sessionAccountId ?? SupabaseService.shared.currentUser?.id.uuidString
         _vm = StateObject(wrappedValue: ItemAddViewModel(
             parentContext: parentContext,
             existingDraft: existingDraft,
@@ -626,7 +627,7 @@ struct ItemAddView: View {
             await MainActor.run {
                 let newPhoto = Photo(context: vm.childContext)
                 newPhoto.id = UUID()
-                newPhoto.data = processedData
+                PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: newPhoto)
                 newPhoto.thumbnailData = image.generateThumbnail()
                 newPhoto.type = "front"
                 newPhoto.isPrimary = true
@@ -648,7 +649,7 @@ struct ItemAddView: View {
             await MainActor.run {
                 let newPhoto = Photo(context: vm.childContext)
                 newPhoto.id = UUID()
-                newPhoto.data = processedData
+                PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: newPhoto)
                 newPhoto.thumbnailData = image.generateThumbnail()
                 newPhoto.type = "back"
                 newPhoto.isPrimary = false
@@ -670,7 +671,7 @@ struct ItemAddView: View {
             await MainActor.run {
                 let newPhoto = Photo(context: vm.childContext)
                 newPhoto.id = UUID()
-                newPhoto.data = processedData
+                PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: newPhoto)
                 newPhoto.thumbnailData = image.generateThumbnail()
                 newPhoto.type = "worn"
                 newPhoto.isPrimary = false
@@ -707,7 +708,7 @@ struct ItemAddView: View {
         await MainActor.run {
             let newPhoto = Photo(context: vm.childContext)
             newPhoto.id = UUID()
-            newPhoto.data = processedData
+            PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: newPhoto)
             newPhoto.thumbnailData = image.generateThumbnail()
             newPhoto.type = "front"
             newPhoto.isPrimary = true
@@ -731,7 +732,7 @@ struct ItemAddView: View {
         await MainActor.run {
             let newPhoto = Photo(context: vm.childContext)
             newPhoto.id = UUID()
-            newPhoto.data = processedData
+            PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: newPhoto)
             newPhoto.thumbnailData = image.generateThumbnail()
             newPhoto.type = "back"
             newPhoto.isPrimary = false
@@ -755,7 +756,7 @@ struct ItemAddView: View {
         await MainActor.run {
             let newPhoto = Photo(context: vm.childContext)
             newPhoto.id = UUID()
-            newPhoto.data = processedData
+            PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: newPhoto)
             newPhoto.thumbnailData = image.generateThumbnail()
             newPhoto.type = "worn"
             newPhoto.isPrimary = false
@@ -949,7 +950,7 @@ struct ItemAddView: View {
 
     /// Add Multiple → From Library: dismiss add UI, then process on the grid tab (progress overlay + cancel).
     private func beginBulkLibraryImport(with images: [UIImage]) {
-        let userIdStr = SupabaseService.shared.currentUser?.id.uuidString
+        let userIdStr = authSession.userId?.uuidString ?? SupabaseService.shared.currentUser?.id.uuidString
         guard let parentContext = vm.childContext.parent,
               let wardrobeOID = vm.selectedWardrobeObjectID,
               let userIdStr else {
@@ -1098,8 +1099,7 @@ final class ItemAddViewModel: ObservableObject {
 
     @MainActor
     func persistToParent() throws {
-        guard SupabaseService.shared.isAuthenticated,
-              let userId = SupabaseService.shared.currentUser?.id else {
+        guard let userId = (authUserId.flatMap { UUID(uuidString: $0) }) ?? SupabaseService.shared.currentUser?.id else {
             throw NSError(domain: "ItemAdd", code: -1, userInfo: [NSLocalizedDescriptionKey: "User must be authenticated to save items"])
         }
 
@@ -1398,7 +1398,7 @@ final class ItemAddViewModel: ObservableObject {
         photo.id = UUID()
         photo.isPrimary = true
         photo.type = "front"
-        photo.data = processedData
+        PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: photo)
         photo.thumbnailData = image.generateThumbnail()
         photo.item = draftItem
         photoRefreshToken = UUID()
@@ -1414,7 +1414,7 @@ final class ItemAddViewModel: ObservableObject {
                 let photo = Photo(context: childContext)
                 photo.id = UUID()
                 photo.isPrimary = true
-                photo.data = processedData
+                PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: photo)
                 photo.thumbnailData = image.generateThumbnail()
                 photo.item = draftItem
                 photoRefreshToken = UUID()

@@ -199,7 +199,8 @@ func compressExistingPhotos(context: NSManagedObjectContext) {
             
             // Process and compress the image
             if let compressedData = image.processForStorage() {
-                photo.data = compressedData
+                let storedImage = UIImage(data: compressedData) ?? image
+                PhotoContentBounds.assignImage(storedImage, to: photo, data: compressedData)
                 totalCompressedSize += Int64(compressedData.count)
                 
                 // Generate thumbnail if not already present
@@ -253,66 +254,242 @@ func compressExistingPhotos(context: NSManagedObjectContext) {
     }
 }
 
+// MARK: - Photo storage stats
+
+private let photoStorage200KBThreshold = ItemPhotoStorage.reportThresholdBytes
+
+// MARK: - Per-item photo storage (Item Detail)
+
+enum ItemPhotoStorage {
+    /// Settings / storage report threshold.
+    static let reportThresholdBytes = 200 * 1024
+    /// Item Detail compress: long-edge cap for PNG cutouts (no byte crush).
+    static let storageMaxDimension: CGFloat = 1200
+    /// Item Detail compress: byte target for opaque JPEG only.
+    static let compressionMaxBytes = 450 * 1024
+    static var compressionMaxKB: Int { compressionMaxBytes / 1024 }
+
+    static func formatByteCount(_ bytes: Int) -> String {
+        guard bytes > 0 else { return "No image" }
+        if bytes < 1024 { return "\(bytes) B" }
+        let kb = Double(bytes) / 1024
+        if kb < 1024 { return String(format: "%.1f KB", kb) }
+        return String(format: "%.2f MB", kb / 1024)
+    }
+
+    static func frontPhoto(for item: Item) -> Photo? {
+        let photos = item.photos as? Set<Photo> ?? []
+        if let front = photos.first(where: { $0.type == "front" }) {
+            return front
+        }
+        return photos.first(where: { $0.isPrimary && ($0.type == nil || $0.type == "") })
+    }
+
+    static func wornPhoto(for item: Item) -> Photo? {
+        (item.photos as? Set<Photo> ?? []).first(where: { $0.type == "worn" })
+    }
+
+    static func dataByteCount(for photo: Photo?) -> Int {
+        photo?.data?.count ?? 0
+    }
+
+    static func isOverCompressionLimit(_ bytes: Int) -> Bool {
+        bytes > compressionMaxBytes
+    }
+
+    static func maxPixelDimension(for photo: Photo?) -> CGFloat? {
+        guard let data = photo?.data, let image = UIImage(data: data) else { return nil }
+        return max(image.size.width, image.size.height)
+    }
+
+    static func needsCompression(for photo: Photo?) -> Bool {
+        guard let data = photo?.data, !data.isEmpty,
+              let image = UIImage(data: data) else {
+            return false
+        }
+        let maxDim = max(image.size.width, image.size.height)
+        if maxDim > storageMaxDimension {
+            return true
+        }
+        if image.hasTransparency {
+            return false
+        }
+        return data.count > compressionMaxBytes
+    }
+
+    static func compressButtonTitle(for photo: Photo?, imageLabel: String) -> String {
+        guard let data = photo?.data, let image = UIImage(data: data) else {
+            return "Compress \(imageLabel)"
+        }
+        if image.hasTransparency {
+            return "Resize \(imageLabel) to 1200px (PNG)"
+        }
+        return "Compress \(imageLabel) to under \(compressionMaxKB) KB"
+    }
+
+    static func compressSkippedMessage(for photo: Photo?, imageLabel: String) -> String {
+        guard let data = photo?.data, let image = UIImage(data: data) else {
+            return "\(imageLabel) has no image data."
+        }
+        if image.hasTransparency {
+            return "\(imageLabel) is already at most 1200px on the long edge."
+        }
+        return "\(imageLabel) is already under \(compressionMaxKB) KB and at most 1200px."
+    }
+
+    /// Resizes/compresses `photo.data` for this item. PNG cutouts: 1200px max only. JPEG: 1200px + byte cap. Regenerates thumbnail.
+    @discardableResult
+    static func compressPhotoIfNeeded(
+        _ photo: Photo,
+        item: Item,
+        in context: NSManagedObjectContext
+    ) throws -> Bool {
+        guard needsCompression(for: photo),
+              let data = photo.data,
+              !data.isEmpty,
+              let image = UIImage(data: data) else {
+            return false
+        }
+
+        let compressed = image.processForStorage(
+            maxDimension: storageMaxDimension,
+            maxFileSizeKB: compressionMaxKB
+        )
+
+        guard let compressed, !compressed.isEmpty else { return false }
+        guard compressed != data else { return false }
+
+        if let preview = UIImage(data: compressed) {
+            PhotoContentBounds.assignImage(preview, to: photo, data: compressed)
+            photo.thumbnailData = preview.generateThumbnail()
+        } else {
+            photo.data = compressed
+        }
+
+        setUpdatedAt(item)
+        try context.save()
+        return true
+    }
+}
+
+struct PhotoStorageStats {
+    let photoDataBytes: Int64
+    let thumbnailDataBytes: Int64
+    let outfitImageBytes: Int64
+    let outfitWornImageBytes: Int64
+    let photoRecordCount: Int
+    let blobsOver200KB: Int
+
+    var totalBytes: Int64 {
+        photoDataBytes + thumbnailDataBytes + outfitImageBytes + outfitWornImageBytes
+    }
+
+    var summaryMessage: String {
+        [
+            "Item photos: \(Self.formatMB(photoDataBytes)) (\(photoRecordCount) images)",
+            "Thumbnails: \(Self.formatMB(thumbnailDataBytes))",
+            "Outfit collages: \(Self.formatMB(outfitImageBytes))",
+            "Outfit worn photos: \(Self.formatMB(outfitWornImageBytes))",
+            "Total stored: \(Self.formatMB(totalBytes))",
+            "",
+            "Images over 200 KB: \(blobsOver200KB)",
+        ].joined(separator: "\n")
+    }
+
+    private static func formatMB(_ bytes: Int64) -> String {
+        String(format: "%.2f MB", Double(bytes) / (1024 * 1024))
+    }
+}
+
+func collectPhotoStorageStats(context: NSManagedObjectContext) throws -> PhotoStorageStats {
+    var photoDataBytes: Int64 = 0
+    var thumbnailDataBytes: Int64 = 0
+    var photoRecordCount = 0
+    var blobsOver200KB = 0
+
+    let photos = try context.fetch(Photo.fetchRequest())
+    for photo in photos {
+        if let data = photo.data, !data.isEmpty {
+            photoDataBytes += Int64(data.count)
+            photoRecordCount += 1
+            if data.count > photoStorage200KBThreshold {
+                blobsOver200KB += 1
+            }
+        }
+        if let thumbnailData = photo.thumbnailData, !thumbnailData.isEmpty {
+            thumbnailDataBytes += Int64(thumbnailData.count)
+            if thumbnailData.count > photoStorage200KBThreshold {
+                blobsOver200KB += 1
+            }
+        }
+    }
+
+    var outfitImageBytes: Int64 = 0
+    var outfitWornImageBytes: Int64 = 0
+    let outfits = try context.fetch(Outfit.fetchRequest())
+    for outfit in outfits {
+        if let imageData = outfit.image, !imageData.isEmpty {
+            outfitImageBytes += Int64(imageData.count)
+            if imageData.count > photoStorage200KBThreshold {
+                blobsOver200KB += 1
+            }
+        }
+        if let wornData = outfit.wornImage, !wornData.isEmpty {
+            outfitWornImageBytes += Int64(wornData.count)
+            if wornData.count > photoStorage200KBThreshold {
+                blobsOver200KB += 1
+            }
+        }
+    }
+
+    return PhotoStorageStats(
+        photoDataBytes: photoDataBytes,
+        thumbnailDataBytes: thumbnailDataBytes,
+        outfitImageBytes: outfitImageBytes,
+        outfitWornImageBytes: outfitWornImageBytes,
+        photoRecordCount: photoRecordCount,
+        blobsOver200KB: blobsOver200KB
+    )
+}
+
+func printPhotoStorageStats(_ stats: PhotoStorageStats, context: NSManagedObjectContext) {
+    print("\n📊 Photo storage report")
+    print(String(repeating: "=", count: 50))
+    print(stats.summaryMessage)
+
+    let photos = (try? context.fetch(Photo.fetchRequest())) ?? []
+    for photo in photos {
+        guard let data = photo.data, data.count > photoStorage200KBThreshold else { continue }
+        let sizeMB = Double(data.count) / (1024 * 1024)
+        print("⚠️ Photo >200 KB: \(String(format: "%.2f", sizeMB)) MB (ID: \(photo.id?.uuidString.prefix(8) ?? "unknown"))")
+    }
+
+    let outfits = (try? context.fetch(Outfit.fetchRequest())) ?? []
+    for outfit in outfits {
+        if let imageData = outfit.image, imageData.count > photoStorage200KBThreshold {
+            let sizeMB = Double(imageData.count) / (1024 * 1024)
+            print("⚠️ Outfit image >200 KB: \(String(format: "%.2f", sizeMB)) MB (ID: \(outfit.id?.uuidString.prefix(8) ?? "unknown"))")
+        }
+        if let wornData = outfit.wornImage, wornData.count > photoStorage200KBThreshold {
+            let sizeMB = Double(wornData.count) / (1024 * 1024)
+            print("⚠️ Outfit worn image >200 KB: \(String(format: "%.2f", sizeMB)) MB (ID: \(outfit.id?.uuidString.prefix(8) ?? "unknown"))")
+        }
+    }
+
+    let totalGB = Double(stats.totalBytes) / (1024 * 1024 * 1024)
+    if totalGB > 0.1 {
+        print("\n⚠️ Total image storage is \(String(format: "%.2f", totalGB)) GB")
+    } else {
+        print("\n✅ Total image storage looks reasonable for local closet data.")
+    }
+    print(String(repeating: "=", count: 50) + "\n")
+}
+
 // MARK: - Verify Photo Compression
 func checkPhotoSizes(context: NSManagedObjectContext) {
-    let fetchRequest: NSFetchRequest<Photo> = Photo.fetchRequest()
-    
     do {
-        let photos = try context.fetch(fetchRequest)
-        var totalSize: Int64 = 0
-        var photoCount = 0
-        var thumbnailSize: Int64 = 0
-        
-        print("\n📊 Photo Size Verification:")
-        print(String(repeating: "=", count: 50))
-        
-        for photo in photos {
-            if let data = photo.data {
-                totalSize += Int64(data.count)
-                photoCount += 1
-                let sizeMB = Double(data.count) / 1_000_000
-                if sizeMB > 1.0 {
-                    print("⚠️ Large photo: \(String(format: "%.2f", sizeMB)) MB (ID: \(photo.id?.uuidString.prefix(8) ?? "unknown"))")
-                }
-            }
-            if let thumbnailData = photo.thumbnailData {
-                thumbnailSize += Int64(thumbnailData.count)
-            }
-        }
-        
-        // Check outfit images too
-        let outfitFetchRequest: NSFetchRequest<Outfit> = Outfit.fetchRequest()
-        let outfits = try context.fetch(outfitFetchRequest)
-        var outfitImageSize: Int64 = 0
-        
-        for outfit in outfits {
-            if let imageData = outfit.image {
-                outfitImageSize += Int64(imageData.count)
-            }
-        }
-        
-        let totalPhotoMB = Double(totalSize) / 1_000_000
-        let totalThumbnailMB = Double(thumbnailSize) / 1_000_000
-        let totalOutfitMB = Double(outfitImageSize) / 1_000_000
-        let totalAllMB = totalPhotoMB + totalOutfitMB
-        let totalAllGB = totalAllMB / 1000
-        
-        print("\n📸 Photo Statistics:")
-        print("   Photos: \(photoCount)")
-        print("   Total photo data: \(String(format: "%.2f", totalPhotoMB)) MB")
-        print("   Total thumbnail data: \(String(format: "%.2f", totalThumbnailMB)) MB")
-        print("   Total outfit images: \(String(format: "%.2f", totalOutfitMB)) MB")
-        print("   Total all images: \(String(format: "%.2f", totalAllMB)) MB (\(String(format: "%.3f", totalAllGB)) GB)")
-        
-        if totalAllGB > 1.0 {
-            print("\n⚠️ WARNING: Total image size is still large (\(String(format: "%.2f", totalAllGB)) GB)")
-            print("   Expected: < 0.1 GB for ~80 items")
-        } else {
-            print("\n✅ Image sizes look good!")
-        }
-        
-        print(String(repeating: "=", count: 50) + "\n")
-        
+        let stats = try collectPhotoStorageStats(context: context)
+        printPhotoStorageStats(stats, context: context)
     } catch {
         print("❌ Photo size check failed: \(error)")
     }

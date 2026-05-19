@@ -24,6 +24,7 @@ struct ItemGridView: View {
     @State private var showOutfitFilter = false
 
     @EnvironmentObject var supabaseService: SupabaseService
+    @EnvironmentObject var authSession: AuthSession
     @Environment(\.managedObjectContext) private var viewContext
     @State private var closetItems: [Item] = []
     @State private var isImagePickerPresented = false
@@ -402,14 +403,19 @@ struct ItemGridView: View {
             ItemAddView(
                 parentContext: viewContext,
                 selectedWardrobe: selectedWardrobe,
-                queueCoordinator: queueCoordinator
+                queueCoordinator: queueCoordinator,
+                sessionAccountId: authSession.userId?.uuidString
             )
             .onDisappear {
                 handleItemAddViewDismiss()
             }
         }
         .navigationDestination(isPresented: $shouldNavigateToItemAddDirect) {
-            ItemAddView(parentContext: viewContext, selectedWardrobe: selectedWardrobe)
+            ItemAddView(
+                parentContext: viewContext,
+                selectedWardrobe: selectedWardrobe,
+                sessionAccountId: authSession.userId?.uuidString
+            )
         }
     }
 
@@ -438,7 +444,7 @@ struct ItemGridView: View {
     // MARK: - Core Data fetch
     func fetchItems() {
         // Require authentication - get userId
-        guard let userId = SupabaseService.shared.currentUser?.id.uuidString else {
+        guard let userId = authSession.userId?.uuidString else {
             DispatchQueue.main.async {
                 self.closetItems = []
             }
@@ -604,7 +610,7 @@ struct ItemGridView: View {
     
     func fetchOutfits() {
         // Require authentication - get userId
-        guard let userId = SupabaseService.shared.currentUser?.id.uuidString else {
+        guard let userId = authSession.userId?.uuidString else {
             DispatchQueue.main.async {
                 self.outfits = []
             }
@@ -684,7 +690,7 @@ struct ItemGridView: View {
         // Process and compress image
         if let imageData = image.processForStorage() {
             let photo = Photo(context: viewContext)
-            photo.data = imageData
+            PhotoContentBounds.assignImage(UIImage(data: imageData) ?? image, to: photo, data: imageData)
             photo.thumbnailData = image.generateThumbnail()
             photo.isPrimary = true
             photo.id = UUID()
@@ -1277,7 +1283,7 @@ struct ItemGridView: View {
             guard !Task.isCancelled else { return }
             
             let results = try await supabaseService.searchUsers(byUsername: query)
-            let currentUserId = supabaseService.currentUser?.id
+            let currentUserId = authSession.userId
             let filtered = results.filter { profile in
                 guard let currentUserId = currentUserId else { return true }
                 return profile.userId != currentUserId
@@ -1299,7 +1305,7 @@ struct ItemGridView: View {
     }
 
     private func loadConnectedFriends() async {
-        guard supabaseService.isAuthenticated else {
+        guard authSession.isAuthenticated else {
             await MainActor.run { connectedFriends = []; isLoadingConnectedFriends = false }
             return
         }
@@ -1314,7 +1320,7 @@ struct ItemGridView: View {
     }
 
     private func refreshFriendshipBadges() async {
-        guard supabaseService.isAuthenticated else {
+        guard authSession.isAuthenticated else {
             await MainActor.run {
                 friendUserIds = []
             }
@@ -1323,7 +1329,7 @@ struct ItemGridView: View {
         
         do {
             let rows = try await supabaseService.fetchFriendshipsForCurrentUser()
-            let currentId = supabaseService.currentUser?.id
+            let currentId = authSession.userId
             let resultIds = Set(sharedUserResults.map(\.userId))
             
             var accepted: Set<UUID> = []
