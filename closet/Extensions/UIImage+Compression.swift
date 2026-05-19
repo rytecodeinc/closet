@@ -112,13 +112,140 @@ extension UIImage {
         }
     }
 
-    /// Thumbnail bytes for `ItemView` grids after **Add Multiple → From Library**, so the grid matches the hero’s default center aspect-fill crop.
-    func gridThumbnailDataMatchingItemDetailHero(outputSide: CGFloat = 300) -> Data? {
-        let cropped = squareAspectFillCenterCropped(side: outputSide)
-        if cropped.hasTransparency {
-            return cropped.pngData()
+    /// Pixel-space bounds of non-transparent pixels. Full image when there is no alpha channel.
+    func nonTransparentContentBoundsInPixelSpace(alphaThreshold: UInt8 = 12) -> CGRect? {
+        guard let cgImage = cgImage else { return nil }
+        let width = cgImage.width
+        let height = cgImage.height
+        guard width > 0, height > 0 else { return nil }
+
+        switch cgImage.alphaInfo {
+        case .none, .noneSkipFirst, .noneSkipLast:
+            return CGRect(x: 0, y: 0, width: width, height: height)
+        default:
+            break
         }
-        return cropped.jpegData(compressionQuality: 0.7)
+
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo.rawValue
+        ) else {
+            return CGRect(x: 0, y: 0, width: width, height: height)
+        }
+
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let data = context.data else {
+            return CGRect(x: 0, y: 0, width: width, height: height)
+        }
+
+        let bytesPerRow = width * 4
+        var minX = width
+        var minY = height
+        var maxX = 0
+        var maxY = 0
+        let threshold = Int(alphaThreshold)
+
+        for y in 0..<height {
+            let row = data.advanced(by: y * bytesPerRow)
+            for x in 0..<width {
+                let alpha = Int(row.load(fromByteOffset: x * 4 + 3, as: UInt8.self))
+                if alpha > threshold {
+                    minX = min(minX, x)
+                    minY = min(minY, y)
+                    maxX = max(maxX, x)
+                    maxY = max(maxY, y)
+                }
+            }
+        }
+
+        guard minX <= maxX, minY <= maxY else { return nil }
+        return CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
+    }
+
+    /// Crops using precomputed normalized bounds (no alpha scan).
+    func cropped(toNormalizedBounds bounds: NormalizedContentBounds) -> UIImage? {
+        guard let cgImage = cgImage else { return nil }
+        let pixelW = CGFloat(cgImage.width)
+        let pixelH = CGFloat(cgImage.height)
+        let rect = CGRect(
+            x: bounds.x * pixelW,
+            y: bounds.y * pixelH,
+            width: bounds.width * pixelW,
+            height: bounds.height * pixelH
+        ).integral
+        guard rect.width > 1, rect.height > 1, let cropped = cgImage.cropping(to: rect) else {
+            return nil
+        }
+        return UIImage(cgImage: cropped, scale: scale, orientation: imageOrientation)
+    }
+
+    /// Crops to opaque content bounds in pixel space, with optional outward padding (clamped to image).
+    func croppedToOpaqueContentBounds(paddingRatio: CGFloat = 0.04) -> UIImage? {
+        guard let cgImage = cgImage else { return nil }
+        guard var rect = nonTransparentContentBoundsInPixelSpace() else { return self }
+
+        let padX = rect.width * paddingRatio
+        let padY = rect.height * paddingRatio
+        rect = rect.insetBy(dx: -padX, dy: -padY)
+        let imageRect = CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height)
+        rect = rect.intersection(imageRect)
+        guard rect.width > 1, rect.height > 1, let cropped = cgImage.cropping(to: rect.integral) else {
+            return nil
+        }
+        return UIImage(cgImage: cropped, scale: scale, orientation: imageOrientation)
+    }
+
+    /// After background removal: crop to subject bounds, then **aspect-fit** the subject in a square (centered, letterboxed).
+    /// Use this for bulk import so the full garment stays visible when the hero uses `.fill`.
+    func squareAspectFitSubjectInSquare(side: CGFloat, contentPaddingRatio: CGFloat = 0.04) -> UIImage {
+        let s = max(side, 1)
+        let subject = croppedToOpaqueContentBounds(paddingRatio: contentPaddingRatio) ?? self
+
+        let w = max(subject.size.width, 1)
+        let h = max(subject.size.height, 1)
+        let fitScale = min(s / w, s / h)
+        let drawnW = w * fitScale
+        let drawnH = h * fitScale
+        let originX = (s - drawnW) / 2
+        let originY = (s - drawnH) / 2
+
+        let format = UIGraphicsImageRendererFormat()
+        format.opaque = false
+        format.scale = 1.0
+        format.preferredRange = .extended
+
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: s, height: s), format: format)
+        return renderer.image { context in
+            UIColor.clear.setFill()
+            UIBezierPath(rect: CGRect(origin: .zero, size: CGSize(width: s, height: s))).fill()
+            context.cgContext.interpolationQuality = .high
+            subject.draw(in: CGRect(x: originX, y: originY, width: drawnW, height: drawnH))
+        }
+    }
+
+    /// Thumbnail bytes for grid/hero when the master is already square with subject aspect-fit (e.g. bulk import).
+    func gridThumbnailDataFromSquareMaster(outputSide: CGFloat = 300) -> Data? {
+        guard let resized = resizeForStorage(maxDimension: outputSide) else { return nil }
+        if resized.hasTransparency {
+            return resized.pngData()
+        }
+        return resized.jpegData(compressionQuality: 0.7)
+    }
+
+    /// Thumbnail bytes for `ItemView` grids — aspect-fits subject in square (matches bulk import / hero for cutouts).
+    func gridThumbnailDataMatchingItemDetailHero(outputSide: CGFloat = 300) -> Data? {
+        let fitted = squareAspectFitSubjectInSquare(side: outputSide)
+        if fitted.hasTransparency {
+            return fitted.pngData()
+        }
+        return fitted.jpegData(compressionQuality: 0.7)
     }
 
     /// Encodes for R2 / worker upload: targets **under `maxBytes`** (default 4.8 MB under a 5 MB limit).
