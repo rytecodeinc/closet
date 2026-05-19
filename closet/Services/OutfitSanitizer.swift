@@ -213,47 +213,41 @@ enum OutfitSanitizer {
 
         guard !renderItems.isEmpty else { return nil }
 
-        // Build "OutfitItem"-compatible structures for AdaptiveLayoutEngine.
+        let center = CGPoint(x: canvasSize / 2, y: canvasSize / 2)
         let outfitItems: [OutfitItem] = renderItems
             .sorted(by: { $0.zIndex < $1.zIndex })
             .map { entry in
-                OutfitItem(
+                let bounds = PhotoContentBounds.contentBounds(for: entry.item)
+                return OutfitItem(
                     item: entry.item,
-                    position: entry.position,
+                    position: entry.position ?? center,
+                    displaySize: OutfitItem.defaultDisplaySize(canvasSize: canvasSize, contentAspect: bounds.aspectRatio),
                     scale: entry.scale,
                     rotation: entry.rotation,
-                    zIndex: entry.zIndex
+                    zIndex: entry.zIndex,
+                    contentBounds: bounds
                 )
             }
 
-        let layout = AdaptiveLayoutEngine.layout(items: outfitItems, canvasSize: canvasSize)
-
         let captureView = Canvas { ctx, _ in
             for outfitItem in outfitItems.sorted(by: { $0.zIndex < $1.zIndex }) {
-                guard let layoutResult = layout[outfitItem.id] else { continue }
                 guard let primaryPhoto = (outfitItem.item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }),
                       let photoData = primaryPhoto.data,
                       let uiImage = UIImage(data: photoData) else { continue }
 
-                let frame = layoutResult.frame
-                let center = outfitItem.position ?? CGPoint(x: frame.midX, y: frame.midY)
-                let scaledW = frame.width * outfitItem.scale
-                let scaledH = frame.height * outfitItem.scale
+                let center = outfitItem.position
+                let scaledW = outfitItem.displaySize.width * outfitItem.scale
+                let scaledH = outfitItem.displaySize.height * outfitItem.scale
 
                 ctx.translateBy(x: center.x, y: center.y)
                 ctx.rotate(by: Angle.degrees(outfitItem.rotation))
 
-                let imgAspect = uiImage.size.height / uiImage.size.width
-                let drawW = scaledW
-                let drawH = drawW * imgAspect
-                let drawRect = CGRect(x: -drawW / 2, y: -drawH / 2, width: drawW, height: drawH)
-
-                ctx.draw(Image(uiImage: uiImage).resizable(), in: drawRect)
+                let drawImage = uiImage.cropped(toNormalizedBounds: outfitItem.contentBounds) ?? uiImage
+                let drawRect = CGRect(x: -scaledW / 2, y: -scaledH / 2, width: scaledW, height: scaledH)
+                ctx.draw(Image(uiImage: drawImage).resizable(), in: drawRect)
 
                 ctx.rotate(by: Angle.degrees(-outfitItem.rotation))
                 ctx.translateBy(x: -center.x, y: -center.y)
-
-                _ = scaledH // keep parity with capture logic; future-proof if height used
             }
         }
         .frame(width: canvasSize, height: canvasSize)
