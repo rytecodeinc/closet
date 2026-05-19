@@ -132,6 +132,31 @@
         <relationship name="wardrobe" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Wardrobe" inverseName="packingAssignments" inverseEntity="Wardrobe"/>
         <relationship name="storageLocation" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="PackingStorageLocation" inverseName="packingAssignments" inverseEntity="PackingStorageLocation"/>
     </entity>
+    <entity name="PackingChecklistSection" representedClassName="PackingChecklistSection" syncable="YES" codeGenerationType="class">
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="title" optional="YES" attributeType="String"/>
+        <attribute name="kind" optional="YES" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="sortIndex" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="userId" optional="YES" attributeType="String"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="syncedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <relationship name="wardrobe" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Wardrobe" inverseName="packingChecklistSections" inverseEntity="Wardrobe"/>
+        <relationship name="items" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="PackingChecklistItem" inverseName="section" inverseEntity="PackingChecklistItem"/>
+    </entity>
+    <entity name="PackingChecklistItem" representedClassName="PackingChecklistItem" syncable="YES" codeGenerationType="class">
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="text" optional="YES" attributeType="String"/>
+        <attribute name="isCompleted" optional="YES" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="kind" optional="YES" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="sortIndex" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="userId" optional="YES" attributeType="String"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="syncedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <relationship name="wardrobe" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Wardrobe" inverseName="packingChecklistItems" inverseEntity="Wardrobe"/>
+        <relationship name="section" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="PackingChecklistSection" inverseName="items" inverseEntity="PackingChecklistSection"/>
+    </entity>
     <entity name="Outfit" representedClassName=".Outfit" syncable="YES" codeGenerationType="class">
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="image" optional="YES" attributeType="Binary"/>
@@ -153,6 +178,10 @@
         <relationship name="tags" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Tag" inverseName="outfits" inverseEntity="Tag"/>
     </entity>
     <entity name="Photo" representedClassName="Photo" syncable="YES" codeGenerationType="class">
+        <attribute name="contentBoundsH" optional="YES" attributeType="Double" usesScalarValueType="YES"/>
+        <attribute name="contentBoundsW" optional="YES" attributeType="Double" usesScalarValueType="YES"/>
+        <attribute name="contentBoundsX" optional="YES" attributeType="Double" usesScalarValueType="YES"/>
+        <attribute name="contentBoundsY" optional="YES" attributeType="Double" usesScalarValueType="YES"/>
         <attribute name="data" optional="YES" attributeType="Binary"/>
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="imageUrl" optional="YES" attributeType="String"/>
@@ -240,8 +269,11 @@
         <attribute name="isSoftDeleted" optional="YES" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
         <attribute name="syncedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="type" optional="YES" attributeType="String"/>
+        <attribute name="packingChecklistSectionTitle" optional="YES" attributeType="String"/>
         <relationship name="items" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Item" inverseName="wardrobes" inverseEntity="Item"/>
         <relationship name="packingStorageLocations" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="PackingStorageLocation" inverseName="wardrobe" inverseEntity="PackingStorageLocation"/>
         <relationship name="packingAssignments" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="PackingAssignment" inverseName="wardrobe" inverseEntity="PackingAssignment"/>
+        <relationship name="packingChecklistItems" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="PackingChecklistItem" inverseName="wardrobe" inverseEntity="PackingChecklistItem"/>
+        <relationship name="packingChecklistSections" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="PackingChecklistSection" inverseName="wardrobe" inverseEntity="PackingChecklistSection"/>
     </entity>
 </model>
