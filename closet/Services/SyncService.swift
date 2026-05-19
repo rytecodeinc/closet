@@ -1210,6 +1210,8 @@ class SyncService: ObservableObject {
         }
         
         // Otherwise, upsert as normal
+        let sectionTitleSynced = (wardrobe.packingChecklistSectionTitle ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let wardrobeData = SyncWardrobeData(
             id: wardrobeId.uuidString,
             userId: userId.uuidString,
@@ -1217,6 +1219,7 @@ class SyncService: ObservableObject {
             type: wardrobe.type,
             isSoftDeleted: wardrobe.isSoftDeleted,
             isDefault: wardrobe.isDefault,
+            packingChecklistSectionTitle: sectionTitleSynced.isEmpty ? "" : sectionTitleSynced,
             createdAt: wardrobe.createdAt?.ISO8601String ?? wardrobe.timestamp?.ISO8601String,
             updatedAt: wardrobe.updatedAt?.ISO8601String
         )
@@ -1231,6 +1234,190 @@ class SyncService: ObservableObject {
         
         // Mark as synced after successful upload
         wardrobe.syncedAt = Date()
+        try context.save()
+    }
+    
+    // MARK: - Packing checklist sync
+    
+    /// Push a checklist row after local edits (travel wardrobe scope).
+    nonisolated func syncPackingChecklistItemIfNeeded(_ row: PackingChecklistItem) {
+        Task { @MainActor in
+            guard self.supabaseService.isAuthenticated,
+                  let userId = self.supabaseService.currentUser?.id,
+                  let rowId = row.id,
+                  let context = self.context else {
+                return
+            }
+            
+            let request: NSFetchRequest<PackingChecklistItem> = PackingChecklistItem.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", rowId as CVarArg)
+            request.fetchLimit = 1
+            
+            guard let refreshed = try? context.fetch(request).first else {
+                return
+            }
+            guard refreshed.wardrobe != nil, refreshed.wardrobe?.id != nil else {
+                print("⚠️ Packing checklist row missing wardrobe; skip sync \(rowId.uuidString)")
+                return
+            }
+            
+            if refreshed.userId == nil || refreshed.userId?.isEmpty == true {
+                refreshed.userId = userId.uuidString
+                try? context.save()
+            }
+            
+            let needsSync: Bool
+            if refreshed.syncedAt == nil {
+                needsSync = true
+            } else if let updatedAt = refreshed.updatedAt, let syncedAt = refreshed.syncedAt {
+                needsSync = updatedAt >= syncedAt
+            } else {
+                needsSync = false
+            }
+            
+            guard needsSync else { return }
+
+            let trimmedText = (refreshed.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+            do {
+                // Supabase only stores non-empty lines; placeholders and cleared rows have no remote row.
+                if trimmedText.isEmpty {
+                    if refreshed.syncedAt != nil {
+                        try await self.supabaseService.supabaseClient.from("packing_checklist_items")
+                            .delete()
+                            .eq("id", value: rowId.uuidString)
+                            .execute()
+                        print("✅ Removed empty packing_checklist_items row \(rowId.uuidString) from Supabase")
+                    }
+                    refreshed.syncedAt = Date()
+                    try context.save()
+                    return
+                }
+
+                guard let wardrobe = refreshed.wardrobe else { return }
+                var wardrobeNeedsPush = wardrobe.syncedAt == nil
+                if !wardrobeNeedsPush,
+                   let wu = wardrobe.updatedAt,
+                   let ws = wardrobe.syncedAt {
+                    wardrobeNeedsPush = wu >= ws
+                }
+                if wardrobeNeedsPush {
+                    try await self.syncWardrobe(wardrobe, userId: userId)
+                }
+                if let section = refreshed.section {
+                    try await self.syncPackingChecklistSection(section, userId: userId)
+                }
+                try await self.syncPackingChecklistRow(refreshed, userId: userId, checklistText: trimmedText)
+            } catch {
+                print("⚠️ Failed to sync packing checklist item \(rowId.uuidString): \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    /// Deletes a checklist row server-side after local removal.
+    nonisolated func deletePackingChecklistItemFromSupabase(checklistRowId: UUID) {
+        Task { @MainActor in
+            guard self.supabaseService.isAuthenticated else { return }
+            let idString = checklistRowId.uuidString
+            do {
+                try await self.supabaseService.supabaseClient.from("packing_checklist_items")
+                    .delete()
+                    .eq("id", value: idString)
+                    .execute()
+                print("✅ Deleted packing_checklist_items row \(idString) from Supabase")
+            } catch {
+                print("⚠️ Failed to delete packing_checklist_items \(idString): \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    /// Push a checklist section header after local edits.
+    nonisolated func syncPackingChecklistSectionIfNeeded(_ section: PackingChecklistSection) {
+        Task { @MainActor in
+            guard self.supabaseService.isAuthenticated,
+                  let userId = self.supabaseService.currentUser?.id,
+                  let sectionId = section.id,
+                  let context = self.context else {
+                return
+            }
+
+            let request: NSFetchRequest<PackingChecklistSection> = PackingChecklistSection.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", sectionId as CVarArg)
+            request.fetchLimit = 1
+
+            guard let refreshed = try? context.fetch(request).first else { return }
+            guard refreshed.wardrobe?.id != nil else { return }
+
+            if refreshed.userId == nil || refreshed.userId?.isEmpty == true {
+                refreshed.userId = userId.uuidString
+                try? context.save()
+            }
+
+            let needsSync: Bool
+            if refreshed.syncedAt == nil {
+                needsSync = true
+            } else if let updatedAt = refreshed.updatedAt, let syncedAt = refreshed.syncedAt {
+                needsSync = updatedAt >= syncedAt
+            } else {
+                needsSync = false
+            }
+
+            guard needsSync else { return }
+
+            do {
+                try await self.syncPackingChecklistSection(refreshed, userId: userId)
+            } catch {
+                print("⚠️ Failed to sync packing checklist section \(sectionId.uuidString): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func syncPackingChecklistSection(_ section: PackingChecklistSection, userId: UUID) async throws {
+        guard let context = context else { throw SyncError.noContext }
+        guard let id = section.id, let wardrobeId = section.wardrobe?.id else { return }
+
+        let title = (section.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let payload = SyncPackingChecklistSectionData(
+            id: id.uuidString,
+            userId: userId.uuidString,
+            wardrobeId: wardrobeId.uuidString,
+            kind: Int(section.kind),
+            title: title,
+            sortIndex: Int(section.sortIndex),
+            createdAt: section.createdAt?.ISO8601String,
+            updatedAt: section.updatedAt?.ISO8601String ?? section.createdAt?.ISO8601String
+        )
+
+        try await supabaseService.supabaseClient.from("packing_checklist_sections")
+            .upsert(payload, onConflict: "id")
+            .execute()
+
+        section.syncedAt = Date()
+        try context.save()
+    }
+
+    private func syncPackingChecklistRow(_ row: PackingChecklistItem, userId: UUID, checklistText: String) async throws {
+        guard let context = context else { throw SyncError.noContext }
+        guard let id = row.id, let wardrobeId = row.wardrobe?.id else { return }
+        
+        let payload = SyncPackingChecklistItemData(
+            id: id.uuidString,
+            userId: userId.uuidString,
+            wardrobeId: wardrobeId.uuidString,
+            sectionId: row.section?.id?.uuidString,
+            kind: Int(row.kind),
+            checklistText: checklistText,
+            isCompleted: row.isCompleted,
+            sortIndex: Int(row.sortIndex),
+            createdAt: row.createdAt?.ISO8601String,
+            updatedAt: row.updatedAt?.ISO8601String ?? row.createdAt?.ISO8601String
+        )
+        
+        try await supabaseService.supabaseClient.from("packing_checklist_items")
+            .upsert(payload, onConflict: "id")
+            .execute()
+        
+        row.syncedAt = Date()
         try context.save()
     }
     
@@ -1997,7 +2184,11 @@ class SyncService: ObservableObject {
             print("❌ Photo \(photo.id?.uuidString ?? "?"): encoded size \(data.count) still exceeds worker max")
             throw SyncError.photoExceedsWorkerLimit
         }
-        photo.data = data
+        if let storedImage = UIImage(data: data) {
+            PhotoContentBounds.assignImage(storedImage, to: photo, data: data)
+        } else {
+            photo.data = data
+        }
         print("📦 R2-safe full image: \(original.count) → \(data.count) bytes")
         return data
     }
@@ -3026,6 +3217,54 @@ private struct SyncTagData: Codable {
     }
 }
 
+private struct SyncPackingChecklistSectionData: Codable {
+    let id: String
+    let userId: String
+    let wardrobeId: String
+    let kind: Int
+    let title: String
+    let sortIndex: Int
+    let createdAt: String?
+    let updatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userId = "user_id"
+        case wardrobeId = "wardrobe_id"
+        case kind
+        case title
+        case sortIndex = "sort_index"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
+private struct SyncPackingChecklistItemData: Codable {
+    let id: String
+    let userId: String
+    let wardrobeId: String
+    let sectionId: String?
+    let kind: Int
+    let checklistText: String
+    let isCompleted: Bool
+    let sortIndex: Int
+    let createdAt: String?
+    let updatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userId = "user_id"
+        case wardrobeId = "wardrobe_id"
+        case sectionId = "section_id"
+        case kind
+        case checklistText = "checklist_text"
+        case isCompleted = "is_completed"
+        case sortIndex = "sort_index"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
 private struct SyncLocationData: Codable {
     let id: String
     let userId: String
@@ -3045,6 +3284,7 @@ private struct SyncWardrobeData: Codable {
     let type: String?
     let isSoftDeleted: Bool
     let isDefault: Bool
+    let packingChecklistSectionTitle: String
     let createdAt: String?
     let updatedAt: String?
     
@@ -3055,6 +3295,7 @@ private struct SyncWardrobeData: Codable {
         case type
         case isSoftDeleted = "is_soft_deleted"
         case isDefault = "is_default"
+        case packingChecklistSectionTitle = "packing_checklist_section_title"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
     }
