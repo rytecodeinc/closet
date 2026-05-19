@@ -2,8 +2,8 @@
 //  BulkItemImportCoordinator.swift
 //  closet
 //
-//  Background bulk import after Add Multiple → From Library: center aspect-fill square crop,
-//  Vision background removal, R2-safe encoding, Core Data save + sync.
+//  Background bulk import after Add Multiple → From Library: Vision background removal,
+//  aspect-fit subject in 1:1, R2-safe encoding, Core Data save + sync.
 //
 
 import SwiftUI
@@ -25,8 +25,10 @@ final class BulkItemImportCoordinator: ObservableObject {
         statusMessage = "Cancelling…"
     }
 
-    /// Square destructive crop side before Vision (matches hero framing density; keeps Vision cost bounded).
+    /// Final square master side (subject aspect-fit inside).
     private static let storageSquareSide: CGFloat = 1200
+    /// Max long edge sent to Vision (keeps mask pass bounded).
+    private static let visionMaxInputDimension: CGFloat = 2048
 
     func startImport(
         images: [UIImage],
@@ -86,6 +88,10 @@ final class BulkItemImportCoordinator: ObservableObject {
                 photo.id = UUID()
                 photo.data = pack.photoData
                 photo.thumbnailData = pack.thumbnailData
+                photo.contentBoundsX = Double(pack.bounds.x)
+                photo.contentBoundsY = Double(pack.bounds.y)
+                photo.contentBoundsW = Double(pack.bounds.width)
+                photo.contentBoundsH = Double(pack.bounds.height)
                 photo.isPrimary = true
                 photo.type = "front"
                 photo.timestamp = now
@@ -112,17 +118,19 @@ final class BulkItemImportCoordinator: ObservableObject {
         }
     }
 
-    /// Center aspect-fill square crop → Vision background removal → encode under R2 limit.
-    private static func processImageOffMain(image: UIImage) async -> (photoData: Data, thumbnailData: Data?) {
+    /// Vision background removal → detect subject bounds → aspect-fit in 1:1 → encode.
+    private static func processImageOffMain(image: UIImage) async -> (photoData: Data, thumbnailData: Data?, bounds: NormalizedContentBounds) {
         let side = storageSquareSide
         return await Task.detached(priority: .userInitiated) { @Sendable in
-            let cropped = image.squareAspectFillCenterCropped(side: side)
-            let cutout = await BackgroundRemovalService.removeBackground(from: cropped)
-            let photoData = cutout.encodeForR2Upload()
-                ?? cutout.processForStorage(maxDimension: 1200, maxFileSizeKB: 450)
+            let visionInput = image.resizeForStorage(maxDimension: visionMaxInputDimension) ?? image
+            let cutout = await BackgroundRemovalService.removeBackground(from: visionInput)
+            let framed = cutout.squareAspectFitSubjectInSquare(side: side)
+            let photoData = framed.encodeForR2Upload()
+                ?? framed.processForStorage(maxDimension: side, maxFileSizeKB: 450)
                 ?? Data()
-            let thumbnailData = cutout.gridThumbnailDataMatchingItemDetailHero()
-            return (photoData, thumbnailData)
+            let thumbnailData = framed.gridThumbnailDataFromSquareMaster()
+            let bounds = PhotoContentBounds.normalizedBounds(for: framed)
+            return (photoData, thumbnailData, bounds)
         }.value
     }
 
