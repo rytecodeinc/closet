@@ -10,14 +10,6 @@ import CoreData
 import Foundation
 import UIKit
 
-// MARK: - Category Size Weight
-/// Determines relative visual weight of a clothing item on the canvas.
-enum CategorySizeWeight: CGFloat {
-    case large  = 1.00   // dresses, coats, outerwear, suits, jumpsuits
-    case medium = 0.72   // tops, bottoms, activewear, swimwear
-    case small  = 0.46   // shoes, bags, accessories, jewelry, hats, belts
-}
-
 // MARK: - Smart Positioning System
 
 enum ClothingZone {
@@ -47,205 +39,10 @@ enum ClothingZone {
     }
 }
 
-// MARK: - Adaptive Layout Engine
-
-/// Computes positions and sizes for all items on the canvas so they
-/// fill the available space intelligently based on count and category.
-struct AdaptiveLayoutEngine {
-
-    struct LayoutResult {
-        let frame: CGRect   // position + size in canvas coordinates
-        let zIndex: Int
-    }
-
-    /// Returns a layout result for every item in `items`, ordered to match.
-    static func layout(items: [OutfitItem], canvasSize: CGFloat) -> [UUID: LayoutResult] {
-        guard !items.isEmpty else { return [:] }
-
-        let count = items.count
-
-        // Build raw weight for each item based on category
-        let weights = items.map { sizeWeight(for: $0.item).rawValue }
-        let totalWeight = weights.reduce(0, +)
-
-        // Choose a layout strategy
-        switch count {
-        case 1:
-            return singleItemLayout(items: items, canvasSize: canvasSize)
-        case 2:
-            return twoItemLayout(items: items, weights: weights, canvasSize: canvasSize)
-        case 3:
-            return threeItemLayout(items: items, weights: weights, canvasSize: canvasSize)
-        case 4:
-            return fourItemLayout(items: items, weights: weights, canvasSize: canvasSize)
-        default:
-            return gridLayout(items: items, weights: weights, canvasSize: canvasSize)
-        }
-    }
-
-    // MARK: Layout Strategies
-
-    private static func singleItemLayout(items: [OutfitItem], canvasSize: CGFloat) -> [UUID: LayoutResult] {
-        let item = items[0]
-        let weight = sizeWeight(for: item.item).rawValue
-        // Fill most of the canvas
-        let maxDim = canvasSize * 0.82 * weight
-        let size = CGSize(width: maxDim, height: maxDim)
-        let origin = CGPoint(x: (canvasSize - size.width) / 2,
-                             y: (canvasSize - size.height) / 2)
-        return [item.id: LayoutResult(frame: CGRect(origin: origin, size: size), zIndex: 0)]
-    }
-
-    private static func twoItemLayout(items: [OutfitItem], weights: [CGFloat], canvasSize: CGFloat) -> [UUID: LayoutResult] {
-        let padding: CGFloat = 8
-        let totalWeight = weights[0] + weights[1]
-
-        // Determine if they should be side-by-side (both horizontal) or stacked
-        // Prefer stacked (top/bottom) for outfit flow; side-by-side for accessories
-        let bothSmall = weights.allSatisfy { $0 <= CategorySizeWeight.small.rawValue }
-        let isHorizontal = bothSmall
-
-        var result: [UUID: LayoutResult] = [:]
-
-        if isHorizontal {
-            let availW = (canvasSize - padding * 3) / 2
-            let availH = canvasSize - padding * 2
-            for (i, item) in items.enumerated() {
-                let size = fitSize(weight: weights[i], availableSize: CGSize(width: availW, height: availH))
-                let x = padding + CGFloat(i) * (availW + padding) + (availW - size.width) / 2
-                let y = (canvasSize - size.height) / 2
-                result[item.id] = LayoutResult(frame: CGRect(x: x, y: y, width: size.width, height: size.height), zIndex: i)
-            }
-        } else {
-            // Stack vertically proportional to weight
-            let availH = canvasSize - padding * 3
-            let availW = canvasSize - padding * 2
-            var yOffset = padding
-            for (i, item) in items.enumerated() {
-                let proportion = weights[i] / totalWeight
-                let cellH = availH * proportion
-                let size = fitSize(weight: weights[i], availableSize: CGSize(width: availW, height: cellH))
-                let x = (canvasSize - size.width) / 2
-                let y = yOffset + (cellH - size.height) / 2
-                result[item.id] = LayoutResult(frame: CGRect(x: x, y: y, width: size.width, height: size.height), zIndex: i)
-                yOffset += cellH + padding
-            }
-        }
-        return result
-    }
-
-    private static func threeItemLayout(items: [OutfitItem], weights: [CGFloat], canvasSize: CGFloat) -> [UUID: LayoutResult] {
-        let padding: CGFloat = 8
-        // Sort items: large/medium go top, small go bottom row
-        let sorted = items.enumerated().sorted { sizeWeight(for: $0.element.item).rawValue > sizeWeight(for: $1.element.item).rawValue }
-        let top2 = sorted.prefix(2).map { items[$0.offset] }
-        let bottom1 = sorted.dropFirst(2).map { items[$0.offset] }
-
-        var result: [UUID: LayoutResult] = [:]
-
-        // Top row: 2 items side-by-side
-        let topH = canvasSize * 0.58
-        let colW = (canvasSize - padding * 3) / 2
-        for (i, item) in top2.enumerated() {
-            let w = weights[items.firstIndex(where: { $0.id == item.id })!]
-            let size = fitSize(weight: w, availableSize: CGSize(width: colW, height: topH - padding * 2))
-            let x = padding + CGFloat(i) * (colW + padding) + (colW - size.width) / 2
-            let y = padding + (topH - padding * 2 - size.height) / 2
-            result[item.id] = LayoutResult(frame: CGRect(x: x, y: y, width: size.width, height: size.height), zIndex: i)
-        }
-
-        // Bottom row: 1 item centered
-        let bottomStartY = topH
-        let bottomH = canvasSize - topH - padding
-        for item in bottom1 {
-            let w = weights[items.firstIndex(where: { $0.id == item.id })!]
-            let size = fitSize(weight: w, availableSize: CGSize(width: canvasSize - padding * 2, height: bottomH - padding))
-            let x = (canvasSize - size.width) / 2
-            let y = bottomStartY + (bottomH - size.height) / 2
-            result[item.id] = LayoutResult(frame: CGRect(x: x, y: y, width: size.width, height: size.height), zIndex: 2)
-        }
-        return result
-    }
-
-    private static func fourItemLayout(items: [OutfitItem], weights: [CGFloat], canvasSize: CGFloat) -> [UUID: LayoutResult] {
-        let padding: CGFloat = 8
-        let cols = 2
-        let rows = 2
-        let cellW = (canvasSize - padding * CGFloat(cols + 1)) / CGFloat(cols)
-        let cellH = (canvasSize - padding * CGFloat(rows + 1)) / CGFloat(rows)
-
-        var result: [UUID: LayoutResult] = [:]
-        for (i, item) in items.enumerated() {
-            let col = CGFloat(i % cols)
-            let row = CGFloat(i / cols)
-            let size = fitSize(weight: weights[i], availableSize: CGSize(width: cellW, height: cellH))
-            let x = padding + col * (cellW + padding) + (cellW - size.width) / 2
-            let y = padding + row * (cellH + padding) + (cellH - size.height) / 2
-            result[item.id] = LayoutResult(frame: CGRect(x: x, y: y, width: size.width, height: size.height), zIndex: i)
-        }
-        return result
-    }
-
-    private static func gridLayout(items: [OutfitItem], weights: [CGFloat], canvasSize: CGFloat) -> [UUID: LayoutResult] {
-        let padding: CGFloat = 6
-        let cols = items.count <= 6 ? 3 : 4
-        let rows = Int(ceil(Double(items.count) / Double(cols)))
-        let cellW = (canvasSize - padding * CGFloat(cols + 1)) / CGFloat(cols)
-        let cellH = (canvasSize - padding * CGFloat(rows + 1)) / CGFloat(rows)
-
-        var result: [UUID: LayoutResult] = [:]
-        for (i, item) in items.enumerated() {
-            let col = CGFloat(i % cols)
-            let row = CGFloat(i / cols)
-            let size = fitSize(weight: weights[i], availableSize: CGSize(width: cellW, height: cellH))
-            let x = padding + col * (cellW + padding) + (cellW - size.width) / 2
-            let y = padding + row * (cellH + padding) + (cellH - size.height) / 2
-            result[item.id] = LayoutResult(frame: CGRect(x: x, y: y, width: size.width, height: size.height), zIndex: i)
-        }
-        return result
-    }
-
-    // MARK: Helpers
-
-    /// Fit a square item into available space, scaled by weight
-    private static func fitSize(weight: CGFloat, availableSize: CGSize) -> CGSize {
-        let maxDim = min(availableSize.width, availableSize.height) * weight
-        // Clamp so items don't overflow their cell
-        let dim = min(maxDim, min(availableSize.width, availableSize.height) * 0.95)
-        return CGSize(width: dim, height: dim)
-    }
-
-    static func sizeWeight(for item: Item) -> CategorySizeWeight {
-        let categoryName = item.category?.name?.lowercased() ?? ""
-        let subcategoryName = item.subcategory?.name?.lowercased() ?? ""
-
-        switch subcategoryName {
-        case "hats": return .small
-        case "bags": return .small
-        case "belts", "scarves": return .small
-        case "jewelry": return .small
-        case "heels", "flats", "sneakers", "boots", "sandals": return .small
-        case "jackets", "coats", "blazers": return .large
-        case "t-shirts", "blouses", "sweaters", "tanks", "tops", "sports bras": return .medium
-        case "jeans", "trousers", "skirts", "shorts", "leggings": return .medium
-        case "mini", "midi", "maxi", "one-piece": return .large
-        case "skirt suits", "pant suits": return .large
-        case "bikini", "cover-ups": return .medium
-        default: break
-        }
-
-        switch categoryName {
-        case "tops", "bottoms", "activewear", "shoes", "swimwear": return .medium
-        case "outerwear", "dresses", "suits": return .large
-        case "accessories": return .small
-        default: return .medium
-        }
-    }
-}
-
 struct OutfitAddView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authSession: AuthSession
 
     // Optional outfit for editing
     let outfitToEdit: Outfit?
@@ -266,7 +63,7 @@ struct OutfitAddView: View {
     ) private var allWardrobes: FetchedResults<Wardrobe>
 
     // Current user's id — used to filter wardrobe lists throughout this view
-    private var currentUserId: String? { SupabaseService.shared.currentUser?.id.uuidString }
+    private var currentUserId: String? { authSession.userId?.uuidString }
 
     // Filter wardrobes by type, excluding soft-deleted and unowned wardrobes
     private var wardrobes: [Wardrobe] {
@@ -400,7 +197,9 @@ struct OutfitAddView: View {
     @State private var undoStack: [CanvasState] = []
     @State private var redoStack: [CanvasState] = []
     @State private var transformInProgress = false
-    
+    @State private var canvasPinchBaseScale: CGFloat = 1.0
+    @State private var canvasRotateBaseRotation: Double = 0.0
+
     @State private var didApplyPreselectedItem = false
 
     init(outfitToEdit: Outfit? = nil, wardrobeType: String = "closet", initialWardrobe: Wardrobe? = nil) {
@@ -421,13 +220,6 @@ struct OutfitAddView: View {
 
     private var squareSize: CGFloat {
         UIScreen.main.bounds.width
-    }
-
-    // MARK: - Adaptive Layout
-
-    /// Compute the current adaptive layout for all items.
-    private var adaptiveLayout: [UUID: AdaptiveLayoutEngine.LayoutResult] {
-        AdaptiveLayoutEngine.layout(items: outfitItems, canvasSize: squareSize)
     }
 
     var body: some View {
@@ -574,6 +366,8 @@ struct OutfitAddView: View {
         .alert("Save as draft?", isPresented: $showingSaveDraftConfirmation) {
             Button("Yes") { saveDraft() }
             Button("No", role: .cancel) { dismiss() }
+        } message: {
+            Text("Save outfit as draft to continue editing later.")
         }
         .alert("Discard Changes?", isPresented: $showingDiscardChangesConfirmation) {
             Button("Discard", role: .destructive) { dismiss() }
@@ -605,8 +399,50 @@ struct OutfitAddView: View {
     }
 
     // MARK: - Outfit Collage Area
+
+    private var selectedOutfitItemIndex: Int? {
+        guard let selectedItemID else { return nil }
+        return outfitItems.firstIndex(where: { $0.id == selectedItemID })
+    }
+
+    private var canvasTransformGesture: some Gesture {
+        SimultaneousGesture(
+            MagnificationGesture()
+                .onChanged { value in
+                    guard let index = selectedOutfitItemIndex else { return }
+                    if !transformInProgress {
+                        canvasPinchBaseScale = outfitItems[index].scale
+                        canvasRotateBaseRotation = outfitItems[index].rotation
+                        onTransformStart()
+                    }
+                    applyScale(max(0.3, min(4.0, canvasPinchBaseScale * value)), at: index)
+                }
+                .onEnded { value in
+                    guard let index = selectedOutfitItemIndex else { return }
+                    applyScale(max(0.3, min(4.0, canvasPinchBaseScale * value)), at: index)
+                    onTransformEnd()
+                },
+            RotationGesture()
+                .onChanged { value in
+                    guard let index = selectedOutfitItemIndex else { return }
+                    if !transformInProgress {
+                        canvasPinchBaseScale = outfitItems[index].scale
+                        canvasRotateBaseRotation = outfitItems[index].rotation
+                        onTransformStart()
+                    }
+                    applyRotation(canvasRotateBaseRotation + value.degrees, at: index)
+                }
+                .onEnded { value in
+                    guard let index = selectedOutfitItemIndex else { return }
+                    applyRotation(canvasRotateBaseRotation + value.degrees, at: index)
+                    onTransformEnd()
+                }
+        )
+    }
+
+    @ViewBuilder
     private var outfitCollageArea: some View {
-        ZStack {
+        let canvas = ZStack {
             RoundedRectangle(cornerRadius: 0)
                 .fill(Color(.systemGray6))
                 .frame(width: squareSize, height: squareSize)
@@ -624,34 +460,36 @@ struct OutfitAddView: View {
                 }
             }
 
-            // Render items using adaptive layout
             ForEach(outfitItems.sorted(by: { $0.zIndex < $1.zIndex })) { outfitItem in
-                if let layoutResult = adaptiveLayout[outfitItem.id] {
-                    AdaptiveOutfitItemView(
-                        outfitItem: outfitItem,
-                        layoutFrame: layoutResult.frame,
-                        canvasSize: squareSize,
-                        isSelected: selectedItemID == outfitItem.id,
-                        onPositionChanged: { newPosition in
-                            updateItemPosition(outfitItem, newPosition)
-                        },
-                        onScaleChanged: { newScale in
-                            updateItemScale(outfitItem, newScale)
-                        },
-                        onRotationChanged: { newRotation in
-                            updateItemRotation(outfitItem, newRotation)
-                        },
-                        onTransformStart: { onTransformStart() },
-                        onTransformEnd: { onTransformEnd() },
-                        onSelected: { selectItem(outfitItem) },
-                        onLongPress: { bringToFront(outfitItem) },
-                        onDelete: { removeItem(outfitItem) }
-                    )
-                }
+                AdaptiveOutfitItemView(
+                    outfitItem: outfitItem,
+                    canvasSize: squareSize,
+                    isSelected: selectedItemID == outfitItem.id,
+                    onPositionChanged: { newPosition in
+                        updateItemPosition(outfitItem, newPosition)
+                    },
+                    onScaleChanged: { newScale in
+                        updateItemScale(outfitItem, newScale)
+                    },
+                    onRotationChanged: { newRotation in
+                        updateItemRotation(outfitItem, newRotation)
+                    },
+                    onTransformStart: { onTransformStart() },
+                    onTransformEnd: { onTransformEnd() },
+                    onSelected: { selectItem(outfitItem) },
+                    onLongPress: { bringToFront(outfitItem) },
+                    onDelete: { removeItem(outfitItem) }
+                )
             }
         }
-        // Animate when items count changes — smoothly reflow
-        .animation(.spring(response: 0.42, dampingFraction: 0.78), value: outfitItems.count)
+        .frame(width: squareSize, height: squareSize)
+        .clipped()
+
+        if selectedItemID != nil {
+            canvas.simultaneousGesture(canvasTransformGesture)
+        } else {
+            canvas
+        }
     }
 
     // MARK: - Draft and Clear Buttons
@@ -800,8 +638,17 @@ struct OutfitAddView: View {
             let items = outfit.items as? Set<Item> ?? []
             print("🔍 Fallback: loading \(items.count) items without transformation data")
             outfitItems = items.enumerated().map { i, item in
-                OutfitItem(item: item, position: CGPoint(x: squareSize / 2, y: squareSize / 2),
-                           scale: 1.0, rotation: 0.0, zIndex: i)
+                let center = CGPoint(x: squareSize / 2, y: squareSize / 2)
+                let bounds = PhotoContentBounds.contentBounds(for: item)
+                return OutfitItem(
+                    item: item,
+                    position: center,
+                    displaySize: OutfitItem.defaultDisplaySize(canvasSize: squareSize, contentAspect: bounds.aspectRatio),
+                    scale: 1.0,
+                    rotation: 0.0,
+                    zIndex: i,
+                    contentBounds: bounds
+                )
             }
             return
         }
@@ -831,31 +678,28 @@ struct OutfitAddView: View {
                 return nil
             }
             print("🔍   Matched item: \(item.id?.uuidString ?? "no-uuid")")
+            let bounds = PhotoContentBounds.contentBounds(for: item)
             return OutfitItem(
                 item: item,
                 position: CGPoint(x: savedItem.positionX, y: savedItem.positionY),
+                displaySize: OutfitItem.defaultDisplaySize(canvasSize: squareSize, contentAspect: bounds.aspectRatio),
                 scale: savedItem.scale,
                 rotation: savedItem.rotation,
-                zIndex: savedItem.zIndex
+                zIndex: savedItem.zIndex,
+                contentBounds: bounds
             )
         }
         print("🔍 Loaded \(outfitItems.count) outfitItems onto canvas")
     }
 
     // MARK: - Undo/Redo Functions
-    /// Snapshots the current canvas state into the undo stack.
-    /// Resolves any nil (auto-layout) positions to their actual frame centers
-    /// so undo restores items to where they were visually displayed.
     private func saveState() {
-        let snapshotLayout = AdaptiveLayoutEngine.layout(items: outfitItems, canvasSize: squareSize)
         let snapshots = outfitItems.map { outfitItem -> CanvasStateSnapshot in
-            let frame = snapshotLayout[outfitItem.id]?.frame
-            let pos = outfitItem.position ?? frame.map { CGPoint(x: $0.midX, y: $0.midY) } ?? CGPoint(x: squareSize / 2, y: squareSize / 2)
             return CanvasStateSnapshot(
                 itemID: outfitItem.item.objectID.uriRepresentation().absoluteString,
                 outfitItemID: outfitItem.id,
-                positionX: pos.x,
-                positionY: pos.y,
+                positionX: outfitItem.position.x,
+                positionY: outfitItem.position.y,
                 scale: outfitItem.scale,
                 rotation: outfitItem.rotation,
                 zIndex: outfitItem.zIndex
@@ -867,15 +711,12 @@ struct OutfitAddView: View {
 
     private func undo() {
         guard !undoStack.isEmpty else { return }
-        let undoLayout = AdaptiveLayoutEngine.layout(items: outfitItems, canvasSize: squareSize)
         let currentSnapshots = outfitItems.map { outfitItem -> CanvasStateSnapshot in
-            let frame = undoLayout[outfitItem.id]?.frame
-            let pos = outfitItem.position ?? frame.map { CGPoint(x: $0.midX, y: $0.midY) } ?? CGPoint(x: squareSize / 2, y: squareSize / 2)
             return CanvasStateSnapshot(
                 itemID: outfitItem.item.objectID.uriRepresentation().absoluteString,
                 outfitItemID: outfitItem.id,
-                positionX: pos.x,
-                positionY: pos.y,
+                positionX: outfitItem.position.x,
+                positionY: outfitItem.position.y,
                 scale: outfitItem.scale,
                 rotation: outfitItem.rotation,
                 zIndex: outfitItem.zIndex
@@ -888,15 +729,12 @@ struct OutfitAddView: View {
 
     private func redo() {
         guard !redoStack.isEmpty else { return }
-        let redoLayout = AdaptiveLayoutEngine.layout(items: outfitItems, canvasSize: squareSize)
         let currentSnapshots = outfitItems.map { outfitItem -> CanvasStateSnapshot in
-            let frame = redoLayout[outfitItem.id]?.frame
-            let pos = outfitItem.position ?? frame.map { CGPoint(x: $0.midX, y: $0.midY) } ?? CGPoint(x: squareSize / 2, y: squareSize / 2)
             return CanvasStateSnapshot(
                 itemID: outfitItem.item.objectID.uriRepresentation().absoluteString,
                 outfitItemID: outfitItem.id,
-                positionX: pos.x,
-                positionY: pos.y,
+                positionX: outfitItem.position.x,
+                positionY: outfitItem.position.y,
                 scale: outfitItem.scale,
                 rotation: outfitItem.rotation,
                 zIndex: outfitItem.zIndex
@@ -913,12 +751,15 @@ struct OutfitAddView: View {
                   let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url),
                   let item = try? viewContext.existingObject(with: objectID) as? Item else { return nil }
 
+            let bounds = PhotoContentBounds.contentBounds(for: item)
             return OutfitItem(
                 item: item,
                 position: CGPoint(x: snapshot.positionX, y: snapshot.positionY),
+                displaySize: OutfitItem.defaultDisplaySize(canvasSize: squareSize, contentAspect: bounds.aspectRatio),
                 scale: snapshot.scale,
                 rotation: snapshot.rotation,
-                zIndex: snapshot.zIndex
+                zIndex: snapshot.zIndex,
+                contentBounds: bounds
             )
         }
     }
@@ -928,18 +769,32 @@ struct OutfitAddView: View {
         guard !outfitItems.contains(where: { $0.item.objectID == item.objectID }) else { return }
         saveState()
 
-        // position is nil — AdaptiveLayoutEngine will place it on first render
+        let center = CGPoint(x: squareSize / 2, y: squareSize / 2)
+        let bounds = PhotoContentBounds.contentBounds(for: item)
         let outfitItem = OutfitItem(
             item: item,
-            position: nil,
+            position: center,
+            displaySize: OutfitItem.defaultDisplaySize(canvasSize: squareSize, contentAspect: bounds.aspectRatio),
             scale: 1.0,
             rotation: 0.0,
-            zIndex: outfitItems.count
+            zIndex: outfitItems.count,
+            contentBounds: bounds
         )
 
-        withAnimation(.spring(response: 0.42, dampingFraction: 0.78)) {
-            outfitItems.append(outfitItem)
-        }
+        outfitItems.append(outfitItem)
+        selectedItemID = outfitItem.id
+    }
+
+    private func applyScale(_ scale: CGFloat, at index: Int) {
+        var item = outfitItems[index]
+        item.scale = scale
+        outfitItems[index] = item
+    }
+
+    private func applyRotation(_ rotation: Double, at index: Int) {
+        var item = outfitItems[index]
+        item.rotation = rotation
+        outfitItems[index] = item
     }
 
     private func updateItemPosition(_ outfitItem: OutfitItem, _ newPosition: CGPoint) {
@@ -1017,7 +872,7 @@ struct OutfitAddView: View {
 
         if outfitToEdit == nil {
             outfit.id = UUID()
-            outfit.userId = SupabaseService.shared.currentUser?.id.uuidString
+            outfit.userId = authSession.userId?.uuidString
             let now = Date()
             outfit.timestamp = now
             outfit.createdAt = now
@@ -1035,14 +890,11 @@ struct OutfitAddView: View {
             outfit.addToItems(outfitItem.item)
         }
 
-        let saveLayout = AdaptiveLayoutEngine.layout(items: outfitItems, canvasSize: squareSize)
         let savedItems = outfitItems.map { outfitItem -> SavedOutfitItem in
-            let frame = saveLayout[outfitItem.id]?.frame
-            let resolvedPos = outfitItem.position ?? frame.map { CGPoint(x: $0.midX, y: $0.midY) } ?? CGPoint(x: squareSize / 2, y: squareSize / 2)
             return SavedOutfitItem(
                 itemID: outfitItem.item.id?.uuidString ?? "",
-                positionX: resolvedPos.x,
-                positionY: resolvedPos.y,
+                positionX: outfitItem.position.x,
+                positionY: outfitItem.position.y,
                 scale: outfitItem.scale,
                 rotation: outfitItem.rotation,
                 zIndex: outfitItem.zIndex
@@ -1075,7 +927,7 @@ struct OutfitAddView: View {
 
         let draft = Outfit(context: viewContext)
         draft.id = UUID()
-        draft.userId = SupabaseService.shared.currentUser?.id.uuidString
+        draft.userId = authSession.userId?.uuidString
         let now = Date()
         draft.timestamp = now
         draft.createdAt = now
@@ -1089,14 +941,11 @@ struct OutfitAddView: View {
             draft.addToItems(outfitItem.item)
         }
 
-        let draftLayout = AdaptiveLayoutEngine.layout(items: outfitItems, canvasSize: squareSize)
         let savedItems = outfitItems.map { outfitItem -> SavedOutfitItem in
-            let frame = draftLayout[outfitItem.id]?.frame
-            let resolvedPos = outfitItem.position ?? frame.map { CGPoint(x: $0.midX, y: $0.midY) } ?? CGPoint(x: squareSize / 2, y: squareSize / 2)
             return SavedOutfitItem(
                 itemID: outfitItem.item.id?.uuidString ?? "",
-                positionX: resolvedPos.x,
-                positionY: resolvedPos.y,
+                positionX: outfitItem.position.x,
+                positionY: outfitItem.position.y,
                 scale: outfitItem.scale,
                 rotation: outfitItem.rotation,
                 zIndex: outfitItem.zIndex
@@ -1118,39 +967,24 @@ struct OutfitAddView: View {
     }
 
     private func captureCollageAsImage() -> UIImage? {
-        let layout = AdaptiveLayoutEngine.layout(items: outfitItems, canvasSize: squareSize)
         let size = squareSize
 
-        // Build a capture-only view that mirrors the canvas exactly.
-        // IMPORTANT: No .ignoresSafeArea() — ImageRenderer has no window/safe-area context.
-        // Using Canvas rather than SwiftUI .position() avoids coordinate space
-        // discrepancies that occur when UIHostingController hosts views with .position().
         let captureView = Canvas { ctx, _ in
             for outfitItem in outfitItems.sorted(by: { $0.zIndex < $1.zIndex }) {
-                guard let layoutResult = layout[outfitItem.id] else { continue }
-
-                // Resolve the photo image
                 guard let primaryPhoto = (outfitItem.item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }),
                       let photoData = primaryPhoto.data,
                       let uiImage = UIImage(data: photoData) else { continue }
 
-                let frame = layoutResult.frame
-                // Use the manual position if the user moved the item; otherwise use auto-layout center
-                let center = outfitItem.position ?? CGPoint(x: frame.midX, y: frame.midY)
-                // Apply user scale on top of auto-layout frame dimensions
-                let scaledW = frame.width  * outfitItem.scale
-                let scaledH = frame.height * outfitItem.scale
+                let center = outfitItem.position
+                let scaledW = outfitItem.displaySize.width * outfitItem.scale
+                let scaledH = outfitItem.displaySize.height * outfitItem.scale
 
                 ctx.translateBy(x: center.x, y: center.y)
                 ctx.rotate(by: Angle.degrees(outfitItem.rotation))
 
-                // Draw image scaled to fit the (possibly user-scaled) frame, preserving aspect ratio
-                let imgAspect = uiImage.size.height / uiImage.size.width
-                let drawW = scaledW
-                let drawH = drawW * imgAspect
-                let drawRect = CGRect(x: -drawW / 2, y: -drawH / 2, width: drawW, height: drawH)
-
-                ctx.draw(Image(uiImage: uiImage).resizable(), in: drawRect)
+                let drawImage = uiImage.cropped(toNormalizedBounds: outfitItem.contentBounds) ?? uiImage
+                let drawRect = CGRect(x: -scaledW / 2, y: -scaledH / 2, width: scaledW, height: scaledH)
+                ctx.draw(Image(uiImage: drawImage).resizable(), in: drawRect)
 
                 // Reset transform for next item
                 ctx.rotate(by: Angle.degrees(-outfitItem.rotation))
@@ -1195,21 +1029,47 @@ struct CanvasState {
 struct OutfitItem: Identifiable {
     let id = UUID()
     let item: Item
-    /// nil  = item hasn't been manually placed yet → use auto-layout position
-    /// non-nil = user dragged it, or position was restored from saved data
-    var position: CGPoint?
+    var position: CGPoint
+    /// Tight cutout size at scale 1.0; position is the center point on canvas.
+    let displaySize: CGSize
     var scale: CGFloat
     var rotation: Double
     var zIndex: Int
+    let contentBounds: NormalizedContentBounds
+    var contentAspect: CGFloat { contentBounds.aspectRatio }
+
+    init(
+        item: Item,
+        position: CGPoint,
+        displaySize: CGSize,
+        scale: CGFloat,
+        rotation: Double,
+        zIndex: Int,
+        contentBounds: NormalizedContentBounds? = nil
+    ) {
+        self.item = item
+        self.position = position
+        self.displaySize = displaySize
+        self.scale = scale
+        self.rotation = rotation
+        self.zIndex = zIndex
+        self.contentBounds = contentBounds ?? PhotoContentBounds.contentBounds(for: item)
+    }
+
+    /// Default on-canvas size for a new item (~45% of canvas long edge, tight to content aspect).
+    static func defaultDisplaySize(canvasSize: CGFloat, contentAspect: CGFloat) -> CGSize {
+        let maxSide = canvasSize * 0.45
+        let aspect = max(contentAspect, 0.01)
+        if aspect >= 1 {
+            return CGSize(width: maxSide, height: maxSide / aspect)
+        }
+        return CGSize(width: maxSide * aspect, height: maxSide)
+    }
 }
 
-// MARK: - Adaptive Outfit Item View
-/// Renders an outfit item using a layout frame provided by AdaptiveLayoutEngine.
-/// On first render the item snaps to the computed frame; after the user drags it,
-/// the position is tracked as a manual override but layout sizing still applies.
+// MARK: - Canvas item view
 struct AdaptiveOutfitItemView: View {
     let outfitItem: OutfitItem
-    let layoutFrame: CGRect      // computed by AdaptiveLayoutEngine
     let canvasSize: CGFloat
     let isSelected: Bool
     let onPositionChanged: (CGPoint) -> Void
@@ -1223,7 +1083,7 @@ struct AdaptiveOutfitItemView: View {
 
     // Local gesture state
     @State private var dragOffset: CGSize = .zero
-    @State private var manualCenter: CGPoint? = nil  // nil = use layoutFrame center
+    @State private var dragCenter: CGPoint
     @State private var rotation: Double
     @State private var baseRotation: Double
     @State private var scaleMultiplier: CGFloat = 1.0  // on top of layout size
@@ -1231,7 +1091,7 @@ struct AdaptiveOutfitItemView: View {
 
     private let deleteButtonSize: CGFloat = 24
 
-    init(outfitItem: OutfitItem, layoutFrame: CGRect, canvasSize: CGFloat, isSelected: Bool,
+    init(outfitItem: OutfitItem, canvasSize: CGFloat, isSelected: Bool,
          onPositionChanged: @escaping (CGPoint) -> Void,
          onScaleChanged: @escaping (CGFloat) -> Void,
          onRotationChanged: @escaping (Double) -> Void,
@@ -1241,7 +1101,6 @@ struct AdaptiveOutfitItemView: View {
          onLongPress: @escaping () -> Void,
          onDelete: @escaping () -> Void) {
         self.outfitItem = outfitItem
-        self.layoutFrame = layoutFrame
         self.canvasSize = canvasSize
         self.isSelected = isSelected
         self.onPositionChanged = onPositionChanged
@@ -1254,18 +1113,16 @@ struct AdaptiveOutfitItemView: View {
         self.onDelete = onDelete
         _rotation = State(initialValue: outfitItem.rotation)
         _baseRotation = State(initialValue: outfitItem.rotation)
-        // Restore manual position and scale so editing displays the saved canvas state
-        _manualCenter = State(initialValue: outfitItem.position)
+        _dragCenter = State(initialValue: outfitItem.position)
         _scaleMultiplier = State(initialValue: outfitItem.scale)
         _baseScaleMultiplier = State(initialValue: outfitItem.scale)
     }
 
     private var effectiveCenter: CGPoint {
-        let base = manualCenter ?? CGPoint(x: layoutFrame.midX, y: layoutFrame.midY)
-        return CGPoint(x: base.x + dragOffset.width, y: base.y + dragOffset.height)
+        CGPoint(x: dragCenter.x + dragOffset.width, y: dragCenter.y + dragOffset.height)
     }
 
-    private var itemSize: CGSize { layoutFrame.size }
+    private var itemSize: CGSize { outfitItem.displaySize }
 
     private var deleteButtonPosition: CGPoint {
         let halfW = (itemSize.width * scaleMultiplier) / 2
@@ -1285,8 +1142,17 @@ struct AdaptiveOutfitItemView: View {
                 .onTapGesture { onSelected() }
                 .onLongPressGesture { onLongPress() }
                 .gesture(dragGesture)
-                .gesture(transformGesture)
-                .onChange(of: layoutFrame) { _ in }
+                .onChange(of: outfitItem.position) { newValue in
+                    dragCenter = newValue
+                }
+                .onChange(of: outfitItem.scale) { newValue in
+                    scaleMultiplier = newValue
+                    baseScaleMultiplier = newValue
+                }
+                .onChange(of: outfitItem.rotation) { newValue in
+                    rotation = newValue
+                    baseRotation = newValue
+                }
 
             if isSelected {
                 Button(action: onDelete) {
@@ -1299,8 +1165,6 @@ struct AdaptiveOutfitItemView: View {
                 .position(deleteButtonPosition)
             }
         }
-        .animation(.spring(response: 0.42, dampingFraction: 0.78), value: layoutFrame.origin)
-        .animation(.spring(response: 0.42, dampingFraction: 0.78), value: layoutFrame.size)
     }
 
     @ViewBuilder
@@ -1310,11 +1174,12 @@ struct AdaptiveOutfitItemView: View {
         if let primaryPhoto = (outfitItem.item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }),
            let photoData = primaryPhoto.data,
            let uiImage = UIImage(data: photoData) {
-            Image(uiImage: uiImage)
-                .resizable()
-                .scaledToFit()
-                .frame(width: itemSize.width, height: itemSize.height)
-                .overlay { if isSelected { selectionOverlay } }
+            OutfitTightContentImage(
+                uiImage: uiImage,
+                contentBounds: outfitItem.contentBounds,
+                frameSize: itemSize
+            )
+            .overlay { if isSelected { selectionOverlay } }
         } else {
             RoundedRectangle(cornerRadius: 8)
                 .fill(Color(.systemGray5))
@@ -1335,48 +1200,17 @@ struct AdaptiveOutfitItemView: View {
             }
             .onEnded { value in
                 guard isSelected else { return }
-                let base = manualCenter ?? CGPoint(x: layoutFrame.midX, y: layoutFrame.midY)
                 let halfW = (itemSize.width * scaleMultiplier) / 2
                 let halfH = (itemSize.height * scaleMultiplier) / 2
-                let newX = max(halfW, min(canvasSize - halfW, base.x + value.translation.width))
-                let newY = max(halfH, min(canvasSize - halfH, base.y + value.translation.height))
-                manualCenter = CGPoint(x: newX, y: newY)
+                let newX = max(halfW, min(canvasSize - halfW, dragCenter.x + value.translation.width))
+                let newY = max(halfH, min(canvasSize - halfH, dragCenter.y + value.translation.height))
+                dragCenter = CGPoint(x: newX, y: newY)
                 dragOffset = .zero
-                onPositionChanged(manualCenter!)
+                onPositionChanged(dragCenter)
                 onTransformEnd()
             }
     }
 
-    private var transformGesture: some Gesture {
-        SimultaneousGesture(
-            MagnificationGesture()
-                .onChanged { value in
-                    guard isSelected else { return }
-                    scaleMultiplier = max(0.3, min(4.0, baseScaleMultiplier * value))
-                }
-                .onEnded { value in
-                    guard isSelected else { return }
-                    let final = max(0.3, min(4.0, baseScaleMultiplier * value))
-                    scaleMultiplier = final
-                    baseScaleMultiplier = final
-                    onScaleChanged(final)
-                    onTransformEnd()
-                },
-            RotationGesture()
-                .onChanged { value in
-                    guard isSelected else { return }
-                    rotation = baseRotation + value.degrees
-                }
-                .onEnded { value in
-                    guard isSelected else { return }
-                    let final = baseRotation + value.degrees
-                    rotation = final
-                    baseRotation = final
-                    onRotationChanged(final)
-                    onTransformEnd()
-                }
-        )
-    }
 }
 
 // MARK: - Closet Item View
@@ -1428,5 +1262,29 @@ struct ClosetItemView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Tight content image (crop to stored bounds, no letterboxing)
+
+/// Maps the normalized opaque region of the photo to exactly `frameSize` (layout tight box).
+struct OutfitTightContentImage: View {
+    let uiImage: UIImage
+    let contentBounds: NormalizedContentBounds
+    let frameSize: CGSize
+
+    var body: some View {
+        let bw = max(contentBounds.width, 0.001)
+        let bh = max(contentBounds.height, 0.001)
+        Image(uiImage: uiImage)
+            .resizable()
+            .scaledToFill()
+            .frame(width: frameSize.width / bw, height: frameSize.height / bh)
+            .offset(
+                x: frameSize.width * (0.5 - contentBounds.midX) / bw,
+                y: frameSize.height * (0.5 - contentBounds.midY) / bh
+            )
+            .frame(width: frameSize.width, height: frameSize.height)
+            .clipped()
     }
 }
