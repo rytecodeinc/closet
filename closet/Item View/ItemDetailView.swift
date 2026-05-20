@@ -33,7 +33,6 @@ struct ItemDetailView: View {
     
     @State private var isCropperPresented = false
     @State private var imageToEdit: UIImage? // Store the image to edit directly
-    @State private var isImagePickerPresentedForCropReplace = false
     @State private var cropEditorSessionID = UUID()
     @State private var showShareSheet = false
     @State private var shareItems: [Any] = []
@@ -42,6 +41,7 @@ struct ItemDetailView: View {
     @State private var pendingShareText: String?
     @State private var pendingShareImage: UIImage?
     @State private var showShareFriendsSheet = false
+    @State private var showPhotoStorageSheet = false
     @State private var selectedImageType: ImageType = .front
     /// Inline hero carousel: 0 = front, 1 = worn (fixed slots; fullscreen still skips empty slots).
     @State private var heroCarouselPage: Int = 0
@@ -163,7 +163,8 @@ struct ItemDetailView: View {
                                     toggleFavorite()
                                 }
                             },
-                            onShare: { showShareFriendsSheet = true }
+                            onShare: { showShareFriendsSheet = true },
+                            onPhotoStorage: { showPhotoStorageSheet = true }
                         )
                     }
                     .listRowInsets(EdgeInsets(.zero))
@@ -379,9 +380,7 @@ struct ItemDetailView: View {
                 isImagePickerPresented = false
             }
         }
-        .sheet(isPresented: $isCropperPresented, onDismiss: {
-            isImagePickerPresentedForCropReplace = false
-        }) {
+        .sheet(isPresented: $isCropperPresented) {
             Group {
                 if let imageType = pendingImageType, let image = imageToEdit {
                     NavigationView {
@@ -399,30 +398,9 @@ struct ItemDetailView: View {
                                 pendingImageType = nil
                                 imageToEdit = nil
                             },
-                            isEditing: true,
-                            onReplaceFromCamera: {
-                                presentImagePickerReplacingCurrentEditSlot(source: .camera)
-                            },
-                            onReplaceFromLibrary: {
-                                presentImagePickerReplacingCurrentEditSlot(source: .photoLibrary)
-                            },
-                            isCameraAvailable: UIImagePickerController.isSourceTypeAvailable(.camera)
+                            isEditing: true
                         )
                         .id(cropEditorSessionID)
-                    }
-                    .sheet(isPresented: $isImagePickerPresentedForCropReplace) {
-                        ImagePicker(
-                            image: $selectedUIImage,
-                            sourceType: $imagePickerSource,
-                            allowsEditing: true,
-                            skipEmbeddedCrop: true
-                        ) { image in
-                            if let newImage = image {
-                                cropEditorSessionID = UUID()
-                                imageToEdit = newImage
-                            }
-                            isImagePickerPresentedForCropReplace = false
-                        }
                     }
                 } else {
                     Text("No image found to edit.")
@@ -519,6 +497,9 @@ struct ItemDetailView: View {
             ShareItemFriendsSheet()
                 .environmentObject(supabaseService)
         }
+        .sheet(isPresented: $showPhotoStorageSheet) {
+            ItemPhotoStorageSheet(item: item)
+        }
     }
     
     // MARK: - Edit Button (deprecated, using presentCropperForImage instead)
@@ -538,7 +519,7 @@ struct ItemDetailView: View {
         // Create and assign new photo
         let newPhoto = Photo(context: viewContext)
         newPhoto.id = UUID()
-        newPhoto.data = processedData
+        PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: newPhoto)
         newPhoto.thumbnailData = image.generateThumbnail()
         newPhoto.type = "front"
         newPhoto.isPrimary = true // Front images are primary by default
@@ -577,7 +558,7 @@ struct ItemDetailView: View {
         // Create and assign new photo
         let newPhoto = Photo(context: viewContext)
         newPhoto.id = UUID()
-        newPhoto.data = processedData
+        PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: newPhoto)
         newPhoto.thumbnailData = image.generateThumbnail()
         newPhoto.type = "back"
         newPhoto.isPrimary = false
@@ -612,7 +593,7 @@ struct ItemDetailView: View {
         // Create and assign new photo
         let newPhoto = Photo(context: viewContext)
         newPhoto.id = UUID()
-        newPhoto.data = processedData
+        PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: newPhoto)
         newPhoto.thumbnailData = image.generateThumbnail()
         newPhoto.type = "worn"
         newPhoto.isPrimary = false
@@ -1080,13 +1061,6 @@ struct ItemDetailView: View {
         }
     }
 
-    /// Presents camera/library on top of the crop sheet (crop stays mounted). Uses `skipEmbeddedCrop` so the existing cropper edits the new photo.
-    private func presentImagePickerReplacingCurrentEditSlot(source: UIImagePickerController.SourceType) {
-        guard pendingImageType != nil else { return }
-        imagePickerSource = source
-        isImagePickerPresentedForCropReplace = true
-    }
-    
     // MARK: - Helper Functions
     
     private func getImage(for type: ImageType) -> UIImage? {

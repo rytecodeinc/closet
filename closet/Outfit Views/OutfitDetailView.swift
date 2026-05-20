@@ -40,7 +40,6 @@ struct OutfitDetailView: View {
     @State private var isOutfitImageCropperPresented = false
     @State private var outfitHeroImageToEdit: UIImage?
     @State private var outfitHeroCropSlot: OutfitHeroImageSlot = .collage
-    @State private var isOutfitCropReplacePickerPresented = false
     @State private var outfitCropEditorSessionID = UUID()
     @State private var selectedItemForNavigation: Item?
 
@@ -215,9 +214,7 @@ struct OutfitDetailView: View {
                 }
             )
         }
-        .sheet(isPresented: $isOutfitImageCropperPresented, onDismiss: {
-            isOutfitCropReplacePickerPresented = false
-        }) {
+        .sheet(isPresented: $isOutfitImageCropperPresented) {
             outfitImageCropperSheetContent
         }
     }
@@ -279,34 +276,9 @@ struct OutfitDetailView: View {
                         outfitHeroImageToEdit = nil
                         isOutfitImageCropperPresented = false
                     },
-                    isEditing: true,
-                    onReplaceFromCamera: {
-                        outfitHeroImagePickerSource = .camera
-                        isOutfitCropReplacePickerPresented = true
-                    },
-                    onReplaceFromLibrary: {
-                        outfitHeroImagePickerSource = .photoLibrary
-                        isOutfitCropReplacePickerPresented = true
-                    },
-                    isCameraAvailable: UIImagePickerController.isSourceTypeAvailable(.camera)
+                    isEditing: true
                 )
                 .id(outfitCropEditorSessionID)
-                .sheet(isPresented: $isOutfitCropReplacePickerPresented) {
-                    ImagePicker(
-                        image: $pickedOutfitHeroUIImage,
-                        sourceType: $outfitHeroImagePickerSource,
-                        allowsEditing: true,
-                        skipEmbeddedCrop: true,
-                        completionHandler: { newImage in
-                            if let newImage = newImage {
-                                outfitCropEditorSessionID = UUID()
-                                outfitHeroImageToEdit = newImage
-                            }
-                            isOutfitCropReplacePickerPresented = false
-                            pickedOutfitHeroUIImage = nil
-                        }
-                    )
-                }
             }
         } else {
             Text("No image found to edit.")
