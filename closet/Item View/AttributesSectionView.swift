@@ -15,6 +15,7 @@ import CoreData
 
 struct AttributesSectionView: View {
     @ObservedObject var item: Item
+    @Environment(\.appCapabilities) private var appCapabilities
 
     // One enum instead of many booleans
     @Binding var activeSheet: Sheet?
@@ -33,8 +34,12 @@ struct AttributesSectionView: View {
             seasonRow()
             locationRow()
             priceRow()
-            weatherRow()
-            weightRow()
+            if appCapabilities.showsWeatherAttribute {
+                weatherRow()
+            }
+            if appCapabilities.showsWeightAttribute {
+                weightRow()
+            }
             linkRow()
             tagRow()
             notesRow()
@@ -424,8 +429,18 @@ extension AttributesSectionView.Sheet {
         case .season:    SetSeasonView(item: item)
         case .brand:     SetBrandView(item: item)
         case .price:     SetPriceView(item: item)
-        case .weather:   SetWeatherView(item: item)
-        case .weight:    SetWeightView(item: item)
+        case .weather:
+            if AppEnvironment.capabilities.showsWeatherAttribute {
+                SetWeatherView(item: item)
+            } else {
+                EmptyView()
+            }
+        case .weight:
+            if AppEnvironment.capabilities.showsWeightAttribute {
+                SetWeightView(item: item)
+            } else {
+                EmptyView()
+            }
         case .link:      SetLinkView(item: item)
         case .location:  SetLocationView(item: item)
         case .tag:       SetTagView(item: item)

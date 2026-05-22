@@ -31,6 +31,16 @@ class SyncService: ObservableObject {
         self.context = context
     }
 
+    // MARK: - Product tier (TestFlight vs Production)
+
+    private var isCloudSyncEnabled: Bool {
+        AppEnvironment.capabilities.enablesCloudSync
+    }
+
+    private var isTombstonePurgeEnabled: Bool {
+        AppEnvironment.capabilities.enablesTombstonePurge
+    }
+
     // MARK: - Local tombstone purge (post-delete cleanup)
     /// Schedules a background purge of locally soft-deleted records that have already been deleted in Supabase.
     /// We delay slightly to avoid hard-deleting objects while SwiftUI may still be rendering them.
@@ -44,6 +54,7 @@ class SyncService: ObservableObject {
     /// Purges local soft-deleted records that have `syncedAt != nil` (i.e. backend delete succeeded).
     /// Safe to call repeatedly; does nothing if not authenticated or no context.
     func purgeLocalTombstonesIfPossible() async {
+        guard isTombstonePurgeEnabled else { return }
         guard let context = context else { return }
         guard supabaseService.isAuthenticated, let userId = supabaseService.currentUser?.id else { return }
 
@@ -83,6 +94,8 @@ class SyncService: ObservableObject {
     }
     
     /// Migrates existing local items and reference data to the authenticated user
+    // Disabled — syncAllItems call commented out.
+    /*
     func migrateLocalItemsToUser(userId: UUID) async throws {
         guard let context = context else {
             throw SyncError.noContext
@@ -194,6 +207,7 @@ class SyncService: ObservableObject {
         try context.save()
         print("✅ Migrated \(items.count) items and reference data to user: \(userId.uuidString)")
     }
+    */
     
     /// Syncs a single item to Supabase (for automatic sync after save)
     /// This is called automatically when items are created or modified
@@ -203,7 +217,6 @@ class SyncService: ObservableObject {
         Task { @MainActor in
             guard self.supabaseService.isAuthenticated,
                   let userId = self.supabaseService.currentUser?.id,
-                  let itemId = item.id,
                   let context = self.context else {
                 return
             }
@@ -224,15 +237,28 @@ class SyncService: ObservableObject {
                 }
             }
             
+            // CRITICAL: Set userId on item if it's not set (for new items)
+            if item.userId == nil || item.userId?.isEmpty == true {
+                item.userId = userId.uuidString
+                do {
+                    try context.save()
+                    print("✅ Set userId on new item: \(item.name ?? "unnamed")")
+                } catch {
+                    print("⚠️ Failed to set userId on item: \(error.localizedDescription)")
+                }
+            }
+
+            guard self.isCloudSyncEnabled else {
+                return
+            }
+            
             // Refresh item from context to ensure we have latest values
             // Use mergeChanges: true to preserve newly added relationships (like photos)
             context.refresh(item, mergeChanges: true)
             
             // Ensure photos relationship is loaded (not a fault) - CRITICAL for new photos
-            // Access the relationship to force it to load from the context
             _ = item.photos
             
-            // Ensure pairedItems relationship is loaded (not a fault)
             if let pairedItems = item.pairedItems as? Set<Item> {
                 print("🔍 Item '\(item.name ?? "unnamed")' has \(pairedItems.count) paired items in Core Data")
                 for (idx, paired) in Array(pairedItems).enumerated() {
@@ -242,7 +268,6 @@ class SyncService: ObservableObject {
                 print("🔍 Item '\(item.name ?? "unnamed")' has no paired items")
             }
             
-            // Log photos count for debugging
             if let photos = item.photos as? Set<Photo> {
                 print("📸 Item '\(item.name ?? "unnamed")' has \(photos.count) photos in Core Data")
                 for (idx, photo) in Array(photos).enumerated() {
@@ -250,19 +275,6 @@ class SyncService: ObservableObject {
                 }
             } else {
                 print("📸 Item '\(item.name ?? "unnamed")' has no photos")
-            }
-            
-            // CRITICAL: Set userId on item if it's not set (for new items)
-            // This ensures the item can be found by future sync queries
-            if item.userId == nil || item.userId?.isEmpty == true {
-                item.userId = userId.uuidString
-                do {
-                    try context.save()
-                    print("✅ Set userId on new item: \(item.name ?? "unnamed")")
-                } catch {
-                    print("⚠️ Failed to set userId on item: \(error.localizedDescription)")
-                    // Continue anyway - we'll try to sync
-                }
             }
             
             // Check if item needs syncing (syncedAt == nil OR updatedAt >= syncedAt)
@@ -301,6 +313,10 @@ class SyncService: ObservableObject {
     
     /// Syncs all local items to Supabase
     func syncAllItems() async throws {
+        guard isCloudSyncEnabled else {
+            print("⏭️ syncAllItems skipped (cloud sync disabled)")
+            return
+        }
         guard let context = context else {
             throw SyncError.noContext
         }
@@ -322,7 +338,7 @@ class SyncService: ObservableObject {
         }
         
         // 1. Migrate items to user if needed
-        try await migrateLocalItemsToUser(userId: userId)
+        // try await migrateLocalItemsToUser(userId: userId)
         
         // 2. Sync reference data first (brands, categories, etc.) to avoid foreign key violations
         syncStatus = "Syncing reference data..."
@@ -422,6 +438,10 @@ class SyncService: ObservableObject {
     /// One-time cleanup: Removes orphaned data from Supabase and R2
     /// Orphaned data = data in Supabase that references items that don't exist in Core Data
     func cleanupOrphanedData() async throws {
+        guard isCloudSyncEnabled else {
+            print("⏭️ cleanupOrphanedData skipped (cloud sync disabled)")
+            return
+        }
         guard let context = context else {
             throw SyncError.noContext
         }
@@ -1091,6 +1111,7 @@ class SyncService: ObservableObject {
     /// Deletes a tag from Supabase (item_tags, outfit_tags, tags). Call after removing the tag from Core Data.
     nonisolated func deleteTagFromSupabase(tagId: UUID) {
         Task { @MainActor in
+            guard self.isCloudSyncEnabled else { return }
             guard self.supabaseService.isAuthenticated else { return }
             let idString = tagId.uuidString
             do {
@@ -1164,6 +1185,8 @@ class SyncService: ObservableObject {
                     print("⚠️ Failed to set userId on wardrobe: \(error.localizedDescription)")
                 }
             }
+
+            guard self.isCloudSyncEnabled else { return }
             
             // Check if wardrobe needs syncing
             let needsSync: Bool
@@ -1242,6 +1265,7 @@ class SyncService: ObservableObject {
     /// Push a checklist row after local edits (travel wardrobe scope).
     nonisolated func syncPackingChecklistItemIfNeeded(_ row: PackingChecklistItem) {
         Task { @MainActor in
+            guard self.isCloudSyncEnabled else { return }
             guard self.supabaseService.isAuthenticated,
                   let userId = self.supabaseService.currentUser?.id,
                   let rowId = row.id,
@@ -1317,6 +1341,7 @@ class SyncService: ObservableObject {
     /// Deletes a checklist row server-side after local removal.
     nonisolated func deletePackingChecklistItemFromSupabase(checklistRowId: UUID) {
         Task { @MainActor in
+            guard self.isCloudSyncEnabled else { return }
             guard self.supabaseService.isAuthenticated else { return }
             let idString = checklistRowId.uuidString
             do {
@@ -1334,6 +1359,7 @@ class SyncService: ObservableObject {
     /// Push a checklist section header after local edits.
     nonisolated func syncPackingChecklistSectionIfNeeded(_ section: PackingChecklistSection) {
         Task { @MainActor in
+            guard self.isCloudSyncEnabled else { return }
             guard self.supabaseService.isAuthenticated,
                   let userId = self.supabaseService.currentUser?.id,
                   let sectionId = section.id,
@@ -1453,6 +1479,8 @@ class SyncService: ObservableObject {
                 refreshedOutfit.userId = userId.uuidString
                 try? context.save()
             }
+
+            guard self.isCloudSyncEnabled else { return }
 
             // Check if sync is needed
             let needsSync: Bool
@@ -1750,6 +1778,7 @@ class SyncService: ObservableObject {
     nonisolated func syncUserProfileIfNeeded(_ profile: UserProfile) {
         // Only sync if authenticated - check on main actor
         Task { @MainActor in
+            guard self.isCloudSyncEnabled else { return }
             guard self.supabaseService.isAuthenticated,
                   let userId = self.supabaseService.currentUser?.id,
                   let context = self.context else {

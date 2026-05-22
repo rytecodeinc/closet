@@ -26,15 +26,69 @@ enum ReferenceDataBootstrap {
         var isEmpty: Bool { totalInserted == 0 }
     }
 
+    // MARK: - Public catalog (onboarding master list)
+
+    /// Top-level categories users can opt into during onboarding (also used by developer “add missing catalog”).
+    static let masterCategoryNames: [String] = [
+        "Tops", "Bottoms", "Outerwear", "Shoes", "Accessories",
+        "Dresses", "Suits", "Swimwear", "Activewear",
+    ]
+
+    // MARK: - Onboarding vs universal seeding
+
+    /// Colors, seasons, sizes, default brand/location — safe anytime; does **not** insert categories.
+    static func ensureUniversalDefaults(for userId: UUID, in context: NSManagedObjectContext) throws {
+        let uid = userId.uuidString
+        _ = try mergeMissingColors(uid: uid, in: context)
+        _ = try mergeMissingSeasons(uid: uid, in: context)
+        _ = try mergeMissingSizes(uid: uid, in: context)
+        try insertDefaultBrand(uid: uid, in: context)
+        try insertDefaultLocation(uid: uid, in: context)
+        if context.hasChanges {
+            try context.save()
+        }
+    }
+
+    /// Inserts only the chosen top-level categories and their default subcategories (onboarding completion).
+    static func seedSelectedCategories(
+        _ selectedNames: [String],
+        for userId: UUID,
+        in context: NSManagedObjectContext
+    ) throws {
+        let uid = userId.uuidString
+        let normalized = selectedNames
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !normalized.isEmpty else { return }
+
+        _ = try mergeCategoriesAndSubcategories(
+            uid: uid,
+            categoryNames: normalized,
+            in: context
+        )
+        if context.hasChanges {
+            try context.save()
+        }
+    }
+
+    /// Legacy name — universal defaults only; categories come from onboarding (`seedSelectedCategories`).
+    static func ensureUserDefaults(for userId: UUID, in context: NSManagedObjectContext) throws {
+        try ensureUniversalDefaults(for: userId, in: context)
+    }
+
     /// Adds any default colors, seasons, categories, subcategories, and sizes that this user does not already have (scoped by `userId`).
-    /// Safe to run multiple times; only missing rows are created.
+    /// Developer tool: may add categories the user skipped at onboarding.
     static func mergeMissingDefaults(for userId: UUID, in context: NSManagedObjectContext) throws -> MergeResult {
         let uid = userId.uuidString
         var result = MergeResult()
 
         result.colorsInserted = try mergeMissingColors(uid: uid, in: context)
         result.seasonsInserted = try mergeMissingSeasons(uid: uid, in: context)
-        let catSub = try mergeCategoriesAndSubcategories(uid: uid, in: context)
+        let catSub = try mergeCategoriesAndSubcategories(
+            uid: uid,
+            categoryNames: masterCategoryNames,
+            in: context
+        )
         result.categoriesInserted = catSub.categories
         result.subcategoriesInserted = catSub.subcategories
         result.sizesInserted = try mergeMissingSizes(uid: uid, in: context)
@@ -43,35 +97,6 @@ enum ReferenceDataBootstrap {
             try context.save()
         }
         return result
-    }
-
-    /// Mirrors `DataSeeder` defaults; safe to call repeatedly — runs only for accounts that still need a personal catalog.
-    static func ensureUserDefaults(for userId: UUID, in context: NSManagedObjectContext) throws {
-        let uid = userId.uuidString
-
-        let catProbe: NSFetchRequest<Category> = Category.fetchRequest()
-        catProbe.predicate = NSPredicate(format: "userId == %@", uid)
-        if try context.count(for: catProbe) > 0 {
-            return
-        }
-
-        let itemProbe: NSFetchRequest<Item> = Item.fetchRequest()
-        itemProbe.predicate = NSPredicate(
-            format: "userId == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)",
-            uid
-        )
-        if try context.count(for: itemProbe) > 0 {
-            return
-        }
-
-        try insertColors(uid: uid, in: context)
-        try insertSeasons(uid: uid, in: context)
-        try insertCategoriesAndSubcategories(uid: uid, in: context)
-        try insertSizes(uid: uid, in: context)
-        try insertDefaultBrand(uid: uid, in: context)
-        try insertDefaultLocation(uid: uid, in: context)
-
-        try context.save()
     }
 
     // MARK: - Constants (aligned with DataSeeder)
@@ -84,11 +109,6 @@ enum ReferenceDataBootstrap {
 
     private static let defaultSeasonNames: [String] = [
         "Spring", "Summer", "Fall", "Winter",
-    ]
-
-    private static let defaultCategoryNames: [String] = [
-        "Tops", "Bottoms", "Outerwear", "Shoes", "Accessories",
-        "Dresses", "Suits", "Swimwear", "Activewear",
     ]
 
     private static let defaultSubcategoriesByCategory: [String: [String]] = [
@@ -126,10 +146,6 @@ enum ReferenceDataBootstrap {
         return n
     }
 
-    private static func insertColors(uid: String, in context: NSManagedObjectContext) throws {
-        _ = try mergeMissingColors(uid: uid, in: context)
-    }
-
     private static func colorExists(name: String, userId uid: String, in context: NSManagedObjectContext) -> Bool {
         let r: NSFetchRequest<AppColor> = AppColor.fetchRequest()
         r.fetchLimit = 1
@@ -151,10 +167,6 @@ enum ReferenceDataBootstrap {
         return n
     }
 
-    private static func insertSeasons(uid: String, in context: NSManagedObjectContext) throws {
-        _ = try mergeMissingSeasons(uid: uid, in: context)
-    }
-
     private static func seasonExists(name: String, userId uid: String, in context: NSManagedObjectContext) -> Bool {
         let r: NSFetchRequest<Season> = Season.fetchRequest()
         r.fetchLimit = 1
@@ -162,18 +174,17 @@ enum ReferenceDataBootstrap {
         return (try? context.count(for: r)) ?? 0 > 0
     }
 
-    /// Full insert for brand-new accounts (no existing user categories).
-    private static func insertCategoriesAndSubcategories(uid: String, in context: NSManagedObjectContext) throws {
-        _ = try mergeCategoriesAndSubcategories(uid: uid, in: context)
-    }
-
-    /// Creates missing default categories and subcategories; reuses existing user-scoped categories by name.
-    private static func mergeCategoriesAndSubcategories(uid: String, in context: NSManagedObjectContext) throws -> (categories: Int, subcategories: Int) {
+    /// Creates missing categories (from `categoryNames` only) and their subcategories; reuses existing rows by name.
+    private static func mergeCategoriesAndSubcategories(
+        uid: String,
+        categoryNames: [String],
+        in context: NSManagedObjectContext
+    ) throws -> (categories: Int, subcategories: Int) {
         var categoriesInserted = 0
         var subcategoriesInserted = 0
         var byName: [String: Category] = [:]
 
-        for name in defaultCategoryNames {
+        for name in categoryNames {
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
             if let existing = try fetchUserCategory(named: trimmed, userId: uid, in: context) {
@@ -208,7 +219,7 @@ enum ReferenceDataBootstrap {
             }
         }
         if !missing.isEmpty {
-            print("⚠️ ReferenceDataBootstrap: missing categories for subcategories: \(missing)")
+            print("⚠️ ReferenceDataBootstrap: skipped subcategories for unselected categories: \(missing)")
         }
         return (categoriesInserted, subcategoriesInserted)
     }
@@ -254,10 +265,6 @@ enum ReferenceDataBootstrap {
             }
         }
         return inserted
-    }
-
-    private static func insertSizes(uid: String, in context: NSManagedObjectContext) throws {
-        _ = try mergeMissingSizes(uid: uid, in: context)
     }
 
     private static func insertDefaultBrand(uid: String, in context: NSManagedObjectContext) throws {

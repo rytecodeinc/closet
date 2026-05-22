@@ -62,7 +62,7 @@ struct SingleWardrobeSelectionView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             // Run deduplication to ensure no duplicates are shown
-            deduplicateWardrobes(context: viewContext, userId: authSession.userId?.uuidString)
+            // deduplicateWardrobes(context: viewContext, userId: authSession.userId?.uuidString)
             if viewContext.hasChanges {
                 try? viewContext.save()
             }

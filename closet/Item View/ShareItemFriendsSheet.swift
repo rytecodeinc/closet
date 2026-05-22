@@ -8,6 +8,17 @@
 import SwiftUI
 
 struct ShareItemFriendsSheet: View {
+    var navigationTitle: String = "Friends"
+
+    var body: some View {
+        ShareFriendsPickerSheet(navigationTitle: navigationTitle)
+    }
+}
+
+/// Pick a friend to share an item or outfit with (UI only; messaging TBD).
+struct ShareFriendsPickerSheet: View {
+    let navigationTitle: String
+
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var supabaseService: SupabaseService
     @EnvironmentObject private var authSession: AuthSession
@@ -37,7 +48,7 @@ struct ShareItemFriendsSheet: View {
                     messageComposerBar
                 }
             }
-            .navigationTitle("Friends")
+            .navigationTitle(navigationTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

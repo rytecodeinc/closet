@@ -699,6 +699,8 @@ func migratePhotoTypes(context: NSManagedObjectContext) {
 // MARK: - Deduplicate Wardrobes
 /// Pass the current user's ID string from the calling `@MainActor` context so this
 /// free function doesn't need to touch `SupabaseService.shared.currentUser` directly.
+// Disabled — call sites commented out.
+/*
 func deduplicateWardrobes(context: NSManagedObjectContext, userId: String? = nil) {
     do {
         // Only deduplicate wardrobes belonging to the current user.
@@ -787,6 +789,7 @@ func deduplicateWardrobes(context: NSManagedObjectContext, userId: String? = nil
         print("❌ Wardrobe deduplication failed: \(error)")
     }
 }
+*/
 
 // MARK: Migration
 func migrateWishlistItems(context: NSManagedObjectContext) {
@@ -1022,6 +1025,8 @@ func migrateTimestampToCreatedAt(context: NSManagedObjectContext) {
 }
 
 /// Assigns `userId` on events missing it by inferring from linked items/outfits (safe for multi-account devices).
+// Disabled — was running on every ContentView appear without a completion flag.
+/*
 func migrateEventUserIdsFromRelationships(context: NSManagedObjectContext) {
     let req = Event.fetchRequest()
     req.predicate = NSPredicate(format: "userId == nil OR userId == \"\"")
@@ -1041,6 +1046,7 @@ func migrateEventUserIdsFromRelationships(context: NSManagedObjectContext) {
         print("❌ migrateEventUserIdsFromRelationships: \(error)")
     }
 }
+*/
 
 /// One-time: set `isDefault` on canonical closet/wishlist per user (earliest timestamp, then createdAt). See `WardrobeBootstrap.normalizeDefaultFlagsForUser`.
 func migrateWardrobeIsDefaultBackfill(context: NSManagedObjectContext) {
