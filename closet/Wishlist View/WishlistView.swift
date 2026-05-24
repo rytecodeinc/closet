@@ -81,6 +81,7 @@ private extension WishlistView {
                     selectedWardrobe: selected,
                     isInSelectionMode: $isItemGridInSelectionMode
                 )
+                .id(selected.objectID)
             } else {
                 Text("No Wishlist Selected")
                     .foregroundColor(.secondary)
@@ -198,6 +199,7 @@ private extension WishlistView {
                     ZStack(alignment: .trailing) {
                         Button {
                             selectedWishlist = wishlist
+                            filterModel.selectedWardrobes.removeAll()
                             showWishlistSheet = false
                         } label: {
                             HStack {

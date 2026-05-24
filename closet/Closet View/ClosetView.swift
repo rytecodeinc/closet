@@ -201,6 +201,7 @@ private extension ClosetView {
                     ZStack(alignment: .trailing) {
                         Button {
                             selectedWardrobe = closet
+                            filterModel.selectedWardrobes.removeAll()
                             showClosetSheet = false
                         } label: {
                             HStack {

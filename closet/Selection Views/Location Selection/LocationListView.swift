@@ -1,10 +1,9 @@
 //
-//  BrandListView.swift
+//  LocationListView.swift
 //  closet
 //
 //  Created by Dan Warner on 7/29/25.
 //
-
 
 import SwiftUI
 import CoreData
@@ -13,7 +12,7 @@ import Foundation
 struct LocationListView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Binding var selectedLocation: Location?
-    /// When set, only locations owned by or assigned to this user's items appear.
+    /// When set, only locations assigned to this user's items appear.
     var userId: String? = nil
     
     @State private var locations: [Location] = []
@@ -57,27 +56,11 @@ struct LocationListView: View {
     }
 
     private func fetchLocations() {
-        let request: NSFetchRequest<Location> = Location.fetchRequest()
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Location.name, ascending: true)]
-        if let uid = userId {
-            let owned = NSPredicate(format: "userId == %@", uid)
-            let usedByUser = NSPredicate(
-                format: "SUBQUERY(item, $i, $i.userId == %@ AND ($i.isSoftDeleted != YES OR $i.isSoftDeleted == nil)).@count > 0",
-                uid
-            )
-            request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, usedByUser])
-        }
         do {
-            let fetched = try viewContext.fetch(request)
-            if let uid = userId {
-                locations = dedupeNamedReferenceRows(fetched, preferredUserId: uid)
-            } else {
-                locations = fetched
-            }
+            locations = try viewContext.fetchLocationsForFilterList(userId: userId)
         } catch {
             print("❌ Failed to fetch locations: \(error.localizedDescription)")
             locations = []
         }
     }
 }
-

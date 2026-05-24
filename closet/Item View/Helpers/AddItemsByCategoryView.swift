@@ -10,6 +10,7 @@ import CoreData
 
 struct AddItemsByCategoryView: View {
     @ObservedObject var wardrobe: Wardrobe
+    @EnvironmentObject private var authSession: AuthSession
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
     
@@ -18,6 +19,22 @@ struct AddItemsByCategoryView: View {
     @State private var selectedCategory: Category?
     @State private var selectedSubcategory: Subcategory?
     @State private var isAddingItems = false
+    @State private var showAddConfirmation = false
+    @State private var pendingCategory: Category?
+    @State private var pendingSubcategory: Subcategory?
+
+    private var wardrobeDisplayName: String {
+        wardrobe.name ?? "this wardrobe"
+    }
+
+    private var pendingCategoryLabel: String {
+        guard let category = pendingCategory else { return "" }
+        let categoryName = category.name ?? ""
+        if let sub = pendingSubcategory, let subName = sub.name, !subName.isEmpty {
+            return "\(categoryName) › \(subName)"
+        }
+        return categoryName
+    }
     
     var body: some View {
         NavigationView {
@@ -117,14 +134,37 @@ struct AddItemsByCategoryView: View {
             .onAppear {
                 fetchCategories()
             }
+            .alert("Add Items by Category", isPresented: $showAddConfirmation) {
+                Button("Cancel", role: .cancel) {
+                    pendingCategory = nil
+                    pendingSubcategory = nil
+                }
+                Button("Add") {
+                    guard let category = pendingCategory else { return }
+                    selectedCategory = category
+                    selectedSubcategory = pendingSubcategory
+                    if let subcategory = pendingSubcategory {
+                        addItemsByCategoryAndSubcategory(category: category, subcategory: subcategory)
+                    } else {
+                        addItemsByCategory(category)
+                    }
+                    pendingCategory = nil
+                    pendingSubcategory = nil
+                }
+            } message: {
+                Text("Add all items in \"\(pendingCategoryLabel)\" to \"\(wardrobeDisplayName)\"?")
+            }
         }
     }
     
+    /// Same account scope as `ItemFilterView` → `CategoryFilterListView`.
+    private var currentUserId: String? {
+        authSession.userId?.uuidString
+    }
+
     private func fetchCategories() {
-        let request: NSFetchRequest<Category> = Category.fetchRequest()
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Category.name, ascending: true)]
         do {
-            categories = try viewContext.fetch(request)
+            categories = try viewContext.fetchCategoriesForFilterList(userId: currentUserId)
         } catch {
             print("❌ Failed to fetch categories: \(error.localizedDescription)")
             categories = []
@@ -132,11 +172,7 @@ struct AddItemsByCategoryView: View {
     }
     
     private func sortedSubcategories(for category: Category) -> [Subcategory] {
-        let set = (category.subcategories as? Set<Subcategory>) ?? []
-        return set.sorted {
-            if $0.sortOrder != $1.sortOrder { return $0.sortOrder < $1.sortOrder }
-            return ($0.name ?? "") < ($1.name ?? "")
-        }
+        viewContext.sortedSubcategoriesForFilterList(category, userId: currentUserId)
     }
     
     private func toggle(_ category: Category) {
@@ -149,25 +185,22 @@ struct AddItemsByCategoryView: View {
     }
     
     private func selectCategory(_ category: Category, subcategory: Subcategory?) {
-        selectedCategory = category
-        selectedSubcategory = subcategory
-        
-        // Add items immediately when selection is made
-        if let subcategory = subcategory {
-            addItemsByCategoryAndSubcategory(category: category, subcategory: subcategory)
-        } else {
-            addItemsByCategory(category)
-        }
+        pendingCategory = category
+        pendingSubcategory = subcategory
+        showAddConfirmation = true
     }
     
     private func addItemsByCategory(_ category: Category) {
-        guard let categoryName = category.name else { return }
+        guard let uid = currentUserId else { return }
         
         isAddingItems = true
         
-        // Fetch all items that have this category and are not already in this wardrobe
         let request = NSFetchRequest<Item>(entityName: "Item")
-        request.predicate = NSPredicate(format: "category.name ==[c] %@ AND isDraft != YES", categoryName)
+        request.predicate = NSPredicate(
+            format: "category == %@ AND userId == %@ AND isDraft != YES AND (isSoftDeleted != YES OR isSoftDeleted == nil)",
+            category,
+            uid
+        )
         
         do {
             let allItemsWithCategory = try viewContext.fetch(request)
@@ -185,7 +218,7 @@ struct AddItemsByCategoryView: View {
             
             try viewContext.save()
             
-            print("✅ Added \(itemsToAdd.count) items with category '\(categoryName)' to wardrobe '\(wardrobe.name ?? "unknown")'")
+            print("✅ Added \(itemsToAdd.count) items with category '\(category.name ?? "")' to wardrobe '\(wardrobe.name ?? "unknown")'")
             
             // Dismiss after a short delay to show success
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -198,17 +231,16 @@ struct AddItemsByCategoryView: View {
     }
     
     private func addItemsByCategoryAndSubcategory(category: Category, subcategory: Subcategory) {
-        guard let categoryName = category.name,
-              let subcategoryName = subcategory.name else { return }
+        guard let uid = currentUserId else { return }
         
         isAddingItems = true
         
-        // Fetch all items that have this category and subcategory and are not already in this wardrobe
         let request = NSFetchRequest<Item>(entityName: "Item")
         request.predicate = NSPredicate(
-            format: "category.name ==[c] %@ AND subcategory.name ==[c] %@ AND isDraft != YES",
-            categoryName,
-            subcategoryName
+            format: "category == %@ AND subcategory == %@ AND userId == %@ AND isDraft != YES AND (isSoftDeleted != YES OR isSoftDeleted == nil)",
+            category,
+            subcategory,
+            uid
         )
         
         do {
@@ -227,7 +259,7 @@ struct AddItemsByCategoryView: View {
             
             try viewContext.save()
             
-            print("✅ Added \(itemsToAdd.count) items with category '\(categoryName)' and subcategory '\(subcategoryName)' to wardrobe '\(wardrobe.name ?? "unknown")'")
+            print("✅ Added \(itemsToAdd.count) items with category '\(category.name ?? "")' and subcategory '\(subcategory.name ?? "")' to wardrobe '\(wardrobe.name ?? "unknown")'")
             
             // Dismiss after a short delay to show success
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {

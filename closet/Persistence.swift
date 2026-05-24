@@ -84,9 +84,9 @@ struct PersistenceController {
             }
             
             // Seed data once, in background (if not in-memory store)
-            if !inMemory, let container = container {
-                Self.seedInitialDataIfNeeded(container: container)
-            }
+            // if !inMemory, let container = container {
+            //     Self.seedInitialDataIfNeeded(container: container)
+            // }
         })
         container.viewContext.automaticallyMergesChangesFromParent = true
     }
@@ -101,6 +101,8 @@ struct PersistenceController {
         _ = try? ctx.count(for: request)
     }
     
+    // Disabled — loadPersistentStores call commented out.
+    /*
     private static func seedInitialDataIfNeeded(container: NSPersistentContainer) {
         let alreadySeeded = UserDefaults.standard.bool(forKey: hasSeededDataKey)
         print("🌱 Checking if data needs seeding... Already seeded: \(alreadySeeded)")
@@ -139,4 +141,5 @@ struct PersistenceController {
             }
         }
     }
+    */
 }

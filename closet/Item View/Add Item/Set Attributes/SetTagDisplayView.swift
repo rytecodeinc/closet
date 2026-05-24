@@ -12,9 +12,14 @@ struct SetTagDisplayView: View {
     @ObservedObject var item: Item
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authSession: AuthSession
 
     @State private var tags: [Tag] = []
     @State private var newTagName: String = ""
+
+    private var referenceUserId: String? {
+        effectiveReferenceDataUserId(signedInUserId: authSession.userId, entityUserId: item.userId)
+    }
 
     private var filteredTags: [Tag] {
         guard !newTagName.isEmpty else { return tags }
@@ -113,21 +118,16 @@ struct SetTagDisplayView: View {
 
     // MARK: - Fetch Tags
     private func fetchTags() {
-        let request: NSFetchRequest<Tag> = Tag.fetchRequest()
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Tag.name, ascending: true)]
-        if let uid = item.userId, !uid.isEmpty {
-            let owned = NSPredicate(format: "userId == %@", uid)
-            let fromWardrobe = NSPredicate(
-                format: "SUBQUERY(items, $i, ANY $i.wardrobes.type == %@ AND $i.userId == %@ AND ($i.isSoftDeleted != YES OR $i.isSoftDeleted == nil)).@count > 0",
-                wardrobeTypeForTags,
-                uid
-            )
-            request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, fromWardrobe])
-        } else {
-            request.predicate = NSPredicate(format: "SUBQUERY(items, $i, ANY $i.wardrobes.type == %@).@count > 0", wardrobeTypeForTags)
+        guard let uid = referenceUserId, !uid.isEmpty else {
+            tags = []
+            return
         }
         do {
-            tags = try viewContext.fetch(request)
+            tags = try viewContext.fetchTagsForItemPicker(
+                userId: uid,
+                wardrobeType: wardrobeTypeForTags,
+                includingTagsOn: item
+            )
         } catch {
             print("❌ Failed to fetch tags: \(error)")
             tags = []
@@ -171,7 +171,7 @@ struct SetTagDisplayView: View {
         let newTag = Tag(context: viewContext)
         newTag.name = trimmed
         newTag.id = UUID()
-        newTag.userId = item.userId
+        newTag.userId = referenceUserId ?? item.userId
 
         item.addToTags(newTag)
         

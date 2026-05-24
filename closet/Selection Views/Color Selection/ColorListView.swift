@@ -14,6 +14,8 @@ struct ColorListView: View {
     @Binding var selectedColorNames: Set<String>
     /// When set, only colors owned by or used by this user's items appear.
     var userId: String? = nil
+    /// When true (ItemFilterView), only colors on the user's items appear. When false (item add), the user's full color catalog is shown.
+    var itemsOnly: Bool = false
 
     @State private var colors: [AppColor] = []
 
@@ -61,29 +63,8 @@ struct ColorListView: View {
     }
     
     private func fetchColors() {
-        let request = NSFetchRequest<AppColor>(entityName: "Color")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \AppColor.name, ascending: true)]
-        let visible = NSPredicate(format: "isVisible == YES")
-        if let uid = userId {
-            let owned = NSPredicate(format: "userId == %@", uid)
-            let usedByUser = NSPredicate(
-                format: "SUBQUERY(items, $i, $i.userId == %@ AND ($i.isSoftDeleted != YES OR $i.isSoftDeleted == nil)).@count > 0",
-                uid
-            )
-            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
-                visible,
-                NSCompoundPredicate(orPredicateWithSubpredicates: [owned, usedByUser])
-            ])
-        } else {
-            request.predicate = visible
-        }
         do {
-            let fetched = try viewContext.fetch(request)
-            if let uid = userId {
-                colors = dedupeNamedReferenceRows(fetched, preferredUserId: uid)
-            } else {
-                colors = fetched
-            }
+            colors = try viewContext.fetchColorsForFilterList(userId: userId, itemsOnly: itemsOnly)
         } catch {
             print("❌ Failed to fetch colors: \(error.localizedDescription)")
             colors = []

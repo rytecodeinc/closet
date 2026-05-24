@@ -15,42 +15,56 @@ class UserProfileRepository {
         self.context = context
     }
     
-    /// Gets the existing user profile or creates a new one if none exists
-    /// - Parameter userId: Optional user ID from Supabase session. If nil, profile won't be synced.
+    /// Gets the existing user profile or creates a new one if none exists.
+    /// When `userId` is provided, only matches that account (never reuses another user's row).
     func getOrCreateProfile(userId: String? = nil) -> UserProfile {
+        if let userId = userId?.trimmingCharacters(in: .whitespacesAndNewlines), !userId.isEmpty {
+            if let existing = fetchProfile(userId: userId) {
+                return existing
+            }
+            return createProfile(userId: userId)
+        }
+
         let request: NSFetchRequest<UserProfile> = UserProfile.fetchRequest()
         request.fetchLimit = 1
-        
         do {
             if let existing = try context.fetch(request).first {
-                // Update userId if provided and not already set
-                if let userId = userId, (existing.userId == nil || existing.userId?.isEmpty == true) {
-                    existing.userId = userId
-                    try context.save()
-                }
                 return existing
             }
         } catch {
             print("⚠️ Error fetching user profile: \(error)")
         }
-        
-        // Create new profile if none exists
+        return createProfile(userId: nil)
+    }
+
+    func fetchProfile(userId: String) -> UserProfile? {
+        let request: NSFetchRequest<UserProfile> = UserProfile.fetchRequest()
+        request.predicate = NSPredicate(format: "userId == %@", userId)
+        request.fetchLimit = 1
+        return try? context.fetch(request).first
+    }
+
+    /// Re-links Core Data to an on-disk TestFlight avatar when the JPEG still exists.
+    func restoreLocalAvatarIfNeeded(userId: String) throws {
+        guard let uuid = UUID(uuidString: userId),
+              ProfileAvatarLocalStorage.hasSavedAvatar(userId: uuid) else { return }
+        let urlString = ProfileAvatarLocalStorage.canonicalStoredURLString(for: uuid)
+        try updateAvatarUrl(urlString, userId: userId, syncToCloud: false)
+    }
+
+    private func createProfile(userId: String?) -> UserProfile {
         let profile = UserProfile(context: context)
         profile.id = UUID()
         profile.createdAt = Date()
         profile.updatedAt = Date()
-        
-        // Set userId if provided (for sync)
-        if let userId = userId, !userId.isEmpty {
+        if let userId, !userId.isEmpty {
             profile.userId = userId
         }
-        
         do {
             try context.save()
         } catch {
             print("⚠️ Error creating user profile: \(error)")
         }
-        
         return profile
     }
     
@@ -185,8 +199,8 @@ class UserProfileRepository {
         SyncService.shared.syncUserProfileIfNeeded(profile)
     }
 
-    /// Sets the profile avatar public URL (R2 CDN). Pass `nil` to clear.
-    func updateAvatarUrl(_ url: String?, userId: String? = nil) throws {
+    /// Sets the profile avatar URL (`https://…` from R2 or `file://…` for local-only builds). Pass `nil` to clear.
+    func updateAvatarUrl(_ url: String?, userId: String? = nil, syncToCloud: Bool = true) throws {
         let profile = getOrCreateProfile(userId: userId)
         let incomingTrimmed = url?.trimmingCharacters(in: .whitespacesAndNewlines)
         let incoming = (incomingTrimmed?.isEmpty == false) ? incomingTrimmed : nil
@@ -199,7 +213,7 @@ class UserProfileRepository {
             return
         }
 
-        profile.setStoredProfileAvatarURL(url)
+        profile.setStoredProfileAvatarURL(incoming)
         profile.updatedAt = Date()
 
         if let userId = userId, !userId.isEmpty {
@@ -209,7 +223,9 @@ class UserProfileRepository {
         guard context.hasChanges else { return }
         try context.save()
 
-        SyncService.shared.syncUserProfileIfNeeded(profile)
+        if syncToCloud {
+            SyncService.shared.syncUserProfileIfNeeded(profile)
+        }
     }
 
     /// Gets the cached friend count (last known value) from Core Data.

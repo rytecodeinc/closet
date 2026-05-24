@@ -12,9 +12,21 @@ struct SetOutfitTagDisplayView: View {
     @ObservedObject var outfit: Outfit
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authSession: AuthSession
 
     @State private var tags: [Tag] = []
     @State private var newTagName: String = ""
+
+    private var referenceUserId: String? {
+        effectiveReferenceDataUserId(signedInUserId: authSession.userId, entityUserId: outfit.userId)
+    }
+
+    private var wardrobeTypeForTags: String {
+        guard let items = outfit.items as? Set<Item> else { return "closet" }
+        return items.contains { item in
+            (item.wardrobes as? Set<Wardrobe>)?.contains { $0.type?.lowercased() == "wishlist" } == true
+        } ? "wishlist" : "closet"
+    }
 
     private var filteredTags: [Tag] {
         guard !newTagName.isEmpty else { return tags }
@@ -27,10 +39,10 @@ struct SetOutfitTagDisplayView: View {
             SelectionHeader(title: "Select Tag")
             
             VStack(spacing: 12) {
-                // Search / Add row
                 HStack {
                     TextField("Add or select a tag", text: $newTagName)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .textInputAutocapitalization(.words)
 
                     Button("Add") {
                         addTag()
@@ -40,9 +52,10 @@ struct SetOutfitTagDisplayView: View {
                 .padding(.horizontal)
                 .padding(.top)
 
-                // Tag List
                 if tags.isEmpty {
-                    Text("Tags you add will appear in a list here.")
+                    Text(wardrobeTypeForTags == "wishlist"
+                        ? "Tags used on wishlist items will appear here."
+                        : "Tags you add will appear in a list here.")
                         .foregroundColor(.gray)
                         .padding()
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -73,9 +86,9 @@ struct SetOutfitTagDisplayView: View {
         .onAppear {
             fetchTags()
         }
+        .presentationDetents([.medium, .large])
     }
 
-    // MARK: - Highlight Matching Text
     private func highlightedText(for tagName: String, matching input: String) -> Text {
         let lowerTag = tagName.lowercased()
         let lowerInput = input.lowercased()
@@ -96,19 +109,29 @@ struct SetOutfitTagDisplayView: View {
         return Text(before) + Text(match).bold() + Text(after)
     }
 
-    // MARK: - Fetch Tags
     private func fetchTags() {
-        let request: NSFetchRequest<Tag> = Tag.fetchRequest()
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Tag.name, ascending: true)]
+        guard let uid = referenceUserId, !uid.isEmpty else {
+            tags = []
+            return
+        }
         do {
-            tags = try viewContext.fetch(request)
+            var fetched = try viewContext.fetchTagsForItemPicker(
+                userId: uid,
+                wardrobeType: wardrobeTypeForTags
+            )
+            if let outfitTags = outfit.tags as? Set<Tag> {
+                for tag in outfitTags where !fetched.contains(where: { $0.objectID == tag.objectID }) {
+                    fetched.append(tag)
+                }
+                fetched.sort { ($0.name ?? "").localizedCaseInsensitiveCompare($1.name ?? "") == .orderedAscending }
+            }
+            tags = fetched
         } catch {
             print("❌ Failed to fetch tags: \(error)")
             tags = []
         }
     }
 
-    // MARK: - Toggle Tag Selection
     private func toggleTag(_ tag: Tag) {
         if let tags = outfit.tags as? Set<Tag>, tags.contains(tag) {
             outfit.removeFromTags(tag)
@@ -126,7 +149,6 @@ struct SetOutfitTagDisplayView: View {
         }
     }
 
-    // MARK: - Add New Tag
     private func addTag() {
         let trimmed = newTagName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -137,10 +159,10 @@ struct SetOutfitTagDisplayView: View {
             return
         }
 
-        // Create new tag
         let newTag = Tag(context: viewContext)
         newTag.name = trimmed
         newTag.id = UUID()
+        newTag.userId = referenceUserId ?? outfit.userId
 
         outfit.addToTags(newTag)
         
@@ -155,4 +177,3 @@ struct SetOutfitTagDisplayView: View {
         dismiss()
     }
 }
-

@@ -22,6 +22,11 @@ struct CategoryFilterListView: View {
 
     var body: some View {
         List {
+            if categories.isEmpty {
+                Text("Categories added to items in your closet will appear here.")
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
             ForEach(categories, id: \.self) { category in
                 let catName = category.name ?? ""
                 let subs = sortedSubcategories(for: category)
@@ -86,6 +91,7 @@ struct CategoryFilterListView: View {
                     }
                 }
             }
+            }
         }
         .listStyle(.plain)
         .navigationTitle("Select Category")
@@ -112,23 +118,8 @@ struct CategoryFilterListView: View {
     }
 
     private func fetchCategories() {
-        let request = NSFetchRequest<Category>(entityName: "Category")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Category.name, ascending: true)]
-        if let uid = userId {
-            let owned = NSPredicate(format: "userId == %@", uid)
-            let usedByUserItems = NSPredicate(
-                format: "SUBQUERY(items, $i, $i.userId == %@ AND ($i.isSoftDeleted != YES OR $i.isSoftDeleted == nil)).@count > 0",
-                uid
-            )
-            request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, usedByUserItems])
-        }
         do {
-            let fetched = try viewContext.fetch(request)
-            if let uid = userId {
-                categories = dedupeNamedReferenceRows(fetched, preferredUserId: uid)
-            } else {
-                categories = fetched
-            }
+            categories = try viewContext.fetchCategoriesForFilterList(userId: userId)
         } catch {
             print("❌ Failed to fetch categories: \(error.localizedDescription)")
             categories = []
@@ -136,29 +127,7 @@ struct CategoryFilterListView: View {
     }
 
     private func sortedSubcategories(for category: Category) -> [Subcategory] {
-        let set = (category.subcategories as? Set<Subcategory>) ?? []
-        let filtered: [Subcategory]
-        if let uid = userId {
-            filtered = set.filter { sub in
-                if sub.userId == uid { return true }
-                let items = sub.items as? Set<Item> ?? []
-                return items.contains {
-                    $0.userId == uid && ($0.isSoftDeleted != true)
-                }
-            }
-        } else {
-            filtered = Array(set)
-        }
-        let deduped: [Subcategory]
-        if let uid = userId {
-            deduped = dedupeNamedReferenceRows(filtered, preferredUserId: uid)
-        } else {
-            deduped = filtered
-        }
-        return deduped.sorted {
-            if $0.sortOrder != $1.sortOrder { return $0.sortOrder < $1.sortOrder }
-            return ($0.name ?? "") < ($1.name ?? "")
-        }
+        viewContext.sortedSubcategoriesForFilterList(category, userId: userId)
     }
 }
 

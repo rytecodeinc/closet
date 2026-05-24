@@ -108,46 +108,50 @@ struct PairItemSelectionView: View {
     }
     
     private func fetchClosetItems() {
-        let uid = item.userId ?? authSession.userId?.uuidString
-        if let uid, !uid.isEmpty,
-           let wardrobe = try? WardrobeBootstrap.fetchPrimaryWardrobe(forType: "closet", userIdString: uid, in: viewContext) {
-            selectedWardrobe = wardrobe
-        } else {
-            let wardrobeRequest: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
-            wardrobeRequest.predicate = NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", "closet")
-            do {
-                let wardrobes = try viewContext.fetch(wardrobeRequest)
-                selectedWardrobe = WardrobeBootstrap.primaryWardrobe(in: wardrobes)
-            } catch {
-                selectedWardrobe = nil
-            }
+        guard let userId = authSession.userId?.uuidString, !userId.isEmpty else {
+            closetItems = []
+            selectedWardrobe = nil
+            return
         }
-        
+
+        let itemClosetWardrobes = (item.wardrobes as? Set<Wardrobe>)?
+            .filter {
+                ($0.type ?? "").lowercased() == "closet" &&
+                $0.userId == userId &&
+                $0.isSoftDeleted != true
+            } ?? []
+
+        let wardrobe: Wardrobe?
+        if !itemClosetWardrobes.isEmpty {
+            wardrobe = WardrobeBootstrap.primaryWardrobe(in: itemClosetWardrobes) ?? itemClosetWardrobes.first
+        } else {
+            wardrobe = try? WardrobeBootstrap.fetchPrimaryWardrobe(forType: "closet", userIdString: userId, in: viewContext)
+        }
+
+        selectedWardrobe = wardrobe
+        guard let wardrobe else {
+            closetItems = []
+            return
+        }
+
+        let request: NSFetchRequest<Item> = Item.fetchRequest()
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.createdAt, ascending: false)]
+
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            NSPredicate(format: "userId == %@", userId),
+            NSPredicate(format: "ANY wardrobes == %@", wardrobe),
+            NSPredicate(format: "isDraft != YES"),
+            NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil"),
+            NSPredicate(format: "SELF != %@", item)
+        ])
+
         do {
-            guard let wardrobe = selectedWardrobe else {
-                closetItems = []
-                return
+            let results = try viewContext.fetch(request)
+            let wardrobeID = wardrobe.objectID
+            closetItems = results.filter { candidate in
+                guard let wardrobes = candidate.wardrobes as? Set<Wardrobe> else { return false }
+                return wardrobes.contains { $0.objectID == wardrobeID }
             }
-            
-            // Fetch items from closet wardrobe, excluding drafts and the current item
-            let request: NSFetchRequest<Item> = Item.fetchRequest()
-            request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.createdAt, ascending: false)]
-            
-            let wardrobePredicate = NSPredicate(format: "ANY wardrobes == %@", wardrobe)
-            let draftPredicate = NSPredicate(format: "isDraft != YES")
-            let notSoftDeletedPredicate = NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
-            let notCurrentItemPredicate = NSPredicate(format: "SELF != %@", item)
-            
-            let finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
-                wardrobePredicate,
-                draftPredicate,
-                notSoftDeletedPredicate,
-                notCurrentItemPredicate
-            ])
-            
-            request.predicate = finalPredicate
-            
-            closetItems = try viewContext.fetch(request)
         } catch {
             print("❌ Failed to fetch closet items: \(error)")
             closetItems = []
@@ -225,9 +229,9 @@ struct PairItemSelectionView: View {
             // Trigger automatic sync for both items
             SyncService.shared.syncItemIfNeeded(item)
             SyncService.shared.syncItemIfNeeded(itemToRemove)
-            
-            // Clear the state variable and allow user to continue pairing/unpairing
+
             itemToUnpair = nil
+            dismiss()
         } catch {
             print("❌ Failed to un-pair item: \(error)")
         }

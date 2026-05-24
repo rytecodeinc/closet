@@ -8,6 +8,24 @@
 import SwiftUI
 import CoreData
 
+enum SizeType: String, CaseIterable {
+    case alpha = "Alpha"
+    case numeric = "Numeric"
+    case shoe = "Shoe"
+
+    func matches(scale: String?) -> Bool {
+        guard let scale = scale else { return false }
+        switch self {
+        case .alpha:
+            return scale == "Alpha (XXS-XXL)"
+        case .numeric:
+            return scale == "US Numeric"
+        case .shoe:
+            return scale == "US Shoe"
+        }
+    }
+}
+
 struct SetSizeView: View {
     @ObservedObject var item: Item
     @Environment(\.managedObjectContext) private var viewContext

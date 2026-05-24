@@ -11,6 +11,7 @@ import CoreData
 
 struct ItemDraftsView: View {
     @Environment(\.managedObjectContext) private var viewContext
+    @EnvironmentObject private var authSession: AuthSession
 
     /// Called when the user taps a draft to continue editing it.
     var onSelectDraft: ((Item) -> Void)? = nil
@@ -18,8 +19,17 @@ struct ItemDraftsView: View {
     @FetchRequest(
         entity: Item.entity(),
         sortDescriptors: [NSSortDescriptor(keyPath: \Item.createdAt, ascending: false)],
-        predicate: NSPredicate(format: "isDraft == YES")
-    ) private var drafts: FetchedResults<Item>
+        predicate: NSPredicate(format: "isDraft == YES AND (isSoftDeleted != YES OR isSoftDeleted == nil)")
+    ) private var allDrafts: FetchedResults<Item>
+
+    private var currentUserId: String? {
+        authSession.userId?.uuidString
+    }
+
+    private var drafts: [Item] {
+        guard let userId = currentUserId else { return [] }
+        return allDrafts.filter { $0.userId == userId }
+    }
     
     // Selection mode state
     @State private var isInSelectionMode: Bool = false

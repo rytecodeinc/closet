@@ -12,9 +12,14 @@ struct SetLocationView: View {
     @ObservedObject var item: Item
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authSession: AuthSession
 
     @State private var locations: [Location] = []
     @State private var newLocationName: String = ""
+
+    private var referenceUserId: String? {
+        effectiveReferenceDataUserId(signedInUserId: authSession.userId, entityUserId: item.userId)
+    }
 
     var filteredLocations: [Location] {
         guard !newLocationName.isEmpty else { return locations }
@@ -111,23 +116,12 @@ struct SetLocationView: View {
 
     // MARK: - Fetch Locations
     private func fetchLocations() {
-        let request: NSFetchRequest<Location> = Location.fetchRequest()
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Location.name, ascending: true)]
-        if let uid = item.userId, !uid.isEmpty {
-            let owned = NSPredicate(format: "userId == %@", uid)
-            let usedByUser = NSPredicate(
-                format: "SUBQUERY(item, $i, $i.userId == %@ AND ($i.isSoftDeleted != YES OR $i.isSoftDeleted == nil)).@count > 0",
-                uid
-            )
-            request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, usedByUser])
+        guard let uid = referenceUserId, !uid.isEmpty else {
+            locations = []
+            return
         }
         do {
-            let fetched = try viewContext.fetch(request)
-            if let uid = item.userId, !uid.isEmpty {
-                locations = dedupeNamedReferenceRows(fetched, preferredUserId: uid)
-            } else {
-                locations = fetched
-            }
+            locations = try viewContext.fetchLocationsForItemPicker(userId: uid, includingLocationOn: item)
         } catch {
             print("❌ Failed to fetch locations: \(error)")
             locations = []
@@ -168,7 +162,7 @@ struct SetLocationView: View {
         let newLocation = Location(context: viewContext)
         newLocation.id = UUID()
         newLocation.name = trimmed
-        newLocation.userId = item.userId
+        newLocation.userId = referenceUserId ?? item.userId
 
         item.location = newLocation
         

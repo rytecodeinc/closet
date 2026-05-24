@@ -12,9 +12,14 @@ struct SetOutfitCategoryView: View {
     @ObservedObject var outfit: Outfit
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authSession: AuthSession
 
     @State private var categories: [String] = []
     @State private var newCategoryName: String = ""
+
+    private var referenceUserId: String? {
+        effectiveReferenceDataUserId(signedInUserId: authSession.userId, entityUserId: outfit.userId)
+    }
     
     var filteredCategories: [String] {
         guard !newCategoryName.isEmpty else { return categories }
@@ -108,12 +113,17 @@ struct SetOutfitCategoryView: View {
 
     // MARK: - Fetch Categories
     private func fetchCategories() {
+        guard let uid = referenceUserId else {
+            categories = []
+            return
+        }
+
         let request: NSFetchRequest<Outfit> = Outfit.fetchRequest()
         request.propertiesToFetch = ["category"]
-        
+        request.predicate = NSPredicate(format: "userId == %@", uid)
+
         do {
             let allOutfits = try viewContext.fetch(request)
-            // Get unique, non-empty categories
             let allCategories = allOutfits.compactMap { $0.category }.filter { !$0.isEmpty }
             categories = Array(Set(allCategories)).sorted()
         } catch {

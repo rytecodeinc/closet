@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct PublicUserProfileAvatarView: View {
     let profile: PublicUserProfile
@@ -13,7 +14,11 @@ struct PublicUserProfileAvatarView: View {
 
     var body: some View {
         Group {
-            if let url = resolvedAvatarURL {
+            if let localImage = localFileAvatarImage {
+                Image(uiImage: localImage)
+                    .resizable()
+                    .scaledToFill()
+            } else if let url = resolvedAvatarURL {
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case .success(let image):
@@ -38,6 +43,20 @@ struct PublicUserProfileAvatarView: View {
         guard let raw = profile.avatarUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
               !raw.isEmpty else { return nil }
         return URL(string: raw)
+    }
+
+    /// TestFlight-tier avatars are stored under Application Support (`file://…`).
+    private var localFileAvatarImage: UIImage? {
+        if let url = resolvedAvatarURL, url.isFileURL,
+           let image = UIImage(contentsOfFile: url.path) {
+            return image
+        }
+        if !AppEnvironment.capabilities.enablesCloudSync,
+           ProfileAvatarLocalStorage.hasSavedAvatar(userId: profile.userId) {
+            let path = ProfileAvatarLocalStorage.fileURL(for: profile.userId).path
+            return UIImage(contentsOfFile: path)
+        }
+        return nil
     }
 
     private var initialsPlaceholder: some View {

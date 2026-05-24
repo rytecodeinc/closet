@@ -12,9 +12,14 @@ struct SetTagView: View {
     @ObservedObject var item: Item
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authSession: AuthSession
 
     @State private var tags: [Tag] = []
     @State private var showAddTagView: Bool = false
+
+    private var referenceUserId: String? {
+        effectiveReferenceDataUserId(signedInUserId: authSession.userId, entityUserId: item.userId)
+    }
 
     var selectedTags: [Tag] {
         (item.tags as? Set<Tag>)?.sorted(by: { ($0.name ?? "") < ($1.name ?? "") }) ?? []
@@ -62,13 +67,19 @@ struct SetTagView: View {
 
     // MARK: - Fetch Tags
     private func fetchTags() {
-        let request: NSFetchRequest<Tag> = Tag.fetchRequest()
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Tag.name, ascending: true)]
-        if let uid = item.userId, !uid.isEmpty {
-            request.predicate = NSPredicate(format: "userId == %@", uid)
+        guard let uid = referenceUserId, !uid.isEmpty else {
+            tags = []
+            return
         }
+        let wardrobeType = (item.wardrobes as? Set<Wardrobe>)?.contains { $0.type?.lowercased() == "wishlist" } == true
+            ? "wishlist"
+            : "closet"
         do {
-            tags = try viewContext.fetch(request)
+            tags = try viewContext.fetchTagsForItemPicker(
+                userId: uid,
+                wardrobeType: wardrobeType,
+                includingTagsOn: item
+            )
         } catch {
             print("❌ Failed to fetch tags: \(error)")
             tags = []

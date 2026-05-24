@@ -12,9 +12,14 @@ struct SetBrandView: View {
     @ObservedObject var item: Item
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authSession: AuthSession
 
     @State private var brands: [Brand] = []
     @State private var newBrandName: String = ""
+
+    private var referenceUserId: String? {
+        effectiveReferenceDataUserId(signedInUserId: authSession.userId, entityUserId: item.userId)
+    }
     
     var filteredBrands: [Brand] {
         guard !newBrandName.isEmpty else { return brands }
@@ -117,41 +122,12 @@ struct SetBrandView: View {
 
     // MARK: - Fetch Brands
     private func fetchBrands() {
-        if item.userId == nil || item.userId?.isEmpty == true {
-            cleanupOrphanedBrands()
-        }
-
-        let request: NSFetchRequest<Brand> = Brand.fetchRequest()
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Brand.name, ascending: true)]
-
-        if let uid = item.userId, !uid.isEmpty {
-            let visible = NSPredicate(format: "isVisible == YES")
-            let owned = NSPredicate(format: "userId == %@", uid)
-            let usedByUser = NSPredicate(
-                format: "SUBQUERY(items, $i, $i.userId == %@ AND ($i.isSoftDeleted != YES OR $i.isSoftDeleted == nil)).@count > 0",
-                uid
-            )
-            let scope = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, usedByUser])
-            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [visible, scope])
-            do {
-                let fetched = try viewContext.fetch(request)
-                brands = dedupeNamedReferenceRows(fetched, preferredUserId: uid)
-            } catch {
-                print("❌ Failed to fetch brands: \(error)")
-                brands = []
-            }
+        guard let uid = referenceUserId, !uid.isEmpty else {
+            brands = []
             return
         }
-
-        request.predicate = NSPredicate(format: "isVisible == YES")
         do {
-            let allBrands = try viewContext.fetch(request)
-            brands = allBrands.filter { brand in
-                if let items = brand.items as? Set<Item> {
-                    return !items.isEmpty
-                }
-                return false
-            }
+            brands = try viewContext.fetchBrandsForItemPicker(userId: uid, includingBrandOn: item)
         } catch {
             print("❌ Failed to fetch brands: \(error)")
             brands = []
@@ -224,7 +200,7 @@ struct SetBrandView: View {
         newBrand.id = UUID()
         newBrand.name = trimmed
         newBrand.isVisible = true
-        newBrand.userId = item.userId
+        newBrand.userId = referenceUserId ?? item.userId
 
         item.brand = newBrand
         

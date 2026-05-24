@@ -14,6 +14,8 @@ struct SizeListView: View {
     @Binding var selectedSizeValue: String?
     /// When set, only sizes owned by or used by this user's items appear.
     var userId: String? = nil
+    /// When true (ItemFilterView), only sizes on the user's items appear.
+    var itemsOnly: Bool = false
     
     @State private var sizeValues: [String] = []
 
@@ -55,22 +57,8 @@ struct SizeListView: View {
     }
 
     private func fetchSizes() {
-        let request: NSFetchRequest<Size> = Size.fetchRequest()
-        request.sortDescriptors = [
-            NSSortDescriptor(keyPath: \Size.sortOrder, ascending: true),
-            NSSortDescriptor(keyPath: \Size.value, ascending: true)
-        ]
-        if let uid = userId {
-            let owned = NSPredicate(format: "userId == %@", uid)
-            let usedByUser = NSPredicate(
-                format: "SUBQUERY(items, $i, $i.userId == %@ AND ($i.isSoftDeleted != YES OR $i.isSoftDeleted == nil)).@count > 0",
-                uid
-            )
-            request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, usedByUser])
-        }
         do {
-            let allSizes = try viewContext.fetch(request)
-            // Get unique size values
+            let allSizes = try viewContext.fetchSizesForFilterList(userId: userId, itemsOnly: itemsOnly)
             var seenValues = Set<String>()
             sizeValues = allSizes.compactMap { size in
                 guard let value = size.value, !value.isEmpty else { return nil }

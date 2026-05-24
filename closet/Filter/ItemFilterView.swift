@@ -13,6 +13,7 @@ struct ItemFilterView: View {
     @ObservedObject var filterModel: ItemFilterModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.appCapabilities) private var appCapabilities
     @EnvironmentObject private var authSession: AuthSession
     
     var wardrobeType: String = "closet" // Default to "closet" for backward compatibility
@@ -91,7 +92,7 @@ struct ItemFilterView: View {
                 }
                 
                 // Size filter
-                NavigationLink(destination: SizeListView(selectedSizeValue: $filterModel.selectedSizeValue, userId: currentUserId)) {
+                NavigationLink(destination: SizeListView(selectedSizeValue: $filterModel.selectedSizeValue, userId: currentUserId, itemsOnly: true)) {
                     HStack {
                         Text("Size")
                         Spacer()
@@ -104,7 +105,7 @@ struct ItemFilterView: View {
                 }
                 
                 // Color filter
-                NavigationLink(destination: ColorListView(selectedColorNames: $filterModel.selectedColors, userId: currentUserId)) {
+                NavigationLink(destination: ColorListView(selectedColorNames: $filterModel.selectedColors, userId: currentUserId, itemsOnly: true)) {
                     HStack {
                         Text("Colors")
                         Spacer()
@@ -173,34 +174,34 @@ struct ItemFilterView: View {
                     }
                 }
                 
-                // Weight filter
-                HStack {
-                    Text("Weight")
-                        .foregroundColor(.primary)
-                    Spacer()
-                    
-                    // Show user weight if available and filter is enabled
-                    if filterModel.filterByWeight {
-                        let repository = UserProfileRepository(context: viewContext)
-                        let userWeightKg = repository.getWeightKg()
-                        let userWeightUnit = repository.getWeightUnit()
-                        
-                        if userWeightKg > 0 {
-                            let displayWeight = userWeightUnit == "kg" ? userWeightKg : userWeightKg * 2.20462
-                            Text("\(String(format: "%.1f", displayWeight)) \(userWeightUnit)")
-                                .foregroundColor(.gray)
-                                .font(.subheadline)
-                        } else {
-                            Text("Set in Profile")
-                                .foregroundColor(.orange)
-                                .font(.subheadline)
+                if appCapabilities.showsWeightAttribute {
+                    HStack {
+                        Text("Weight")
+                            .foregroundColor(.primary)
+                        Spacer()
+
+                        if filterModel.filterByWeight {
+                            let repository = UserProfileRepository(context: viewContext)
+                            let userWeightKg = repository.getWeightKg()
+                            let userWeightUnit = repository.getWeightUnit()
+
+                            if userWeightKg > 0 {
+                                let displayWeight = userWeightUnit == "kg" ? userWeightKg : userWeightKg * 2.20462
+                                Text("\(String(format: "%.1f", displayWeight)) \(userWeightUnit)")
+                                    .foregroundColor(.gray)
+                                    .font(.subheadline)
+                            } else {
+                                Text("Set in Profile")
+                                    .foregroundColor(.orange)
+                                    .font(.subheadline)
+                            }
                         }
+
+                        Toggle("", isOn: $filterModel.filterByWeight)
+                            .labelsHidden()
                     }
-                    
-                    Toggle("", isOn: $filterModel.filterByWeight)
-                        .labelsHidden()
                 }
-                
+
                 // Tag filter
                 NavigationLink(destination: TagListView(selectedTags: $filterModel.selectedTags, wardrobeType: wardrobeType, userId: currentUserId)) {
                     HStack {
@@ -213,13 +214,18 @@ struct ItemFilterView: View {
                         }
                     }
                 }
+                
+                // Reset button
+                Section {
+                      Button("Reset All", role: .destructive) {
+                          filterModel.clearAll()
+                      }
+                      .frame(maxWidth: .infinity, alignment: .center)
+                  }
+                .listRowSeparator(.hidden)
             }
             .listStyle(.plain)
-            // Spacer()
-            Button("Reset All") {
-                filterModel.clearAll()
-            }
-            .foregroundColor(Color.red)
+            
             .navigationTitle("Filter")
             .navigationBarTitleDisplayMode(.inline)
             //  .onAppear { print("ItemFilterView: onAppear") }

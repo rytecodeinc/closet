@@ -84,6 +84,21 @@ struct EventDetailView: View {
         }
         return []
     }
+
+    private var hasEventLocation: Bool {
+        guard let location = event.location?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !location.isEmpty else { return false }
+        return true
+    }
+
+    private var eventMapCoordinate: CLLocationCoordinate2D? {
+        guard hasEventLocation,
+              let latitude = event.latitude as Double?,
+              let longitude = event.longitude as Double?,
+              latitude != 0 || longitude != 0 else { return nil }
+        return CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
     
     var body: some View {
         ScrollView {
@@ -340,11 +355,10 @@ struct EventDetailView: View {
                 }
                 .padding(.horizontal)
                 
-                Divider()
-                
-                // MARK: Map
-                if let latitude = event.latitude as Double?,
-                   let longitude = event.longitude as Double? {
+                if let coordinate = eventMapCoordinate {
+                    Divider()
+
+                    // MARK: Map
                     Button(action: {
                         if hasGoogleMaps() {
                             showingMapOptions = true
@@ -352,7 +366,7 @@ struct EventDetailView: View {
                             openAppleMaps()
                         }
                     }) {
-                        MapSnapshotView(coordinate: CLLocationCoordinate2D(latitude: latitude, longitude: longitude))
+                        MapSnapshotView(coordinate: coordinate)
                             .frame(height: 150)
                             .clipped()
                     }
@@ -371,10 +385,8 @@ struct EventDetailView: View {
             }
         }
         .sheet(isPresented: $showingEditView) {
-            NavigationStack {
-                CreateEventView(eventToEdit: event)
-                    .environment(\.managedObjectContext, viewContext)
-            }
+            CreateEventView(eventToEdit: event)
+                .environment(\.managedObjectContext, viewContext)
         }
         // MARK: Navigation destinations
         .navigationDestination(isPresented: $navigateToOutfits) {

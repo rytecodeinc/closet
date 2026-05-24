@@ -12,12 +12,24 @@ struct SetOutfitTagView: View {
     @ObservedObject var outfit: Outfit
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authSession: AuthSession
 
     @State private var tags: [Tag] = []
     @State private var showAddTagView: Bool = false
 
+    private var referenceUserId: String? {
+        effectiveReferenceDataUserId(signedInUserId: authSession.userId, entityUserId: outfit.userId)
+    }
+
     var selectedTags: [Tag] {
         (outfit.tags as? Set<Tag>)?.sorted(by: { ($0.name ?? "") < ($1.name ?? "") }) ?? []
+    }
+
+    private var wardrobeTypeForTags: String {
+        guard let items = outfit.items as? Set<Item> else { return "closet" }
+        return items.contains { item in
+            (item.wardrobes as? Set<Wardrobe>)?.contains { $0.type?.lowercased() == "wishlist" } == true
+        } ? "wishlist" : "closet"
     }
 
     var body: some View {
@@ -25,7 +37,6 @@ struct SetOutfitTagView: View {
             SelectionHeader(title: "Select Tags")
             
             VStack(alignment: .leading, spacing: 12) {
-                // Add Tag Button
                 Button(action: {
                     showAddTagView = true
                 }) {
@@ -36,7 +47,6 @@ struct SetOutfitTagView: View {
                         .padding(.top)
                 }
 
-                // Tag Cloud
                 if selectedTags.isEmpty {
                     Text("No tags have been added.")
                         .foregroundColor(.gray)
@@ -57,27 +67,35 @@ struct SetOutfitTagView: View {
             fetchTags()
         }
         .sheet(isPresented: $showAddTagView) {
-            NavigationView {
-                SetOutfitTagDisplayView(outfit: outfit)
-                    .environment(\.managedObjectContext, viewContext)
-            }
-            .presentationDetents([.medium, .large])
+            SetOutfitTagDisplayView(outfit: outfit)
+                .environment(\.managedObjectContext, viewContext)
         }
+        .presentationDetents([.medium, .large])
     }
 
-    // MARK: - Fetch Tags
     private func fetchTags() {
-        let request: NSFetchRequest<Tag> = Tag.fetchRequest()
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Tag.name, ascending: true)]
+        guard let uid = referenceUserId, !uid.isEmpty else {
+            tags = []
+            return
+        }
         do {
-            tags = try viewContext.fetch(request)
+            var fetched = try viewContext.fetchTagsForItemPicker(
+                userId: uid,
+                wardrobeType: wardrobeTypeForTags
+            )
+            if let outfitTags = outfit.tags as? Set<Tag> {
+                for tag in outfitTags where !fetched.contains(where: { $0.objectID == tag.objectID }) {
+                    fetched.append(tag)
+                }
+                fetched.sort { ($0.name ?? "").localizedCaseInsensitiveCompare($1.name ?? "") == .orderedAscending }
+            }
+            tags = fetched
         } catch {
             print("❌ Failed to fetch tags: \(error)")
             tags = []
         }
     }
 
-    // MARK: - Toggle Tag Selection
     private func toggleTag(_ tag: Tag) {
         if let tags = outfit.tags as? Set<Tag>, tags.contains(tag) {
             outfit.removeFromTags(tag)
@@ -95,4 +113,3 @@ struct SetOutfitTagView: View {
         }
     }
 }
-

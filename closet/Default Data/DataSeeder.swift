@@ -272,10 +272,10 @@ struct DataSeeder {
             }
             
             // Run migration to deduplicate existing sizes if any exist
-            let sizeCount = try countSizes(in: context)
-            if sizeCount > 0 {
-                try migrateDeduplicateSizes(in: context)
-            }
+            // let sizeCount = try countSizes(in: context)
+            // if sizeCount > 0 {
+            //     try migrateDeduplicateSizes(in: context)
+            // }
             
             if try countSizes(in: context) == 0 {
                 try insertDefaultSizes(in: context)
@@ -300,6 +300,8 @@ struct DataSeeder {
     /// - Removes duplicates by keeping one size per (value, scale) pair
     /// - Updates all Item.size references to point to kept sizes
     /// - Sets category to nil on all sizes (sizes are now independent)
+    // Disabled — preloadDefaultSizes call commented out.
+    /*
     private func migrateDeduplicateSizes(in context: NSManagedObjectContext) throws {
         print("🔄 Starting size deduplication migration...")
         
@@ -401,6 +403,7 @@ struct DataSeeder {
         try context.save()
         print("✅ Size deduplication migration completed. Deleted \(sizesToDelete.count) duplicate sizes.")
     }
+    */
 
     
     // MARK: - Size Helpers

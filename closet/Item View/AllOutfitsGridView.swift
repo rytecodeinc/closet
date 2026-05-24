@@ -10,16 +10,24 @@ import CoreData
 
 struct AllOutfitsGridView: View {
     let item: Item  // Pass the item instead of outfits array
-    
-    @FetchRequest private var outfits: FetchedResults<Outfit>
+    @EnvironmentObject private var authSession: AuthSession
+
+    @FetchRequest private var allOutfits: FetchedResults<Outfit>
+
+    private var outfits: [Outfit] {
+        guard let userId = authSession.userId?.uuidString else { return [] }
+        return allOutfits.filter { $0.userId == userId }
+    }
     
     init(item: Item) {
         self.item = item
-        // Fetch outfits that contain this item (excluding drafts)
-        _outfits = FetchRequest(
+        _allOutfits = FetchRequest(
             entity: Outfit.entity(),
             sortDescriptors: [NSSortDescriptor(keyPath: \Outfit.createdAt, ascending: false)],
-            predicate: NSPredicate(format: "items CONTAINS %@ AND isDraft != YES", item)
+            predicate: NSPredicate(
+                format: "items CONTAINS %@ AND isDraft != YES AND (isSoftDeleted != YES OR isSoftDeleted == nil)",
+                item
+            )
         )
     }
     

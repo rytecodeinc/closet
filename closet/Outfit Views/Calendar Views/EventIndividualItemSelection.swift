@@ -11,9 +11,13 @@ import CoreData
 struct EventIndividualItemSelection: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authSession: AuthSession
 
     @ObservedObject var event: Event
+    /// When nil, the user's primary closet wardrobe is used.
+    let selectedWardrobe: Wardrobe?
 
+    @State private var closetItems: [Item] = []
     @State private var selectedItemIDs: [UUID] = [] // Use array to preserve selection order
 
     private let gridColumns = [
@@ -24,20 +28,14 @@ struct EventIndividualItemSelection: View {
     
     private var squareSize = UIScreen.main.bounds.width / 3.05
 
-    // MARK: - FetchRequest for closet items only
-    @FetchRequest(
-        sortDescriptors: [NSSortDescriptor(keyPath: \Item.createdAt, ascending: false)],
-        predicate: NSPredicate(format: "ANY wardrobes.type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", "closet")
-    ) private var items: FetchedResults<Item>
-
-    // MARK: - Explicit initializer
-    init(event: Event) {
+    init(event: Event, selectedWardrobe: Wardrobe? = nil) {
         self.event = event
+        self.selectedWardrobe = selectedWardrobe
     }
 
     var body: some View {
         VStack {
-            if items.isEmpty {
+            if closetItems.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "tshirt")
                         .font(.system(size: 40))
@@ -55,7 +53,7 @@ struct EventIndividualItemSelection: View {
             } else {
                 ScrollView {
                     LazyVGrid(columns: gridColumns, spacing: 2) {
-                        ForEach(items, id: \.objectID) { item in
+                        ForEach(closetItems, id: \.objectID) { item in
                             ZStack(alignment: .topTrailing) {
                                 Button {
                                     toggleSelection(for: item)
@@ -70,12 +68,10 @@ struct EventIndividualItemSelection: View {
                                     Image(systemName: "checkmark.circle.fill")
                                         .foregroundColor(.blue)
                                         .font(.system(size: 20))
-                                      //  .padding(6)
                                 }
                             }
                         }
                     }
-                  //  .padding(4)
                 }
             }
             
@@ -84,13 +80,62 @@ struct EventIndividualItemSelection: View {
                 dismiss()
             }
             .buttonStyle(.borderedProminent)
-        //    .padding()
         }
         .navigationTitle("Select Items for Event")
         .onAppear {
+            fetchClosetItems()
             preselectExistingItems()
         }
+        .onChange(of: authSession.userId) { _, _ in
+            fetchClosetItems()
+        }
         .presentationDetents([.medium, .large])
+    }
+
+    // MARK: - Fetch closet items scoped to one active wardrobe
+    private func fetchClosetItems() {
+        guard let userId = authSession.userId?.uuidString, !userId.isEmpty else {
+            closetItems = []
+            return
+        }
+
+        let wardrobe: Wardrobe
+        if let selected = selectedWardrobe,
+           selected.userId == userId,
+           (selected.type ?? "").lowercased() == "closet",
+           selected.isSoftDeleted != true {
+            wardrobe = selected
+        } else if let primary = try? WardrobeBootstrap.fetchPrimaryWardrobe(
+            forType: "closet",
+            userIdString: userId,
+            in: viewContext
+        ) {
+            wardrobe = primary
+        } else {
+            closetItems = []
+            return
+        }
+
+        let request: NSFetchRequest<Item> = Item.fetchRequest()
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.createdAt, ascending: false)]
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            NSPredicate(format: "userId == %@", userId),
+            NSPredicate(format: "ANY wardrobes == %@", wardrobe),
+            NSPredicate(format: "isDraft != YES"),
+            NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
+        ])
+
+        do {
+            let results = try viewContext.fetch(request)
+            let wardrobeID = wardrobe.objectID
+            closetItems = results.filter { item in
+                guard let wardrobes = item.wardrobes as? Set<Wardrobe> else { return false }
+                return wardrobes.contains { $0.objectID == wardrobeID }
+            }
+        } catch {
+            print("Failed to fetch closet items: \(error)")
+            closetItems = []
+        }
     }
 
     // MARK: - Preselect items already linked to event
@@ -112,18 +157,15 @@ struct EventIndividualItemSelection: View {
 
     // MARK: - Save selection
     private func saveSelectedItems() {
-        // Create a dictionary for quick lookup
-        let itemsById: [UUID: Item] = Dictionary(uniqueKeysWithValues: items.compactMap { item in
+        let itemsById: [UUID: Item] = Dictionary(uniqueKeysWithValues: closetItems.compactMap { item in
             guard let id = item.id else { return nil }
             return (id, item)
         })
         
-        // Clear all existing items to ensure correct order
         if let existingItems = event.items as? NSOrderedSet {
             event.removeFromItems(existingItems)
         }
         
-        // Add items in selection order
         for id in selectedItemIDs {
             if let item = itemsById[id] {
                 event.addToItems(item)
@@ -131,7 +173,6 @@ struct EventIndividualItemSelection: View {
         }
         syncEventUserIdFromLinkedEntities(event)
         
-        // Only save context if event is already persisted (not a temporary/new event)
         if !event.objectID.isTemporaryID {
             do {
                 try viewContext.save()
