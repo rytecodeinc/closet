@@ -38,18 +38,25 @@ struct closetApp: App {
     
     var body: some Scene {
         WindowGroup {
-            Group {
+            ZStack {
+                Group {
+                    if authSession.isAuthenticated {
+                        ContentView()
+                    } else {
+                        AuthView()
+                    }
+                }
+                .opacity(launchBootstrapComplete ? 1 : 0)
+
                 if !launchBootstrapComplete {
                     LaunchView(
                         persistence: persistenceController,
                         launchBootstrapComplete: $launchBootstrapComplete
                     )
-                } else if authSession.isAuthenticated {
-                    ContentView()
-                } else {
-                    AuthView()
+                    .transition(.opacity)
                 }
             }
+            .animation(.easeOut(duration: 0.25), value: launchBootstrapComplete)
                 .environment(\.managedObjectContext, persistenceController.container.viewContext)
                 .environmentObject(deepLinkRouter)
                 .environmentObject(userService)
@@ -58,6 +65,7 @@ struct closetApp: App {
                 .environmentObject(syncService)
                 .environmentObject(networkMonitor)
                 .environmentObject(bulkItemImportCoordinator)
+                .environment(\.appCapabilities, AppEnvironment.capabilities)
                 .onChange(of: scenePhase) { phase in
                     // On foreground/activation, purge any tombstones that have already been deleted in Supabase.
                     if phase == .active {

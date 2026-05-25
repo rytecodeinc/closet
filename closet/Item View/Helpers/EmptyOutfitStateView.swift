@@ -18,7 +18,7 @@ struct EmptyOutfitStateView: View {
             Text("No saved outfits yet")
                 .font(.headline)
                 .foregroundColor(.secondary)
-            Text("Outfits are collages of items from your closet.")
+            Text("Click the '+' button to create an outfit")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)

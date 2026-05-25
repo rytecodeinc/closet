@@ -211,6 +211,7 @@ struct PackingChecklistView: View {
         return trimmed
     }
 
+    /// Ensures each checklist tab has at least one section (GENERAL by default) for this wardrobe.
     private func migrateChecklistSectionsIfNeeded() {
         for kind in [PackingChecklistKind.items, .todo] {
             let existing = sections(kind: kind)

@@ -11,6 +11,7 @@ import SwiftUI
 
 struct OutfitGridView: View {
     @Environment(\.managedObjectContext) private var viewContext
+    @EnvironmentObject private var authSession: AuthSession
     
     @State private var outfits: [Outfit] = []
     @State private var isEditing: Bool = false // <-- tracks edit mode
@@ -35,7 +36,7 @@ struct OutfitGridView: View {
                         Text("No saved outfits yet")
                             .font(.headline)
                             .foregroundColor(.secondary)
-                        Text("Outfits are collages of items from your closet.")
+                        Text("Click the '+' button to create an outfit")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
@@ -90,6 +91,9 @@ struct OutfitGridView: View {
             .onAppear {
                 fetchOutfits()
             }
+            .onChange(of: authSession.userId) { _, _ in
+                fetchOutfits()
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     // Toggle Edit Mode
@@ -118,22 +122,24 @@ struct OutfitGridView: View {
     
     // MARK: - Core Data fetch
      func fetchOutfits() {
+        guard let userId = authSession.userId?.uuidString, !userId.isEmpty else {
+            outfits = []
+            return
+        }
+
         let request = NSFetchRequest<Outfit>(entityName: "Outfit")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.createdAt, ascending: false)]
-        // Exclude drafts from regular outfit listings
-        request.predicate = NSPredicate(format: "isDraft != YES")
-        
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            NSPredicate(format: "userId == %@", userId),
+            NSPredicate(format: "isDraft != YES"),
+            NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
+        ])
+
         do {
-            let results = try viewContext.fetch(request)
-            DispatchQueue.main.async {
-                self.outfits = results
-                
-            }
+            outfits = try viewContext.fetch(request)
         } catch {
             print("Failed to fetch outfits: \(error)")
-            DispatchQueue.main.async {
-                self.outfits = []
-            }
+            outfits = []
         }
     }
     

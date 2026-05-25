@@ -14,7 +14,7 @@ enum SocialEngagementToolbarSegment: Int, CaseIterable, Hashable {
         switch self {
         case .tshirt: "tshirt"
         // case .arrowBackward: "arrowshape.turn.up.backward"
-        case .person: "person.and.background.striped.horizontal"
+        case .person: "person.crop.square.badge.camera"
         }
     }
 
@@ -32,9 +32,9 @@ struct SocialEngagementActionsRow: View {
 
     /// When non-`nil`, the heart reflects favorite on/off (`true` = `heart.fill`). When `nil`, shows outline `heart` (e.g. outfits).
     var favoriteSelection: Bool?
+    var showsShareButton: Bool
     var onLike: () -> Void
     var onShare: () -> Void
-    var onPhotoStorage: (() -> Void)?
 
     private var heartSystemImage: String {
         guard let isOn = favoriteSelection else { return "heart" }
@@ -49,15 +49,15 @@ struct SocialEngagementActionsRow: View {
     init(
         segmentSelection: Binding<SocialEngagementToolbarSegment> = .constant(.tshirt),
         favoriteSelection: Bool? = nil,
+        showsShareButton: Bool = true,
         onLike: @escaping () -> Void = {},
-        onShare: @escaping () -> Void = {},
-        onPhotoStorage: (() -> Void)? = nil
+        onShare: @escaping () -> Void = {}
     ) {
         _segmentSelection = segmentSelection
         self.favoriteSelection = favoriteSelection
+        self.showsShareButton = showsShareButton
         self.onLike = onLike
         self.onShare = onShare
-        self.onPhotoStorage = onPhotoStorage
     }
 
     var body: some View {
@@ -69,20 +69,13 @@ struct SocialEngagementActionsRow: View {
             .buttonStyle(.plain)
             .accessibilityLabel(heartAccessibilityLabel)
 
-            Button(action: onShare) {
-                Image(systemName: "paperplane")
-                    .imageScale(.large)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Share")
-
-            if let onPhotoStorage {
-                Button(action: onPhotoStorage) {
-                    Image(systemName: "internaldrive")
+            if showsShareButton {
+                Button(action: onShare) {
+                    Image(systemName: "paperplane")
                         .imageScale(.large)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Image storage")
+                .accessibilityLabel("Share")
             }
 
             Spacer(minLength: 12)

@@ -162,6 +162,227 @@ func dedupeNamedReferenceRows<T: NSManagedObject>(_ rows: [T], preferredUserId: 
     }
 }
 
+// MARK: - Reference data lists (filters & attribute pickers)
+
+extension NSManagedObjectContext {
+    fileprivate static let activeItemSubquery = "$i.userId == %@ AND ($i.isSoftDeleted != YES OR $i.isSoftDeleted == nil)"
+
+    fileprivate func dedupeIfScoped<T: NSManagedObject>(_ rows: [T], userId: String?) -> [T] {
+        guard let uid = userId else { return rows }
+        return dedupeNamedReferenceRows(rows, preferredUserId: uid)
+    }
+
+    /// Categories linked to the user's non-deleted items; deduped by display name.
+    func fetchCategoriesForFilterList(userId: String?) throws -> [Category] {
+        guard let uid = userId, !uid.isEmpty else { return [] }
+        let request = NSFetchRequest<Category>(entityName: "Category")
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Category.name, ascending: true)]
+        let usedByUserItems = NSPredicate(
+            format: "SUBQUERY(items, $i, \(Self.activeItemSubquery)).@count > 0",
+            uid
+        )
+        request.predicate = usedByUserItems
+        return dedupeIfScoped(try fetch(request), userId: uid)
+    }
+
+    /// Subcategories linked to the user's items; deduped and sorted like `CategoryFilterListView`.
+    func sortedSubcategoriesForFilterList(_ category: Category, userId: String?) -> [Subcategory] {
+        let set = (category.subcategories as? Set<Subcategory>) ?? []
+        let filtered: [Subcategory]
+        if let uid = userId, !uid.isEmpty {
+            filtered = set.filter { sub in
+                let items = sub.items as? Set<Item> ?? []
+                return items.contains {
+                    $0.userId == uid && ($0.isSoftDeleted != true)
+                }
+            }
+        } else {
+            filtered = []
+        }
+        let deduped = dedupeIfScoped(filtered, userId: userId)
+        return deduped.sorted {
+            if $0.sortOrder != $1.sortOrder { return $0.sortOrder < $1.sortOrder }
+            return ($0.name ?? "") < ($1.name ?? "")
+        }
+    }
+
+    /// Categories owned by the user (attribute pickers & bulk set category). Not deduped.
+    func fetchCategoriesForAttributePicker(userId: String) throws -> [Category] {
+        guard !userId.isEmpty else { return [] }
+        let request = NSFetchRequest<Category>(entityName: "Category")
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Category.name, ascending: true)]
+        request.predicate = NSPredicate(format: "userId == %@", userId)
+        return try fetch(request)
+    }
+
+    /// Subcategories for a category owned by the user. Not deduped.
+    func sortedSubcategoriesForAttributePicker(_ category: Category, userId: String) -> [Subcategory] {
+        guard !userId.isEmpty else { return [] }
+        let request = NSFetchRequest<Subcategory>(entityName: "Subcategory")
+        request.predicate = NSPredicate(format: "category == %@ AND userId == %@", category, userId)
+        request.sortDescriptors = [
+            NSSortDescriptor(keyPath: \Subcategory.sortOrder, ascending: true),
+            NSSortDescriptor(keyPath: \Subcategory.name, ascending: true)
+        ]
+        do {
+            return try fetch(request)
+        } catch {
+            print("❌ Failed to fetch subcategories: \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    /// Visible colors for filter lists. When `itemsOnly` is true, only colors on the user's items appear (ItemFilterView). When false, the user's catalog plus used colors appear (item add pickers).
+    func fetchColorsForFilterList(userId: String?, itemsOnly: Bool = false) throws -> [AppColor] {
+        guard let uid = userId, !uid.isEmpty else { return [] }
+        let request = NSFetchRequest<AppColor>(entityName: "Color")
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \AppColor.name, ascending: true)]
+        let visible = NSPredicate(format: "isVisible == YES")
+        let usedByUser = NSPredicate(
+            format: "SUBQUERY(items, $i, \(Self.activeItemSubquery)).@count > 0",
+            uid
+        )
+        let scope: NSPredicate
+        if itemsOnly {
+            scope = usedByUser
+        } else {
+            let owned = NSPredicate(format: "userId == %@", uid)
+            scope = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, usedByUser])
+        }
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [visible, scope])
+        return dedupeIfScoped(try fetch(request), userId: uid)
+    }
+
+    /// Visible seasons owned by the user or linked to their items.
+    func fetchSeasonsForFilterList(userId: String?) throws -> [Season] {
+        let request = NSFetchRequest<Season>(entityName: "Season")
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Season.name, ascending: true)]
+        if let uid = userId {
+            let visible = NSPredicate(format: "isVisible == YES")
+            let owned = NSPredicate(format: "userId == %@", uid)
+            let usedByUser = NSPredicate(
+                format: "SUBQUERY(item, $i, \(Self.activeItemSubquery)).@count > 0",
+                uid
+            )
+            let scope = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, usedByUser])
+            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [visible, scope])
+        }
+        return dedupeIfScoped(try fetch(request), userId: userId)
+    }
+
+    /// Locations linked to the user's non-deleted items.
+    func fetchLocationsForFilterList(userId: String?) throws -> [Location] {
+        guard let uid = userId, !uid.isEmpty else { return [] }
+        return try fetchLocationsForItemPicker(userId: uid)
+    }
+
+    /// Sizes for filter lists. When `itemsOnly` is true, only sizes on the user's items appear (ItemFilterView).
+    func fetchSizesForFilterList(userId: String?, itemsOnly: Bool = false) throws -> [Size] {
+        guard let uid = userId, !uid.isEmpty else { return [] }
+        let request = NSFetchRequest<Size>(entityName: "Size")
+        request.sortDescriptors = [
+            NSSortDescriptor(keyPath: \Size.sortOrder, ascending: true),
+            NSSortDescriptor(keyPath: \Size.value, ascending: true),
+        ]
+        let usedByUser = NSPredicate(
+            format: "SUBQUERY(items, $i, \(Self.activeItemSubquery)).@count > 0",
+            uid
+        )
+        if itemsOnly {
+            request.predicate = usedByUser
+        } else {
+            let owned = NSPredicate(format: "userId == %@", uid)
+            request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [owned, usedByUser])
+        }
+        return dedupeIfScoped(try fetch(request), userId: uid)
+    }
+
+    /// Brands linked to the user's non-deleted items.
+    func fetchBrandsForFilterList(userId: String?) throws -> [Brand] {
+        guard let uid = userId, !uid.isEmpty else { return [] }
+        return try fetchBrandsForItemPicker(userId: uid)
+    }
+
+    /// Tags linked to the user's non-deleted items or outfits.
+    func fetchTagsForFilterList(userId: String?, wardrobeType: String?) throws -> [Tag] {
+        guard let uid = userId, !uid.isEmpty else { return [] }
+        return try fetchTagsForItemPicker(userId: uid, wardrobeType: wardrobeType)
+    }
+
+    /// Brands linked to the user's non-deleted items (excludes unused seeded defaults like "Other").
+    func fetchBrandsForItemPicker(userId uid: String, includingBrandOn item: Item? = nil) throws -> [Brand] {
+        let request = NSFetchRequest<Brand>(entityName: "Brand")
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Brand.name, ascending: true)]
+        let visible = NSPredicate(format: "isVisible == YES")
+        let usedByUser = NSPredicate(
+            format: "SUBQUERY(items, $i, \(Self.activeItemSubquery)).@count > 0",
+            uid
+        )
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [visible, usedByUser])
+        var result = dedupeIfScoped(try fetch(request), userId: uid)
+        if let brand = item?.brand,
+           !result.contains(where: { $0.objectID == brand.objectID }) {
+            result.append(brand)
+            result.sort { ($0.name ?? "").localizedCaseInsensitiveCompare($1.name ?? "") == .orderedAscending }
+        }
+        return result
+    }
+
+    /// Locations linked to the user's non-deleted items (excludes unused seeded defaults like "Closet").
+    func fetchLocationsForItemPicker(userId uid: String, includingLocationOn item: Item? = nil) throws -> [Location] {
+        let request = NSFetchRequest<Location>(entityName: "Location")
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Location.name, ascending: true)]
+        let usedByUser = NSPredicate(
+            format: "SUBQUERY(item, $i, \(Self.activeItemSubquery)).@count > 0",
+            uid
+        )
+        request.predicate = usedByUser
+        var result = dedupeIfScoped(try fetch(request), userId: uid)
+        if let location = item?.location,
+           !result.contains(where: { $0.objectID == location.objectID }) {
+            result.append(location)
+            result.sort { ($0.name ?? "").localizedCaseInsensitiveCompare($1.name ?? "") == .orderedAscending }
+        }
+        return result
+    }
+
+    /// Tags linked to the user's non-deleted items or outfits.
+    func fetchTagsForItemPicker(
+        userId uid: String,
+        wardrobeType: String? = nil,
+        includingTagsOn item: Item? = nil
+    ) throws -> [Tag] {
+        let request = NSFetchRequest<Tag>(entityName: "Tag")
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Tag.name, ascending: true)]
+        let usedByUserItems: NSPredicate
+        if let wardrobeType {
+            usedByUserItems = NSPredicate(
+                format: "SUBQUERY(items, $i, ANY $i.wardrobes.type == %@ AND \(Self.activeItemSubquery)).@count > 0",
+                wardrobeType,
+                uid
+            )
+        } else {
+            usedByUserItems = NSPredicate(
+                format: "SUBQUERY(items, $i, \(Self.activeItemSubquery)).@count > 0",
+                uid
+            )
+        }
+        let usedByUserOutfits = NSPredicate(
+            format: "SUBQUERY(outfits, $o, $o.userId == %@ AND ($o.isSoftDeleted != YES OR $o.isSoftDeleted == nil)).@count > 0",
+            uid
+        )
+        request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [usedByUserItems, usedByUserOutfits])
+        var result = try fetch(request)
+        if let itemTags = item?.tags as? Set<Tag> {
+            for tag in itemTags where !result.contains(where: { $0.objectID == tag.objectID }) {
+                result.append(tag)
+            }
+            result.sort { ($0.name ?? "").localizedCaseInsensitiveCompare($1.name ?? "") == .orderedAscending }
+        }
+        return result
+    }
+}
+
 // MARK: - Calendar events (user scope)
 
 /// Infer `userId` from items linked to the event (ordered), then from outfits.

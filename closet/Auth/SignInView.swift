@@ -1,5 +1,5 @@
 //
-//  LoginView.swift
+//  SignInView.swift
 //  closet
 //
 //  Created by Dan Warner on 1/27/25.
@@ -8,16 +8,16 @@
 import SwiftUI
 import CoreData
 
-struct LoginView: View {
+struct SignInView: View {
     @EnvironmentObject var supabaseService: SupabaseService
     @EnvironmentObject var authSession: AuthSession
     @EnvironmentObject var syncService: SyncService
     @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.authFlowRouter) private var authFlowRouter
     @State private var email = ""
     @State private var password = ""
     @State private var errorMessage: String?
     @State private var isLoading = false
-    @State private var showSignUp = false
     @State private var isEditingUsername = false
     @State private var editedUsername: String = ""
     @State private var isSavingUsername = false
@@ -67,24 +67,23 @@ struct LoginView: View {
     }
     
     var body: some View {
-        ScrollView {
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(spacing: 0) {
                 // Header
                 VStack(spacing: 8) {
-                    Image(systemName: "person.circle.fill")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 80, height: 80)
-                        .foregroundColor(.accentColor)
+                    AuthAppIconView()
                     
-                    Text(authSession.isAuthenticated ? "Hello, \(authSession.userEmail ?? "User")!" :"Login")
+                    Text(authSession.isAuthenticated ? "Hello, \(authSession.userEmail ?? "User")!" : "Sign In")
                         .font(.largeTitle)
                         .fontWeight(.bold)
                     
-                    Text("Sign in to sync your closet")
+                    Text("Sign in to your closet")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
                 .padding(.top, 40)
+                .padding(.bottom)
                 
                 if authSession.isAuthenticated {
                     VStack(spacing: 16) {
@@ -94,7 +93,7 @@ struct LoginView: View {
                             .frame(width: 60, height: 60)
                             .foregroundColor(.green)
                         
-                        Text("Successfully Logged In")
+                        Text("Successfully Signed In")
                             .font(.headline)
                             .foregroundColor(.primary)
                         
@@ -282,72 +281,84 @@ struct LoginView: View {
                     .onChange(of: authSession.isAuthenticated) { _ in }
                     
                 } else {
-                    // Login form
+                    // Sign-in form
                     VStack(spacing: 16) {
-                        TextField("Email", text: $email)
-                            .textFieldStyle(.roundedBorder)
-                            .autocapitalization(.none)
-                            .keyboardType(.alphabet)
-                            .textContentType(.emailAddress)
-                            .autocorrectionDisabled(true)
-                        
-                        SecureField("Password", text: $password)
-                            .textFieldStyle(.roundedBorder)
-                            .textContentType(.password)
-                            .keyboardType(.alphabet)
-                            .autocorrectionDisabled(true)
-                        
-                        if let error = errorMessage {
-                            Text(error)
-                                .foregroundColor(.red)
-                                .font(.caption)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        
-                        Button {
-                            Task { await signIn() }
-                        } label: {
-                            if isLoading {
-                                ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            } else {
-                                Text("Sign In").fontWeight(.semibold)
+                        Group {
+                            signInLabeledField(title: "Email Address") {
+                                TextField("", text: $email, prompt: Text("Enter your email address"))
+                                    .textFieldStyle(.roundedBorder)
+                                    .autocapitalization(.none)
+                                    .keyboardType(.emailAddress)
+                                    .textContentType(.emailAddress)
+                                    .autocorrectionDisabled(true)
+                            }
+
+                            signInLabeledField(title: "Password") {
+                                SecureField("", text: $password, prompt: Text("Enter your password"))
+                                    .textFieldStyle(.roundedBorder)
+                                    .textContentType(.password)
+                                    .autocorrectionDisabled(true)
+                            }
+
+                            NavigationLink {
+                                ForgotPasswordView(initialEmail: email)
+                            } label: {
+                                Text("Forgot Password?")
+                                    .font(.caption)
+                                    .foregroundColor(.accentColor)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+
+                            if let error = errorMessage {
+                                Text(error)
+                                    .foregroundColor(.red)
+                                    .font(.caption)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
-                        .buttonStyle(.borderedProminent)
-                        .frame(maxWidth: .infinity)
-                        .disabled(isLoading || email.isEmpty || password.isEmpty)
-                        
-                        Button {
-                            Task { await resetPassword() }
-                        } label: {
-                            Text("Forgot Password?")
-                                .font(.caption)
-                                .foregroundColor(.accentColor)
+                        .disabled(isLoading)
+
+                        AuthPrimaryButton(
+                            "Sign In",
+                            isLoading: isLoading,
+                            isEnabled: !email.isEmpty && !password.isEmpty
+                        ) {
+                            Task { await signIn() }
                         }
+                        .frame(maxWidth: .infinity)
                     }
                     .padding(.horizontal)
+
+                    Spacer(minLength: 0)
                 }
                 
                 HStack {
                     Text("Don't have an account?").foregroundColor(.secondary)
-                    Button {
-                        showSignUp = true
-                    } label: {
-                        Text("Sign Up").fontWeight(.semibold).foregroundColor(.accentColor)
+                    if let authFlowRouter {
+                        Button {
+                            authFlowRouter.showRegisterFromSignIn()
+                        } label: {
+                            Text("Register").fontWeight(.semibold).foregroundColor(.teal)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        NavigationLink {
+                            RegisterView()
+                        } label: {
+                            Text("Register").fontWeight(.semibold).foregroundColor(.teal)
+                        }
                     }
                 }
+                .frame(maxWidth: .infinity)
                 .padding(.bottom, 20)
+                .disabled(isLoading)
+                }
+                .frame(minHeight: geometry.size.height)
             }
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle(authSession.isAuthenticated ? "Account" : "Login")
-            .navigationBarTitleDisplayMode(.inline)
-            .sheet(isPresented: $showSignUp) {
-                NavigationStack {
-                    SignUpView()
-                        .environmentObject(supabaseService)
-                }
-                .presentationDragIndicator(.visible)
-            }
+        }
+           /* .navigationTitle(authSession.isAuthenticated ? "Account" : "Sign In")
+            .navigationBarTitleDisplayMode(.inline)*/
             .alert("Clean Up Orphaned Data", isPresented: $showCleanupConfirmation) {
                 Button("Cancel", role: .cancel) { }
                 Button("Clean Up", role: .destructive) {
@@ -374,6 +385,20 @@ struct LoginView: View {
             }
     }
     
+    private func signInLabeledField<Field: View>(
+        title: String,
+        @ViewBuilder field: () -> Field
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.subheadline)
+                .fontWeight(.medium)
+                .foregroundStyle(.primary)
+            field()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     // MARK: - Purge soft-deleted outfits from local Core Data
     private func purgeOrphanedOutfits() {
         isPurgingOutfits = true
@@ -453,13 +478,13 @@ struct LoginView: View {
             // Success - the session is now set in SupabaseService
             // Username is automatically loaded in signIn() method
             
-            // Trigger sync after successful login
+            // Trigger sync after successful sign-in
             Task {
                 do {
                     try await syncService.syncAllItems()
-                    print("✅ Sync completed after login")
+                    print("✅ Sync completed after sign-in")
                 } catch {
-                    print("⚠️ Sync failed after login: \(error)")
+                    print("⚠️ Sync failed after sign-in: \(error)")
                     print("⚠️ Error type: \(type(of: error))")
                     print("⚠️ Error description: \(error.localizedDescription)")
                     let nsError = error as NSError
@@ -473,20 +498,6 @@ struct LoginView: View {
         }
         
         isLoading = false
-    }
-    
-    private func resetPassword() async {
-        guard !email.isEmpty else {
-            errorMessage = "Please enter your email address first"
-            return
-        }
-        
-        do {
-            try await supabaseService.resetPassword(email: email)
-            errorMessage = "Password reset email sent! Check your inbox."
-        } catch {
-            errorMessage = error.localizedDescription
-        }
     }
     
     private func signOut() async {

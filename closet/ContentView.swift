@@ -8,8 +8,17 @@
 import SwiftUI
 import CoreData
 
+private enum MainTab: Hashable {
+    case closet
+    case fitting
+    case wishlist
+    case calendar
+    case profile
+}
+
 struct ContentView: View {
     @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.appCapabilities) private var appCapabilities
     @EnvironmentObject var deepLinkRouter: DeepLinkRouter
     @EnvironmentObject var supabaseService: SupabaseService
     @EnvironmentObject var authSession: AuthSession
@@ -28,6 +37,11 @@ struct ContentView: View {
     
     @State private var hasAppeared = false
     @State private var showDeepLinkItemAdd = false
+    @State private var showCategoryOnboarding = false
+    @State private var pendingOnboardingCategoryNames: Set<String> = Set(ReferenceDataBootstrap.masterCategoryNames)
+    @State private var categoryOnboardingError: String?
+    @State private var selectedTab: MainTab = .closet
+    @State private var showHowToOnboarding = false
     
     // Signed-in account id (mirrors `ItemFilterView` / `AuthSession`).
     private var currentUserId: String? {
@@ -47,40 +61,38 @@ struct ContentView: View {
     }
 
     var body: some View {
-        TabView() {
+        TabView(selection: $selectedTab) {
             NavigationStack {
                 ClosetView()
             }
+            .tag(MainTab.closet)
             .tabItem {
                 Image(systemName: "hanger")
                 Text("Closet")
             }
-            NavigationStack {
-                FittingView()
+            if appCapabilities.showsFittingTab {
+                NavigationStack {
+                    FittingView()
+                }
+                .tag(MainTab.fitting)
+                .tabItem {
+                    Label("Fitting", systemImage: "tshirt")
+                }
             }
-            .tabItem {
-                Label("Fitting", systemImage: "tshirt")
-            }
-            /*  VirtualFittingView()
-                      .tabItem {
-                          Label("Fitting", systemImage: "tshirt")
-                      } */
-            /*  OutfitGridView()
-                      .tabItem {
-                          Image(systemName: "book")
-                      //    .environment(\.symbolVariants, .none)
-                          Text("Outfits")
-                      }*/
-            NavigationStack {
-                WishlistView()
-            }
-            .tabItem {
-                Image(systemName: "heart")
-                Text("Wishlist")
+            if appCapabilities.showsWishlistTab {
+                NavigationStack {
+                    WishlistView()
+                }
+                .tag(MainTab.wishlist)
+                .tabItem {
+                    Image(systemName: "heart")
+                    Text("Wishlist")
+                }
             }
             NavigationStack {
                 OutfitCalendarView()
             }
+            .tag(MainTab.calendar)
             .tabItem {
                 Image(systemName: "calendar")
                 Text("Calendar")
@@ -88,6 +100,7 @@ struct ContentView: View {
             NavigationStack {
                 ProfileView()
             }
+            .tag(MainTab.profile)
             .tabItem {
                 Image(systemName: "person")
                 Text("Profile")
@@ -96,25 +109,85 @@ struct ContentView: View {
         .task(id: authSession.userId) {
             guard let userId = authSession.userId else { return }
             do {
+                CategoryOnboardingStore.markCompletedIfLegacyUserHasCategories(userId: userId, in: viewContext)
                 try WardrobeBootstrap.ensureDefaultWardrobes(for: userId, in: viewContext)
-                try ReferenceDataBootstrap.ensureUserDefaults(for: userId, in: viewContext)
+                try ReferenceDataBootstrap.ensureUniversalDefaults(for: userId, in: viewContext)
+                if !CategoryOnboardingStore.hasCompleted(userId: userId) {
+                    if appCapabilities.requiresCategoryOnboarding {
+                        pendingOnboardingCategoryNames = Set(ReferenceDataBootstrap.masterCategoryNames)
+                        showCategoryOnboarding = true
+                    } else {
+                        try CategoryOnboardingView.completeOnboardingWithFullCatalog(
+                            userId: userId,
+                            in: viewContext
+                        )
+                    }
+                }
+                presentHowToOnboardingIfNeeded(userId: userId)
             } catch {
                 print("⚠️ WardrobeBootstrap / ReferenceDataBootstrap: \(error.localizedDescription)")
             }
         }
+        .fullScreenCover(isPresented: $showHowToOnboarding) {
+            HowToOnboardingView {
+                showHowToOnboarding = false
+                selectedTab = .closet
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { appCapabilities.requiresCategoryOnboarding && showCategoryOnboarding },
+            set: { showCategoryOnboarding = $0 }
+        )) {
+            NavigationStack {
+                ScrollView {
+                    VStack(spacing: 20) {
+                        CategoryOnboardingView(
+                            selectedCategoryNames: $pendingOnboardingCategoryNames,
+                            onError: { categoryOnboardingError = $0 }
+                        )
+                        .padding(.horizontal)
+
+                        if let categoryOnboardingError {
+                            Text(categoryOnboardingError)
+                                .font(.caption)
+                                .foregroundColor(.red)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal)
+                        }
+
+                        Button {
+                            Task { await finishCategoryOnboardingFromSheet() }
+                        } label: {
+                            Text("Continue")
+                                .fontWeight(.semibold)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(pendingOnboardingCategoryNames.isEmpty)
+                        .padding(.horizontal)
+                        .padding(.bottom, 24)
+                    }
+                    .padding(.top, 16)
+                }
+                .navigationTitle("Your categories")
+                .navigationBarTitleDisplayMode(.inline)
+                .interactiveDismissDisabled(true)
+            }
+        }
         .onAppear {
                 print("-- ContentView appeared")
-                migrateItemImages(context: viewContext)
-                migratePhotoTypes(context: viewContext)
-                migrateWishlistItems(context: viewContext)
-                deduplicateWardrobes(context: viewContext, userId: authSession.userId?.uuidString)
-                compressExistingPhotos(context: viewContext)
-                resolveSizeConstraintConflicts(context: viewContext)
-                migrateUserWeightFromUserDefaults(context: viewContext)
-                migrateTimestampToCreatedAt(context: viewContext)
-                migrateEventUserIdsFromRelationships(context: viewContext)
-                migrateWardrobeIsDefaultBackfill(context: viewContext)
-                
+                // One-time migrations disabled — already completed for existing installs via UserDefaults flags.
+                // migrateItemImages(context: viewContext)
+                // migratePhotoTypes(context: viewContext)
+                // migrateWishlistItems(context: viewContext)
+                // deduplicateWardrobes(context: viewContext, userId: authSession.userId?.uuidString)
+                // compressExistingPhotos(context: viewContext)
+                // resolveSizeConstraintConflicts(context: viewContext)
+                // migrateUserWeightFromUserDefaults(context: viewContext)
+                // migrateTimestampToCreatedAt(context: viewContext)
+                // migrateEventUserIdsFromRelationships(context: viewContext)
+                // migrateWardrobeIsDefaultBackfill(context: viewContext)
+
                 // Mark as appeared and check for pending navigation intent
                 hasAppeared = true
                 
@@ -171,6 +244,30 @@ struct ContentView: View {
         }
     }
     
+    private func finishCategoryOnboardingFromSheet() async {
+        guard let userId = authSession.userId else { return }
+        categoryOnboardingError = nil
+        do {
+            try CategoryOnboardingView.completeOnboarding(
+                selectedNames: pendingOnboardingCategoryNames,
+                userId: userId,
+                in: viewContext
+            )
+            showCategoryOnboarding = false
+            presentHowToOnboardingIfNeeded(userId: userId)
+        } catch {
+            categoryOnboardingError = error.localizedDescription
+        }
+    }
+
+    /// TestFlight: first-run how-to after registration (after category sheet if any).
+    private func presentHowToOnboardingIfNeeded(userId: UUID) {
+        guard appCapabilities.tier == .testflight else { return }
+        guard !HowToOnboardingStore.hasCompleted(userId: userId) else { return }
+        guard !showCategoryOnboarding else { return }
+        showHowToOnboarding = true
+    }
+
     /// Presents ItemAddView for add-item deep links (via fullScreenCover)
     private func navigateToItemAdd(intent: NavigationIntent) {
         guard case .addItem = intent else { return }
@@ -184,6 +281,7 @@ struct ContentView: View {
 #Preview {
     ContentView()
         .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
+        .environment(\.appCapabilities, AppEnvironment.capabilities)
         .environmentObject(DeepLinkRouter.shared)
         .environmentObject(SupabaseService.shared)
         .environmentObject(AuthSession())

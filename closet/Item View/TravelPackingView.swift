@@ -156,7 +156,7 @@ struct TravelPackingView: View {
     var body: some View {
         Group {
             if items.isEmpty {
-                EmptyItemStateView(wardrobe: selectedWardrobe)
+                TravelPackingEmptyStateView()
             } else {
                 ScrollView(showsIndicators: false) {
                     ForEach(storageLocations, id: \.objectID) { location in
@@ -249,7 +249,7 @@ struct TravelPackingView: View {
             }
         }
         .toolbar(isInSelectionMode ? .hidden : .automatic, for: .tabBar)
-        .alert("New Storage Location", isPresented: $showAddStorageLocationAlert) {
+        .alert("Add Storage Location", isPresented: $showAddStorageLocationAlert) {
             TextField("i.e. Carry-on luggage, Handbag", text: $newStorageLocationName)
             Button("Add") {
                 createStorageLocation(named: newStorageLocationName)
@@ -260,7 +260,7 @@ struct TravelPackingView: View {
                 assignSelectedItemsToNewStorageAfterCreate = false
             }
         } message: {
-            Text("Enter a name for the storage container")
+            Text("Enter a label for your bag or suitcase")
         }
         .sheet(isPresented: $showRenameStorageLocationSheet) {
             renameStorageLocationSheet()
@@ -879,5 +879,30 @@ struct TravelPackingView: View {
                 self.items = []
             }
         }
+    }
+}
+
+// MARK: - Empty state (packing-specific; not `EmptyItemStateView` — + creates storage locations, not items)
+
+private struct TravelPackingEmptyStateView: View {
+    var body: some View {
+        VStack(spacing: 12) {
+            Spacer()
+            Image(systemName: "suitcase")
+                .font(.system(size: 52))
+                .foregroundStyle(.gray)
+                .accessibilityHidden(true)
+            Text("No items to pack")
+                .font(.headline)
+                .foregroundStyle(.gray)
+            Text("Items added to this wardrobe will appear here. Tap the + button to add bags or storage locations to organize packed items.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+            Spacer()
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

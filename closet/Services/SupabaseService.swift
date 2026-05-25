@@ -5,6 +5,7 @@
 //  Created by Dan Warner on 1/27/25.
 //
 
+import Auth
 import Foundation
 import Supabase
 
@@ -177,30 +178,84 @@ class SupabaseService: ObservableObject {
         print("✅ User signed in: \(session.user.email ?? "unknown")")
     }
     
-    /// Signs up a new user with email and password
+    /// Shown in `RegisterView` when Supabase Auth rejects a duplicate email.
+    static let emailAlreadyInUseMessage = "Email already in use"
+
+    /// Registers a new user with email and password.
     @discardableResult
-    func signUp(email: String, password: String) async throws -> Session? {
-        let response = try await client.auth.signUp(email: email, password: password)
-        // response is AuthResponse, which has a session property
-        guard let session = response.session else {
-            // Email confirmation required
-            print("✅ User signed up. Email confirmation required for: \(email)")
-            return nil
+    func register(email: String, password: String) async throws -> Session? {
+        do {
+            let response = try await client.auth.signUp(email: email, password: password)
+            guard let session = response.session else {
+                print("✅ User registered. Email confirmation required for: \(email)")
+                return nil
+            }
+            self.currentSession = session
+            self.currentUser = session.user
+
+            await ensureUserProfileExists(userId: session.user.id)
+            await loadFriendCountCacheForCurrentUserIfNeeded(seedFromServerIfMissing: true)
+            _ = try? await getUsername(forceRefresh: true)
+
+            print("✅ User registered and signed in: \(session.user.email ?? "unknown")")
+            return session
+        } catch {
+            if Self.isEmailAlreadyRegistered(error) {
+                throw Self.emailAlreadyRegisteredError()
+            }
+            throw error
         }
-        self.currentSession = session
-        self.currentUser = session.user
-        
-        // Create user profile after successful sign up
-        await ensureUserProfileExists(userId: session.user.id)
-        
-        // Load cached friend count from Core Data (and seed from server if missing)
-        await loadFriendCountCacheForCurrentUserIfNeeded(seedFromServerIfMissing: true)
-        
-        // Force a username refresh after sign-up (don't rely on cache check)
-        _ = try? await getUsername(forceRefresh: true)
-        
-        print("✅ User signed up and signed in: \(session.user.email ?? "unknown")")
-        return session
+    }
+
+    /// Maps registration failures to user-facing copy (duplicate email → `emailAlreadyInUseMessage`).
+    static func registerErrorMessage(for error: Error) -> String {
+        if isEmailAlreadyRegistered(error) {
+            return emailAlreadyInUseMessage
+        }
+        return error.localizedDescription
+    }
+
+    private static func emailAlreadyRegisteredError() -> NSError {
+        NSError(
+            domain: "SupabaseService",
+            code: -3,
+            userInfo: [NSLocalizedDescriptionKey: emailAlreadyInUseMessage]
+        )
+    }
+
+    private static func isEmailAlreadyRegistered(_ error: Error) -> Bool {
+        if let authError = error as? AuthError {
+            switch authError {
+            case let .api(_, errorCode, _, _):
+                if errorCode == .emailExists
+                    || errorCode == .userAlreadyExists
+                    || errorCode == .identityAlreadyExists {
+                    return true
+                }
+            default:
+                break
+            }
+            if isDuplicateEmailRegistrationText(authError.message) {
+                return true
+            }
+        }
+
+        if let nsError = error as NSError?, nsError.domain == "SupabaseService", nsError.code == -3 {
+            return true
+        }
+
+        return isDuplicateEmailRegistrationText(error.localizedDescription)
+    }
+
+    private static func isDuplicateEmailRegistrationText(_ text: String) -> Bool {
+        let normalized = text.lowercased()
+        return normalized.contains("user already registered")
+            || normalized.contains("already been registered")
+            || normalized.contains("email address has already been registered")
+            || normalized.contains("a user with this email address has already been registered")
+            || normalized.contains("email_exists")
+            || normalized.contains("user_already_exists")
+            || normalized.contains("identity_already_exists")
     }
     
     /// Signs out the current user
@@ -229,6 +284,50 @@ class SupabaseService: ObservableObject {
         }
         
         print("✅ User signed out")
+    }
+
+    /// Permanently deletes the signed-in account (server RPC + local Core Data wipe), then signs out.
+    /// Requires `delete_my_account` RPC in Supabase — see `SUPABASE_DELETE_MY_ACCOUNT.sql`.
+    func deleteAccount() async throws {
+        guard let userId = currentUser?.id else {
+            throw NSError(
+                domain: "SupabaseService",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "No authenticated user"]
+            )
+        }
+
+        let context = PersistenceController.shared.container.viewContext
+
+        if AppEnvironment.capabilities.enablesCloudSync {
+            try? await deleteProfileAvatar(userId: userId)
+        }
+
+        do {
+            try await client.rpc("delete_my_account").execute()
+        } catch {
+            print("❌ delete_my_account RPC failed: \(error.localizedDescription)")
+            throw NSError(
+                domain: "SupabaseService",
+                code: -10,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Could not delete your account on the server. If this continues, contact redressme@icloud.com."
+                ]
+            )
+        }
+
+        try AccountDeletionService.wipeLocalData(for: userId.uuidString, in: context)
+
+        try await client.auth.signOut()
+        currentSession = nil
+        currentUser = nil
+        cachedUsername = nil
+        cachedFriendCount = nil
+        hasLoadedSession = false
+        hasLoadedFriendCountCache = false
+
+        print("✅ Account deleted and signed out")
     }
     
     /// Sends a password reset email
@@ -731,6 +830,7 @@ class SupabaseService: ObservableObject {
 
     /// Persists the profile avatar public URL (e.g. R2 CDN) on `user_profiles`, then syncs Core Data.
     func updateProfileAvatarURL(_ url: String?) async throws {
+        try requireCloudSyncEnabled()
         guard let userId = currentUser?.id else {
             throw NSError(domain: "SupabaseService", code: -1,
                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
@@ -815,9 +915,11 @@ class SupabaseService: ObservableObject {
                 await SyncService.shared.syncDisplayNameToCoreData(displayName)
             }
 
-            let trimmedAvatar = profile.avatar_url?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let avatarToStore = (trimmedAvatar?.isEmpty == false) ? trimmedAvatar : nil
-            await SyncService.shared.syncAvatarUrlToCoreData(avatarToStore)
+            if AppEnvironment.capabilities.enablesCloudSync {
+                let trimmedAvatar = profile.avatar_url?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let avatarToStore = (trimmedAvatar?.isEmpty == false) ? trimmedAvatar : nil
+                await SyncService.shared.syncAvatarUrlToCoreData(avatarToStore)
+            }
             
             // Return username if available
             if let username = profile.username, !username.isEmpty {
@@ -894,6 +996,16 @@ class SupabaseService: ObservableObject {
     }
     
     // MARK: - Photo Storage (via Cloudflare R2)
+
+    private func requireCloudSyncEnabled() throws {
+        guard AppEnvironment.capabilities.enablesCloudSync else {
+            throw NSError(
+                domain: "SupabaseService",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Cloud sync is disabled for this build."]
+            )
+        }
+    }
     
     /// Uploads a photo to Cloudflare R2 via Worker and returns the public URL
     /// Each photo (front, back, worn) has a unique photoId, so they won't conflict
@@ -904,6 +1016,7 @@ class SupabaseService: ObservableObject {
     ///   - userId: The ID of the user
     /// - Returns: The public URL of the uploaded photo
     func uploadPhoto(imageData: Data, itemId: UUID, photoId: UUID, userId: UUID) async throws -> String {
+        try requireCloudSyncEnabled()
         // Delegate to R2 service
         // Each photo has a unique photoId, so front/back/worn photos are stored separately
         // Path format: userId/itemId/photoId.jpg ensures uniqueness
@@ -923,6 +1036,7 @@ class SupabaseService: ObservableObject {
     ///   - userId: The ID of the user
     /// - Returns: The public URL of the uploaded thumbnail
     func uploadThumbnail(imageData: Data, itemId: UUID, photoId: UUID, userId: UUID) async throws -> String {
+        try requireCloudSyncEnabled()
         // Delegate to R2 service
         // Thumbnails are stored with _thumb suffix: userId/itemId/photoId_thumb.jpg
         return try await CloudflareR2Service.shared.uploadThumbnail(
@@ -939,6 +1053,7 @@ class SupabaseService: ObservableObject {
     ///   - photoId: The ID of the photo (unique for each photo type)
     ///   - userId: The ID of the user
     func deletePhoto(itemId: UUID, photoId: UUID, userId: UUID) async throws {
+        try requireCloudSyncEnabled()
         // Delegate to R2 service
         // Each photo type (front/back/worn) has its own photoId, so deletion is specific
         try await CloudflareR2Service.shared.deletePhoto(
@@ -951,6 +1066,7 @@ class SupabaseService: ObservableObject {
     /// Uploads an outfit collage image to Cloudflare R2
     /// Path format: userId/outfits/outfitId.jpg
     func uploadOutfitImage(imageData: Data, outfitId: UUID, userId: UUID) async throws -> String {
+        try requireCloudSyncEnabled()
         return try await CloudflareR2Service.shared.uploadOutfitImage(
             imageData: imageData,
             outfitId: outfitId,
@@ -960,6 +1076,7 @@ class SupabaseService: ObservableObject {
 
     /// Deletes an outfit collage image from Cloudflare R2
     func deleteOutfitImage(outfitId: UUID, userId: UUID) async throws {
+        try requireCloudSyncEnabled()
         try await CloudflareR2Service.shared.deleteOutfitImage(
             outfitId: outfitId,
             userId: userId
@@ -968,7 +1085,8 @@ class SupabaseService: ObservableObject {
 
     /// Uploads a "worn" outfit photo (user wearing the outfit) to R2 — path `userId/outfits/outfitId_worn.jpg`
     func uploadOutfitWornImage(imageData: Data, outfitId: UUID, userId: UUID) async throws -> String {
-        try await CloudflareR2Service.shared.uploadOutfitWornImage(
+        try requireCloudSyncEnabled()
+        return try await CloudflareR2Service.shared.uploadOutfitWornImage(
             imageData: imageData,
             outfitId: outfitId,
             userId: userId
@@ -976,6 +1094,7 @@ class SupabaseService: ObservableObject {
     }
 
     func deleteOutfitWornImage(outfitId: UUID, userId: UUID) async throws {
+        try requireCloudSyncEnabled()
         try await CloudflareR2Service.shared.deleteOutfitWornImage(
             outfitId: outfitId,
             userId: userId
@@ -983,10 +1102,12 @@ class SupabaseService: ObservableObject {
     }
 
     func uploadProfileAvatar(imageData: Data, userId: UUID) async throws -> String {
-        try await CloudflareR2Service.shared.uploadProfileAvatar(imageData: imageData, userId: userId)
+        try requireCloudSyncEnabled()
+        return try await CloudflareR2Service.shared.uploadProfileAvatar(imageData: imageData, userId: userId)
     }
 
     func deleteProfileAvatar(userId: UUID) async throws {
+        try requireCloudSyncEnabled()
         try await CloudflareR2Service.shared.deleteProfileAvatar(userId: userId)
     }
     

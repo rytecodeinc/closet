@@ -19,6 +19,8 @@ struct OutfitDetailView: View {
     @ObservedObject var outfit: Outfit
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.appCapabilities) private var appCapabilities
+    @EnvironmentObject private var supabaseService: SupabaseService
     
     @State private var attributesSheet: OutfitAttributesSectionView.Sheet?
     @State private var isFeaturedItemsExpanded = true
@@ -29,6 +31,7 @@ struct OutfitDetailView: View {
     @State private var isOutfitImageFullScreen = false
     @State private var showShareSheet = false
     @State private var shareItems: [Any] = []
+    @State private var showShareFriendsSheet = false
     @State private var showDeleteOutfitConfirmation = false
 
     @State private var showOutfitHeroOptionsDialog = false
@@ -87,6 +90,7 @@ struct OutfitDetailView: View {
                         }
                     ),
                     favoriteSelection: outfit.isFavorite,
+                    showsShareButton: appCapabilities.enablesFriendsAndSharing,
                     onLike: {
                         outfit.isFavorite.toggle()
                         setUpdatedAt(outfit)
@@ -98,7 +102,7 @@ struct OutfitDetailView: View {
                             viewContext.rollback()
                         }
                     },
-                    onShare: { shareOutfitImage() }
+                    onShare: { showShareFriendsSheet = true }
                 )
                 
                 // Featured Items Toggle Section Header
@@ -147,13 +151,13 @@ struct OutfitDetailView: View {
         }
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
-                if currentOutfitHeroUIImage() != nil {
+                if appCapabilities.enablesFriendsAndSharing, currentOutfitHeroUIImage() != nil {
                     Button {
-                        shareOutfitImage()
+                        showShareFriendsSheet = true
                     } label: {
                         Image(systemName: "square.and.arrow.up")
                     }
-                    .accessibilityLabel("Share outfit")
+                    .accessibilityLabel("Share outfit with friends")
                 }
                 Button(role: .destructive) {
                     showDeleteOutfitConfirmation = true
@@ -217,6 +221,13 @@ struct OutfitDetailView: View {
         .sheet(isPresented: $isOutfitImageCropperPresented) {
             outfitImageCropperSheetContent
         }
+        .sheet(isPresented: Binding(
+            get: { appCapabilities.enablesFriendsAndSharing && showShareFriendsSheet },
+            set: { showShareFriendsSheet = $0 }
+        )) {
+            ShareOutfitFriendsSheet()
+                .environmentObject(supabaseService)
+        }
     }
 
     private var outfitHeroOptionsDialogTitle: String {
@@ -246,6 +257,11 @@ struct OutfitDetailView: View {
             if currentOutfitHeroUIImage() != nil {
                 Button("Edit Image") {
                     presentOutfitHeroImageCropper()
+                }
+                if appCapabilities.enablesFriendsAndSharing {
+                    Button("Share with Friends") {
+                        showShareFriendsSheet = true
+                    }
                 }
                 Button("Share Image") {
                     shareOutfitImage()
@@ -438,10 +454,10 @@ struct OutfitDetailView: View {
             .frame(width: screenWidth, height: screenWidth)
             .overlay {
                 VStack(spacing: 10) {
-                    Image(systemName: "person.and.background.striped.horizontal")
+                    Image(systemName: "person.crop.square.badge.camera")
                         .foregroundStyle(.secondary)
                         .font(.system(size: 40))
-                    Text("Tap to add a photo")
+                    Text("Tap to add a photo of you wearing this outfit")
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.secondary)
                 }
