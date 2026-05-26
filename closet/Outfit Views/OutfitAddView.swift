@@ -50,6 +50,9 @@ struct OutfitAddView: View {
     // Wardrobe type to filter by (closet or wishlist)
     let wardrobeType: String
 
+    /// When true, item source wardrobe is fixed (non-default closet context); no wardrobe picker sheet.
+    let lockWardrobeSource: Bool
+
     /// If provided, this item will be resolved and placed on the canvas on first appear.
     let preselectedItemURI: String?
     
@@ -115,11 +118,18 @@ struct OutfitAddView: View {
         key += filterModel.selectedSubcategoryName ?? ""
         key += filterModel.selectedSizeValue ?? ""
         key += filterModel.selectedLocation?.objectID.uriRepresentation().absoluteString ?? ""
+        key += filterModel.selectedWardrobes.map { $0.objectID.uriRepresentation().absoluteString }.sorted().joined(separator: ",")
+        key += selectedWardrobe?.objectID.uriRepresentation().absoluteString ?? ""
         return key
     }
 
     // Fetch items filtered by selected wardrobe
     private func fetchClosetItems() {
+        guard let userId = currentUserId, !userId.isEmpty else {
+            closetItems = []
+            return
+        }
+
         let targetWardrobeType: String
         if wardrobeType == "wishlist" {
             targetWardrobeType = itemTypeSegment == .wishlist ? "wishlist" : "closet"
@@ -130,7 +140,7 @@ struct OutfitAddView: View {
         let targetWardrobes = allWardrobes.filter {
             $0.type == targetWardrobeType &&
             $0.isSoftDeleted != true &&
-            (currentUserId == nil || $0.userId == currentUserId)
+            $0.userId == userId
         }
 
         guard !targetWardrobes.isEmpty else {
@@ -138,37 +148,48 @@ struct OutfitAddView: View {
             return
         }
 
-        let wardrobeToUse: Wardrobe?
-        if let selected = selectedWardrobe, selected.type == targetWardrobeType {
-            wardrobeToUse = selected
+        let wardrobe: Wardrobe
+        if let selected = selectedWardrobe,
+           targetWardrobes.contains(where: { $0.objectID == selected.objectID }) {
+            wardrobe = selected
+        } else if let primary = WardrobeBootstrap.primaryWardrobe(in: targetWardrobes) {
+            wardrobe = primary
         } else {
-            wardrobeToUse = WardrobeBootstrap.primaryWardrobe(in: targetWardrobes)
-        }
-
-        guard let wardrobe = wardrobeToUse else {
             closetItems = []
             return
         }
 
         let request: NSFetchRequest<Item> = Item.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.createdAt, ascending: sortAscending)]
-
-        let filterPredicate = makePredicate(for: filterModel, context: viewContext)
-        let wardrobePredicate = NSPredicate(format: "ANY wardrobes == %@", wardrobe)
-        let softDeleteFilter = NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
-
-        let finalPredicate: NSPredicate
-        if let filter = filterPredicate {
-            finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [filter, wardrobePredicate, softDeleteFilter])
-        } else {
-            finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [wardrobePredicate, softDeleteFilter])
-        }
-
-        request.predicate = finalPredicate
         request.fetchBatchSize = 0
 
+        var subpredicates: [NSPredicate] = [
+            NSPredicate(format: "userId == %@", userId),
+            NSPredicate(format: "ANY wardrobes == %@", wardrobe),
+            NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil"),
+            NSPredicate(format: "isDraft != YES"),
+        ]
+
+        let filteredWardrobes = filterModel.selectedWardrobes.filter {
+            $0.type == targetWardrobeType && $0.userId == userId
+        }
+        if !filteredWardrobes.isEmpty {
+            subpredicates.append(NSPredicate(format: "ANY wardrobes IN %@", Array(filteredWardrobes)))
+        }
+
+        if let filter = makePredicate(for: filterModel, context: viewContext) {
+            subpredicates.append(filter)
+        }
+
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: subpredicates)
+
         do {
-            closetItems = try viewContext.fetch(request)
+            let results = try viewContext.fetch(request)
+            let wardrobeID = wardrobe.objectID
+            closetItems = results.filter { item in
+                guard let wardrobes = item.wardrobes as? Set<Wardrobe> else { return false }
+                return wardrobes.contains { $0.objectID == wardrobeID }
+            }
         } catch {
             print("❌ Failed to fetch items: \(error)")
             closetItems = []
@@ -202,17 +223,31 @@ struct OutfitAddView: View {
 
     @State private var didApplyPreselectedItem = false
 
-    init(outfitToEdit: Outfit? = nil, wardrobeType: String = "closet", initialWardrobe: Wardrobe? = nil) {
+    init(
+        outfitToEdit: Outfit? = nil,
+        wardrobeType: String = "closet",
+        initialWardrobe: Wardrobe? = nil,
+        lockWardrobeSource: Bool = false
+    ) {
         self.outfitToEdit = outfitToEdit
         self.wardrobeType = wardrobeType
+        self.lockWardrobeSource = lockWardrobeSource
         _selectedWardrobe = State(initialValue: initialWardrobe)
         self.preselectedItemURI = nil
         self.sessionID = UUID()
     }
     
-    init(outfitToEdit: Outfit? = nil, wardrobeType: String = "closet", initialWardrobe: Wardrobe? = nil, preselectedItemURI: String?, sessionID: UUID = UUID()) {
+    init(
+        outfitToEdit: Outfit? = nil,
+        wardrobeType: String = "closet",
+        initialWardrobe: Wardrobe? = nil,
+        lockWardrobeSource: Bool = false,
+        preselectedItemURI: String?,
+        sessionID: UUID = UUID()
+    ) {
         self.outfitToEdit = outfitToEdit
         self.wardrobeType = wardrobeType
+        self.lockWardrobeSource = lockWardrobeSource
         _selectedWardrobe = State(initialValue: initialWardrobe)
         self.preselectedItemURI = preselectedItemURI
         self.sessionID = sessionID
@@ -220,6 +255,13 @@ struct OutfitAddView: View {
 
     private var squareSize: CGFloat {
         UIScreen.main.bounds.width
+    }
+
+    private var wardrobeSelectionSheetPresented: Binding<Bool> {
+        Binding(
+            get: { !lockWardrobeSource && isWardrobeSelectionPresented },
+            set: { isWardrobeSelectionPresented = $0 }
+        )
     }
 
     var body: some View {
@@ -267,13 +309,14 @@ struct OutfitAddView: View {
             }
             .onChange(of: selectedWardrobe) { _ in fetchClosetItems() }
             .onChange(of: wardrobes) { newWardrobes in
+                guard !lockWardrobeSource else { return }
                 if let current = selectedWardrobe, !newWardrobes.contains(current) {
                     selectedWardrobe = WardrobeBootstrap.primaryWardrobe(in: newWardrobes)
                 }
             }
             .onChange(of: filterKey) { _ in fetchClosetItems() }
             .onChange(of: itemTypeSegment) { _ in
-                if wardrobeType == "wishlist" {
+                if wardrobeType == "wishlist", !lockWardrobeSource {
                     let targetType = itemTypeSegment == .wishlist ? "wishlist" : "closet"
                     let targetWardrobes = allWardrobes.filter {
                         $0.type == targetType &&
@@ -291,7 +334,7 @@ struct OutfitAddView: View {
 
     private var sheetsContent: some View {
         alertsContent
-            .sheet(isPresented: $isWardrobeSelectionPresented) {
+            .sheet(isPresented: wardrobeSelectionSheetPresented) {
                 NavigationView {
                     SingleWardrobeSelectionView(
                         selectedWardrobe: $selectedWardrobe,
@@ -318,7 +361,12 @@ struct OutfitAddView: View {
             .sheet(isPresented: $showingDraftEditor, onDismiss: { selectedDraftToEdit = nil }) {
                 if let draft = selectedDraftToEdit {
                     NavigationView {
-                        OutfitAddView(outfitToEdit: draft, wardrobeType: wardrobeType)
+                        OutfitAddView(
+                            outfitToEdit: draft,
+                            wardrobeType: wardrobeType,
+                            initialWardrobe: selectedWardrobe,
+                            lockWardrobeSource: lockWardrobeSource
+                        )
                     }
                 }
             }
@@ -363,11 +411,11 @@ struct OutfitAddView: View {
         .alert("Draft Saved", isPresented: $showingDraftSaveAlert) {
             Button("OK") { dismiss() }
         }
-        .alert("Save as draft?", isPresented: $showingSaveDraftConfirmation) {
+        .alert("Save draft?", isPresented: $showingSaveDraftConfirmation) {
             Button("Yes") { saveDraft() }
             Button("No", role: .cancel) { dismiss() }
         } message: {
-            Text("Save outfit as draft to continue editing later.")
+            Text("Saving this outfit to drafts will allow you to finish editing it later.")
         }
         .alert("Discard Changes?", isPresented: $showingDiscardChangesConfirmation) {
             Button("Discard", role: .destructive) { dismiss() }
@@ -483,7 +531,6 @@ struct OutfitAddView: View {
             }
         }
         .frame(width: squareSize, height: squareSize)
-        .clipped()
 
         if selectedItemID != nil {
             canvas.simultaneousGesture(canvasTransformGesture)
@@ -572,15 +619,21 @@ struct OutfitAddView: View {
     }
 
     // MARK: - Wardrobe Selection Button
+    @ViewBuilder
     private var wardrobeSelectionButton: some View {
-        Button {
-            isWardrobeSelectionPresented = true
-        } label: {
-            HStack(spacing: 4) {
-                Text(selectedWardrobe?.name ?? "Select Wardrobe")
-                    .font(.headline)
-                Image(systemName: "chevron.down")
-                    .font(.caption)
+        if lockWardrobeSource {
+            Text(selectedWardrobe?.name ?? "Wardrobe")
+                .font(.headline)
+        } else {
+            Button {
+                isWardrobeSelectionPresented = true
+            } label: {
+                HStack(spacing: 4) {
+                    Text(selectedWardrobe?.name ?? "Select Wardrobe")
+                        .font(.headline)
+                    Image(systemName: "chevron.down")
+                        .font(.caption)
+                }
             }
         }
     }

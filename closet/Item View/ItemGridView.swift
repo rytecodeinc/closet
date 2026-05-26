@@ -25,8 +25,12 @@ struct ItemGridView: View {
 
     @EnvironmentObject var supabaseService: SupabaseService
     @EnvironmentObject var authSession: AuthSession
+    @EnvironmentObject private var syncService: SyncService
     @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.appCapabilities) private var appCapabilities
     @State private var closetItems: [Item] = []
+    @State private var hasCompletedInitialItemsFetch = false
+    @State private var hasCompletedInitialOutfitsFetch = false
     @State private var isImagePickerPresented = false
     @State private var pickedImage: UIImage? = nil
     @State private var imagePickerSource: UIImagePickerController.SourceType = .photoLibrary
@@ -59,15 +63,22 @@ struct ItemGridView: View {
     @State private var showDeleteConfirmation = false
     @State private var showOutfitDeleteConfirmation = false
     @State private var showTagSelectionSheet = false
+    @State private var showColorSelectionSheet = false
     @State private var showCategorySelectionSheet = false
-    @State private var showTagAddedConfirmation = false
-    @State private var addedTagName: String = ""
-    @State private var addedTagItemCount: Int = 0
+    @State private var bulkSetCategoryExpanded: Set<NSManagedObjectID> = []
+    @State private var showCategorySelectionConfirmAlert = false
+    @State private var pendingBulkCategory: Category?
+    @State private var pendingBulkSubcategory: Subcategory?
     @State private var showDeletionToast = false
     @State private var deletionToastMessage: String = ""
     @State private var showTagSelectionConfirmAlert = false
     @State private var pendingTagSelectionTarget: Tag?
     @State private var pendingTagSelectionWillRemove = false
+    @State private var showColorSelectionConfirmAlert = false
+    @State private var pendingColorSelectionTarget: AppColor?
+    @State private var pendingColorSelectionWillRemove = false
+    @State private var showFavoriteSelectionConfirmAlert = false
+    @State private var pendingFavoriteSelectionWillUnfavorite = false
     /// Bumps when favorites change so the bottom bar heart reflects Core Data without relying on `selectedItems` identity.
     @State private var favoriteToolbarTick = 0
     
@@ -107,6 +118,7 @@ struct ItemGridView: View {
             key += "weight:\(userWeightKg)"
         }
         key += filterModel.sortOrder.sortAscending ? "sortAsc" : "sortDesc"
+        key += filterModel.selectedWardrobes.map { $0.objectID.uriRepresentation().absoluteString }.sorted().joined(separator: ",")
         return key
     }
     
@@ -118,6 +130,20 @@ struct ItemGridView: View {
         key += outfitFilterModel.favoritesOnly ? "favoritesOnly" : "allOutfits"
         key += outfitFilterModel.sortOrder.sortAscending ? "sortAsc" : "sortDesc"
         return key
+    }
+
+    private var isItemsTabLoading: Bool {
+        guard authSession.userId != nil else { return true }
+        if !hasCompletedInitialItemsFetch { return true }
+        if appCapabilities.enablesCloudSync, syncService.isSyncing, closetItems.isEmpty { return true }
+        return false
+    }
+
+    private var isOutfitsTabLoading: Bool {
+        guard authSession.userId != nil else { return true }
+        if !hasCompletedInitialOutfitsFetch { return true }
+        if appCapabilities.enablesCloudSync, syncService.isSyncing, outfits.isEmpty { return true }
+        return false
     }
 
     var body: some View {
@@ -167,6 +193,13 @@ struct ItemGridView: View {
             fetchItems()
             fetchOutfits()
         }
+        .onChange(of: authSession.userId) { _, newUserId in
+            guard newUserId != nil else { return }
+            hasCompletedInitialItemsFetch = false
+            hasCompletedInitialOutfitsFetch = false
+            fetchItems()
+            fetchOutfits()
+        }
         .onChange(of: filterKey) {
             fetchItems()
         }
@@ -212,6 +245,8 @@ struct ItemGridView: View {
                                     .font(.caption)
                             }
                         }
+                        .disabled(selectedItems.isEmpty)
+                        
                         Button {
                             showCategorySelectionSheet = true
                         } label: {
@@ -221,18 +256,34 @@ struct ItemGridView: View {
                                     .font(.caption)
                             }
                         }
+                        .disabled(selectedItems.isEmpty)
+
                         Button {
-                            toggleFavoriteForSelectedItems()
+                            showColorSelectionSheet = true
+                        } label: {
+                            VStack {
+                                Image(systemName: "paintpalette")
+                                Text("Color")
+                                    .font(.caption)
+                            }
+                        }
+                        .disabled(selectedItems.isEmpty)
+                        
+                        Button {
+                            pendingFavoriteSelectionWillUnfavorite = selectedItemsAllFavorited
+                            showFavoriteSelectionConfirmAlert = true
                         } label: {
                             VStack {
                                 Image(systemName: selectedItemsFavoriteToolbarIcon)
-                                    .foregroundColor(selectedItemsAllFavorited ? .red : .primary)
                                 Text("Favorite")
                                     .font(.caption)
                             }
                         }
                         .disabled(selectedItems.isEmpty)
                     }
+                    
+                    Spacer()
+                    
                     Button {
                         if selectedTab == "Items" {
                             showDeleteConfirmation = true
@@ -242,13 +293,13 @@ struct ItemGridView: View {
                     } label: {
                         VStack {
                             Image(systemName: "trash")
-                                .foregroundColor(.red)
+                                .foregroundColor(selectionDeleteColor)
                             Text("Delete")
                                 .font(.caption)
-                                .foregroundColor(.red)
+                                .foregroundColor(selectionDeleteColor)
                         }
                     }
-                    .disabled(selectedTab == "Outfits" && selectedOutfits.isEmpty)
+                    .disabled(isSelectionDeleteDisabled)
                 }
             }
             ToolbarItem(placement: .principal) {
@@ -350,8 +401,29 @@ struct ItemGridView: View {
         .sheet(isPresented: $showTagSelectionSheet) {
             tagSelectionSheet()
         }
+        .sheet(isPresented: $showColorSelectionSheet) {
+            colorSelectionSheet()
+        }
         .sheet(isPresented: $showCategorySelectionSheet) {
             categorySelectionSheet()
+        }
+        .alert(pendingFavoriteSelectionWillUnfavorite ? "Remove from Favorites?" : "Add to Favorites?", isPresented: $showFavoriteSelectionConfirmAlert) {
+            Button(pendingFavoriteSelectionWillUnfavorite ? "Remove" : "Add", role: pendingFavoriteSelectionWillUnfavorite ? .destructive : nil) {
+                let favorite = !pendingFavoriteSelectionWillUnfavorite
+                if let message = applyFavoriteToSelectedItems(favorite: favorite) {
+                    completeBulkSelectionAction(toast: message)
+                }
+                pendingFavoriteSelectionWillUnfavorite = false
+            }
+            Button("Cancel", role: .cancel) {
+                pendingFavoriteSelectionWillUnfavorite = false
+            }
+        } message: {
+            let count = selectedItems.count
+            let itemPhrase = "\(count) selected item\(count == 1 ? "" : "s")"
+            Text(pendingFavoriteSelectionWillUnfavorite
+                 ? "Remove \(itemPhrase) from favorites?"
+                 : "Add \(itemPhrase) to favorites?")
         }
         .alert("Delete Items", isPresented: $showDeleteConfirmation) {
             Button("Delete", role: .destructive) {
@@ -368,15 +440,6 @@ struct ItemGridView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Are you sure you want to delete \(selectedOutfits.count) outfit\(selectedOutfits.count == 1 ? "" : "s")? This action cannot be undone.")
-        }
-        .alert("Tag Added", isPresented: $showTagAddedConfirmation) {
-            Button("OK") {
-                // Exit selection mode after confirmation
-                isInSelectionMode = false
-                selectedItems.removeAll()
-            }
-        } message: {
-            Text("Tag \"\(addedTagName)\" has been added to \(addedTagItemCount) item\(addedTagItemCount == 1 ? "" : "s").")
         }
         .overlay(alignment: .top) {
             if showDeletionToast {
@@ -445,9 +508,6 @@ struct ItemGridView: View {
     func fetchItems() {
         // Require authentication - get userId
         guard let userId = authSession.userId?.uuidString else {
-            DispatchQueue.main.async {
-                self.closetItems = []
-            }
             return
         }
         
@@ -541,18 +601,16 @@ struct ItemGridView: View {
             // If user hasn't set their weight, don't filter (show all items)
         }
         
-        // Handle wardrobe filtering: use filterModel.selectedWardrobes if set, otherwise use selectedWardrobe
-        // Filter out wardrobes of the wrong type as a safeguard
+        // Always scope to the wardrobe the user is viewing in the closet/wishlist picker.
+        // Do not replace with filterModel.selectedWardrobes alone — that shows items from other
+        // wardrobes (e.g. default) while the secondary closet tab is selected.
+        subpredicates.append(NSPredicate(format: "ANY wardrobes == %@", selectedWardrobe))
+        
+        // If the filter sheet also narrowed wardrobes, intersect so both apply.
         let filteredWardrobes = filterModel.selectedWardrobes.filter { $0.type == wardrobeType }
-        let wardrobePredicate: NSPredicate
         if !filteredWardrobes.isEmpty {
-            // If user selected specific wardrobes in filter, use those (only of the correct type)
-            wardrobePredicate = NSPredicate(format: "ANY wardrobes IN %@", Array(filteredWardrobes))
-        } else {
-            // Otherwise, use the view's selected wardrobe
-            wardrobePredicate = NSPredicate(format: "ANY wardrobes == %@", selectedWardrobe)
+            subpredicates.append(NSPredicate(format: "ANY wardrobes IN %@", Array(filteredWardrobes)))
         }
-        subpredicates.append(wardrobePredicate)
         
         // Exclude drafts from item listings
         let draftPredicate = NSPredicate(format: "isDraft != YES")
@@ -578,14 +636,19 @@ struct ItemGridView: View {
         
         do {
             let results = try viewContext.fetch(request)
+            let selectedWardrobeID = selectedWardrobe.objectID
+            let scoped = results.filter { item in
+                guard let wardrobes = item.wardrobes as? Set<Wardrobe> else { return false }
+                return wardrobes.contains { $0.objectID == selectedWardrobeID }
+            }
             
             // Debug: Log results if weight filter is active
             if filterModel.filterByWeight {
                 let repository = UserProfileRepository(context: viewContext)
                 let userWeightKg = repository.getWeightKg()
-                print("🔍 Fetched \(results.count) items with weight filter")
+                print("🔍 Fetched \(scoped.count) items with weight filter")
                 // Sample a few items to check their weights
-                for (index, item) in results.prefix(5).enumerated() {
+                for (index, item) in scoped.prefix(5).enumerated() {
                     if let weight = item.primitiveValue(forKey: "weight") as? Double {
                         print("🔍 Item \(index + 1): weight = \(String(format: "%.2f", weight)) kg (>= \(String(format: "%.2f", userWeightKg))? \(weight >= userWeightKg))")
                     } else {
@@ -595,7 +658,8 @@ struct ItemGridView: View {
             }
             
             DispatchQueue.main.async {
-                self.closetItems = results
+                self.closetItems = scoped
+                self.hasCompletedInitialItemsFetch = true
             }
         } catch {
             print("❌ Failed to fetch items: \(error)")
@@ -604,6 +668,7 @@ struct ItemGridView: View {
             }
             DispatchQueue.main.async {
                 self.closetItems = []
+                self.hasCompletedInitialItemsFetch = true
             }
         }
     }
@@ -611,9 +676,6 @@ struct ItemGridView: View {
     func fetchOutfits() {
         // Require authentication - get userId
         guard let userId = authSession.userId?.uuidString else {
-            DispatchQueue.main.async {
-                self.outfits = []
-            }
             return
         }
         
@@ -668,11 +730,13 @@ struct ItemGridView: View {
             }
             DispatchQueue.main.async {
                 self.outfits = filtered
+                self.hasCompletedInitialOutfitsFetch = true
             }
         } catch {
             print("Failed to fetch outfits: \(error)")
             DispatchQueue.main.async {
                 self.outfits = []
+                self.hasCompletedInitialOutfitsFetch = true
             }
         }
     }
@@ -714,9 +778,26 @@ struct ItemGridView: View {
         }
     }
     
+    private func closetContentLoadingView(syncStatus: String?) -> some View {
+        VStack(spacing: 12) {
+            ProgressView()
+            if let syncStatus, !syncStatus.isEmpty {
+                Text(syncStatus)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private var itemsTab: some View {
         Group {
-            if closetItems.isEmpty {
+            if isItemsTabLoading {
+                closetContentLoadingView(
+                    syncStatus: appCapabilities.enablesCloudSync && syncService.isSyncing ? syncService.syncStatus : nil
+                )
+            } else if closetItems.isEmpty {
                 EmptyItemStateView(wardrobe: selectedWardrobe)
             } else {
                 ScrollView(showsIndicators: false) {
@@ -907,10 +988,12 @@ struct ItemGridView: View {
                 Image(systemName: "line.3.horizontal.decrease.circle")
             }
         }
-        Button {
-            showSharedUsersSheet = true
-        } label: {
-            Image(systemName: "person.2")
+        if appCapabilities.enablesFriendsAndSharing {
+            Button {
+                showSharedUsersSheet = true
+            } label: {
+                Image(systemName: "person.2")
+            }
         }
     }
     
@@ -951,7 +1034,13 @@ struct ItemGridView: View {
                     Image(systemName: "plus")
                 }
             } else {
-                NavigationLink(destination: OutfitAddView(wardrobeType: wardrobeType, initialWardrobe: selectedWardrobe)) {
+                NavigationLink(
+                    destination: OutfitAddView(
+                        wardrobeType: wardrobeType,
+                        initialWardrobe: selectedWardrobe,
+                        lockWardrobeSource: selectedWardrobe.isDefault != true
+                    )
+                ) {
                     Image(systemName: "plus")
                 }
             }
@@ -1075,7 +1164,7 @@ struct ItemGridView: View {
                             Spacer()
                             
                             Image(systemName: allItemsInWardrobe ? "checkmark" : "plus")
-                                .foregroundColor(allItemsInWardrobe ? .green : .blue)
+                                .foregroundColor(.blue)
                                 .font(.system(size: 16, weight: .medium))
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1375,15 +1464,28 @@ struct ItemGridView: View {
     }
     
     private func fetchAllWardrobes() -> [Wardrobe] {
+        guard let userId = authSession.userId?.uuidString, !userId.isEmpty else { return [] }
+
         let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
-        // Filter by wardrobeType (closet or wishlist) and exclude soft-deleted
-        request.predicate = NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", wardrobeType)
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            NSPredicate(format: "type == %@", wardrobeType),
+            NSPredicate(format: "userId == %@", userId),
+            NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
+        ])
         request.sortDescriptors = [
             NSSortDescriptor(keyPath: \Wardrobe.createdAt, ascending: true)
         ]
-        
+
         do {
-            return try viewContext.fetch(request)
+            let results = try viewContext.fetch(request)
+            let filteredWardrobes = filterModel.selectedWardrobes.filter {
+                $0.type == wardrobeType && $0.userId == userId
+            }
+            if filteredWardrobes.isEmpty {
+                return results
+            }
+            let allowedIDs = Set(filteredWardrobes.map(\.objectID))
+            return results.filter { allowedIDs.contains($0.objectID) }
         } catch {
             print("❌ Failed to fetch wardrobes: \(error.localizedDescription)")
             return []
@@ -1435,6 +1537,14 @@ struct ItemGridView: View {
         }
     }
     
+    private var isSelectionDeleteDisabled: Bool {
+        selectedTab == "Items" ? selectedItems.isEmpty : selectedOutfits.isEmpty
+    }
+
+    private var selectionDeleteColor: Color {
+        isSelectionDeleteDisabled ? .gray : .red
+    }
+
     private var selectedItemsAllFavorited: Bool {
         _ = favoriteToolbarTick
         guard !selectedItems.isEmpty else { return false }
@@ -1447,11 +1557,15 @@ struct ItemGridView: View {
         return selectedItemsAllFavorited ? "heart.fill" : "heart"
     }
 
-    private func toggleFavoriteForSelectedItems() {
-        guard !selectedItems.isEmpty else { return }
-        for item in selectedItems {
-            item.isFavorite.toggle()
+    @discardableResult
+    private func applyFavoriteToSelectedItems(favorite: Bool) -> String? {
+        guard !selectedItems.isEmpty else { return nil }
+        let selectionCount = selectedItems.count
+        var itemsUpdated = 0
+        for item in selectedItems where item.isFavorite != favorite {
+            item.isFavorite = favorite
             setUpdatedAt(item)
+            itemsUpdated += 1
         }
         do {
             try viewContext.save()
@@ -1459,8 +1573,14 @@ struct ItemGridView: View {
                 SyncService.shared.syncItemIfNeeded(item)
             }
             favoriteToolbarTick += 1
+            print("✅ \(favorite ? "Favorited" : "Unfavorited") \(itemsUpdated) items")
+            if favorite {
+                return "Added \(selectionCount) item\(selectionCount == 1 ? "" : "s") to favorites."
+            }
+            return "Removed \(selectionCount) item\(selectionCount == 1 ? "" : "s") from favorites."
         } catch {
-            print("❌ Failed to toggle favorite: \(error.localizedDescription)")
+            print("❌ Failed to update favorites: \(error.localizedDescription)")
+            return nil
         }
     }
 
@@ -1569,6 +1689,15 @@ struct ItemGridView: View {
         }
     }
 
+    private func completeBulkSelectionAction(toast message: String) {
+        showTagSelectionSheet = false
+        showColorSelectionSheet = false
+        showCategorySelectionSheet = false
+        isInSelectionMode = false
+        selectedItems.removeAll()
+        showToast(message)
+    }
+
     // Outfit sanitation is handled by `OutfitSanitizer` at delete-time.
     
     private func deleteSelectedOutfits() {
@@ -1637,7 +1766,7 @@ struct ItemGridView: View {
                             Spacer()
                             
                             Image(systemName: allItemsHaveTag ? "checkmark" : "plus")
-                                .foregroundColor(allItemsHaveTag ? .green : .blue)
+                                .foregroundColor(.blue)
                                 .font(.system(size: 16, weight: .medium))
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1655,14 +1784,17 @@ struct ItemGridView: View {
         .alert(pendingTagSelectionWillRemove ? "Remove Tag?" : "Add Tag?", isPresented: $showTagSelectionConfirmAlert) {
             Button(pendingTagSelectionWillRemove ? "Remove" : "Add", role: pendingTagSelectionWillRemove ? .destructive : nil) {
                 guard let tag = pendingTagSelectionTarget else { return }
+                let message: String?
                 if pendingTagSelectionWillRemove {
-                    removeTagFromSelectedItems(tag)
+                    message = removeTagFromSelectedItems(tag)
                 } else {
-                    addTagToSelectedItems(tag, showCompletionAlert: false)
+                    message = addTagToSelectedItems(tag)
+                }
+                if let message {
+                    completeBulkSelectionAction(toast: message)
                 }
                 pendingTagSelectionTarget = nil
                 pendingTagSelectionWillRemove = false
-                showTagSelectionSheet = false
             }
             Button("Cancel", role: .cancel) {
                 pendingTagSelectionTarget = nil
@@ -1690,151 +1822,44 @@ struct ItemGridView: View {
     }
     
     private func fetchAllTags() -> [Tag] {
+        guard let userId = authSession.userId?.uuidString, !userId.isEmpty else { return [] }
+
         let request: NSFetchRequest<Tag> = Tag.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Tag.name, ascending: true)]
-        
-        // Restrict to tags used by items in the current wardrobe type (wishlist vs closet)
-        request.predicate = NSPredicate(format: "SUBQUERY(items, $i, ANY $i.wardrobes.type == %@).@count > 0", wardrobeType)
-        
+        request.predicate = NSPredicate(
+            format: "SUBQUERY(items, $i, $i.userId == %@ AND ($i.isSoftDeleted != YES OR $i.isSoftDeleted == nil) AND ANY $i.wardrobes == %@).@count > 0",
+            userId,
+            selectedWardrobe
+        )
+
         do {
-            return try viewContext.fetch(request)
+            var tags = try viewContext.fetch(request)
+            for item in selectedItems {
+                guard let itemTags = item.tags as? Set<Tag> else { continue }
+                for tag in itemTags where !tags.contains(where: { $0.objectID == tag.objectID }) {
+                    tags.append(tag)
+                }
+            }
+            tags.sort { ($0.name ?? "").localizedCaseInsensitiveCompare($1.name ?? "") == .orderedAscending }
+            return tags
         } catch {
             print("❌ Failed to fetch tags: \(error.localizedDescription)")
             return []
         }
     }
     
-    private func addTagToSelectedItems(_ tag: Tag, showCompletionAlert: Bool = true) {
-        guard !selectedItems.isEmpty else { return }
-        
-        // Count how many items actually get the tag (excluding items that already have it)
+    @discardableResult
+    private func addTagToSelectedItems(_ tag: Tag) -> String? {
+        guard !selectedItems.isEmpty else { return nil }
+
+        let selectionCount = selectedItems.count
         var itemsAdded = 0
-        
-        // Add tag to all selected items (Core Data will handle duplicates)
         for item in selectedItems {
             if let tags = item.tags as? Set<Tag>, !tags.contains(tag) {
                 item.addToTags(tag)
+                setUpdatedAt(item)
                 itemsAdded += 1
             }
-        }
-        
-        do {
-            try viewContext.save()
-            print("✅ Added tag '\(tag.name ?? "unknown")' to \(itemsAdded) items")
-            
-            if showCompletionAlert {
-                addedTagName = tag.name ?? "Untitled"
-                addedTagItemCount = itemsAdded
-                showTagAddedConfirmation = true
-            }
-        } catch {
-            print("❌ Failed to add tag to items: \(error.localizedDescription)")
-        }
-    }
-
-    private func removeTagFromSelectedItems(_ tag: Tag) {
-        guard !selectedItems.isEmpty else { return }
-
-        var itemsRemoved = 0
-        for item in selectedItems {
-            if let tags = item.tags as? Set<Tag>, tags.contains(tag) {
-                item.removeFromTags(tag)
-                itemsRemoved += 1
-            }
-        }
-
-        do {
-            try viewContext.save()
-            print("✅ Removed tag '\(tag.name ?? "unknown")' from \(itemsRemoved) items")
-        } catch {
-            print("❌ Failed to remove tag from items: \(error.localizedDescription)")
-        }
-    }
-
-    // MARK: - Category Selection Sheet
-
-    @ViewBuilder
-    private func categorySelectionSheet() -> some View {
-        NavigationView {
-            List {
-                ForEach(fetchAllCategories(), id: \.objectID) { category in
-                    let catName = category.name ?? ""
-                    let subs = sortedSubcategories(for: category)
-
-                    Button {
-                        addCategoryToSelectedItems(categoryName: catName, subcategoryName: nil)
-                        showCategorySelectionSheet = false
-                    } label: {
-                        HStack {
-                            Text(catName)
-                            Spacer()
-                            Image(systemName: "plus")
-                                .foregroundColor(.blue)
-                                .font(.system(size: 16, weight: .medium))
-                        }
-                    }
-                    .buttonStyle(.plain)
-
-                    ForEach(subs, id: \.objectID) { sub in
-                        let subName = sub.name ?? ""
-                        Button {
-                            addCategoryToSelectedItems(categoryName: catName, subcategoryName: subName)
-                            showCategorySelectionSheet = false
-                        } label: {
-                            HStack {
-                                Text(subName)
-                                    .padding(.leading, 20)
-                                Spacer()
-                                Image(systemName: "plus")
-                                    .foregroundColor(.blue)
-                                    .font(.system(size: 16, weight: .medium))
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-            .listStyle(.plain)
-            .navigationTitle("Set Category")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(Color(UIColor.secondarySystemBackground), for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
-        }
-        .presentationDetents([.medium, .large])
-    }
-
-    private func fetchAllCategories() -> [Category] {
-        let request = NSFetchRequest<Category>(entityName: "Category")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Category.name, ascending: true)]
-        do {
-            return try viewContext.fetch(request)
-        } catch {
-            print("❌ Failed to fetch categories: \(error.localizedDescription)")
-            return []
-        }
-    }
-
-    private func sortedSubcategories(for category: Category) -> [Subcategory] {
-        let set = (category.subcategories as? Set<Subcategory>) ?? []
-        return set.sorted {
-            if $0.sortOrder != $1.sortOrder { return $0.sortOrder < $1.sortOrder }
-            return ($0.name ?? "") < ($1.name ?? "")
-        }
-    }
-
-    private func addCategoryToSelectedItems(categoryName: String, subcategoryName: String?) {
-        guard !selectedItems.isEmpty, !categoryName.isEmpty else { return }
-
-        let category = fetchOrCreateCategory(named: categoryName)
-        var subcategory: Subcategory?
-        if let subName = subcategoryName, !subName.isEmpty {
-            subcategory = fetchSubcategory(named: subName, in: category)
-        }
-
-        for item in selectedItems {
-            item.category = category
-            item.subcategory = subcategory
-            setUpdatedAt(item)
         }
 
         do {
@@ -1842,37 +1867,315 @@ struct ItemGridView: View {
             for item in selectedItems {
                 SyncService.shared.syncItemIfNeeded(item)
             }
-            print("✅ Set category '\(categoryName)' on \(selectedItems.count) items")
+            print("✅ Added tag '\(tag.name ?? "unknown")' to \(itemsAdded) items")
+            let name = tag.name ?? "tag"
+            return "Added tag “\(name)” to \(selectionCount) item\(selectionCount == 1 ? "" : "s")."
         } catch {
-            print("❌ Failed to set category on items: \(error.localizedDescription)")
+            print("❌ Failed to add tag to items: \(error.localizedDescription)")
+            return nil
         }
     }
 
-    private func fetchOrCreateCategory(named name: String) -> Category {
-        let request = NSFetchRequest<Category>(entityName: "Category")
-        request.predicate = NSPredicate(format: "name ==[c] %@", name)
-        do {
-            if let match = try viewContext.fetch(request).first {
-                return match
-            }
-        } catch { print("❌ Fetch category: \(error)") }
+    @discardableResult
+    private func removeTagFromSelectedItems(_ tag: Tag) -> String? {
+        guard !selectedItems.isEmpty else { return nil }
 
-        let newCategory = Category(context: viewContext)
-        newCategory.name = name
-        newCategory.id = UUID()
-        return newCategory
+        let selectionCount = selectedItems.count
+        for item in selectedItems {
+            if let tags = item.tags as? Set<Tag>, tags.contains(tag) {
+                item.removeFromTags(tag)
+                setUpdatedAt(item)
+            }
+        }
+
+        do {
+            try viewContext.save()
+            for item in selectedItems {
+                SyncService.shared.syncItemIfNeeded(item)
+            }
+            print("✅ Removed tag '\(tag.name ?? "unknown")' from \(selectionCount) items")
+            let name = tag.name ?? "tag"
+            return "Removed tag “\(name)” from \(selectionCount) item\(selectionCount == 1 ? "" : "s")."
+        } catch {
+            print("❌ Failed to remove tag from items: \(error.localizedDescription)")
+            return nil
+        }
     }
 
-    private func fetchSubcategory(named name: String, in category: Category) -> Subcategory? {
-        let req = NSFetchRequest<Subcategory>(entityName: "Subcategory")
-        req.fetchLimit = 1
-        req.predicate = NSPredicate(format: "name ==[c] %@ AND category == %@", name, category)
-        return try? viewContext.fetch(req).first
+    // MARK: - Color Selection Sheet
+
+    @ViewBuilder
+    private func colorSelectionSheet() -> some View {
+        let colorsForContext = fetchAllColorsForBulkSet()
+        return NavigationView {
+            List {
+                if colorsForContext.isEmpty {
+                    Text("Colors added to your closet will appear here.")
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    ForEach(colorsForContext, id: \.objectID) { color in
+                        let allItemsHaveColor = doAllSelectedItemsHaveColor(color)
+                        let name = color.name ?? ""
+
+                        Button {
+                            pendingColorSelectionTarget = color
+                            pendingColorSelectionWillRemove = allItemsHaveColor
+                            showColorSelectionConfirmAlert = true
+                        } label: {
+                            HStack {
+                                Circle()
+                                    .fill(colorFromName(name))
+                                    .frame(width: 28, height: 28)
+                                    .overlay(Circle().stroke(Color.gray, lineWidth: 1))
+
+                                Text(name)
+
+                                Spacer()
+
+                                Image(systemName: allItemsHaveColor ? "checkmark" : "plus")
+                                    .foregroundColor(.blue)
+                                    .font(.system(size: 16, weight: .medium))
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .navigationTitle("Add Color")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Color(UIColor.secondarySystemBackground), for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+        }
+        .alert(pendingColorSelectionWillRemove ? "Remove Color?" : "Add Color?", isPresented: $showColorSelectionConfirmAlert) {
+            Button(pendingColorSelectionWillRemove ? "Remove" : "Add", role: pendingColorSelectionWillRemove ? .destructive : nil) {
+                guard let color = pendingColorSelectionTarget else { return }
+                let message: String?
+                if pendingColorSelectionWillRemove {
+                    message = removeColorFromSelectedItems(color)
+                } else {
+                    message = addColorToSelectedItems(color)
+                }
+                if let message {
+                    completeBulkSelectionAction(toast: message)
+                }
+                pendingColorSelectionTarget = nil
+                pendingColorSelectionWillRemove = false
+            }
+            Button("Cancel", role: .cancel) {
+                pendingColorSelectionTarget = nil
+                pendingColorSelectionWillRemove = false
+            }
+        } message: {
+            let name = pendingColorSelectionTarget?.name ?? "this color"
+            Text(pendingColorSelectionWillRemove
+                 ? "Remove color “\(name)” from \(selectedItems.count) selected item(s)?"
+                 : "Add color “\(name)” to \(selectedItems.count) selected item(s)?")
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func doAllSelectedItemsHaveColor(_ color: AppColor) -> Bool {
+        guard !selectedItems.isEmpty else { return false }
+        return selectedItems.allSatisfy { item in
+            (item.colors as? Set<AppColor>)?.contains(color) ?? false
+        }
+    }
+
+    private func fetchAllColorsForBulkSet() -> [AppColor] {
+        guard let userId = authSession.userId?.uuidString, !userId.isEmpty else { return [] }
+
+        do {
+            var colors = try viewContext.fetchColorsForFilterList(userId: userId, itemsOnly: false)
+            for item in selectedItems {
+                guard let itemColors = item.colors as? Set<AppColor> else { continue }
+                for color in itemColors where !colors.contains(where: { $0.objectID == color.objectID }) {
+                    colors.append(color)
+                }
+            }
+            colors.sort { ($0.name ?? "").localizedCaseInsensitiveCompare($1.name ?? "") == .orderedAscending }
+            return colors
+        } catch {
+            print("❌ Failed to fetch colors: \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    @discardableResult
+    private func addColorToSelectedItems(_ color: AppColor) -> String? {
+        guard !selectedItems.isEmpty else { return nil }
+
+        let selectionCount = selectedItems.count
+        for item in selectedItems {
+            if let colors = item.colors as? Set<AppColor>, !colors.contains(color) {
+                item.addToColors(color)
+                setUpdatedAt(item)
+            }
+        }
+
+        do {
+            try viewContext.save()
+            for item in selectedItems {
+                SyncService.shared.syncItemIfNeeded(item)
+            }
+            print("✅ Added color '\(color.name ?? "unknown")' to \(selectionCount) items")
+            let name = color.name ?? "color"
+            return "Added color “\(name)” to \(selectionCount) item\(selectionCount == 1 ? "" : "s")."
+        } catch {
+            print("❌ Failed to add color to items: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    @discardableResult
+    private func removeColorFromSelectedItems(_ color: AppColor) -> String? {
+        guard !selectedItems.isEmpty else { return nil }
+
+        let selectionCount = selectedItems.count
+        for item in selectedItems {
+            if let colors = item.colors as? Set<AppColor>, colors.contains(color) {
+                item.removeFromColors(color)
+                setUpdatedAt(item)
+            }
+        }
+
+        do {
+            try viewContext.save()
+            for item in selectedItems {
+                SyncService.shared.syncItemIfNeeded(item)
+            }
+            print("✅ Removed color '\(color.name ?? "unknown")' from \(selectionCount) items")
+            let name = color.name ?? "color"
+            return "Removed color “\(name)” from \(selectionCount) item\(selectionCount == 1 ? "" : "s")."
+        } catch {
+            print("❌ Failed to remove color from items: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    // MARK: - Category Selection Sheet
+
+    @ViewBuilder
+    private func categorySelectionSheet() -> some View {
+        CategoryPickerList(
+            title: "Set Category",
+            userId: authSession.userId?.uuidString ?? "",
+            expanded: $bulkSetCategoryExpanded,
+            onCategoriesLoaded: expandBulkSetCategoryForCurrentSelection(categories:),
+            showsCategoryCheckmark: { allSelectedItemsMatch(category: $0, subcategory: nil) },
+            showsSubcategoryCheckmark: { category, sub in
+                allSelectedItemsMatch(category: category, subcategory: sub)
+            },
+            onCategoryTap: { category in
+                pendingBulkCategory = category
+                pendingBulkSubcategory = nil
+                showCategorySelectionConfirmAlert = true
+            },
+            onSubcategoryTap: { category, sub in
+                pendingBulkCategory = category
+                pendingBulkSubcategory = sub
+                showCategorySelectionConfirmAlert = true
+            }
+        )
+        .alert("Set Category?", isPresented: $showCategorySelectionConfirmAlert) {
+            Button("Apply") {
+                guard let category = pendingBulkCategory else { return }
+                if let message = applyCategoryToSelectedItems(category: category, subcategory: pendingBulkSubcategory) {
+                    completeBulkSelectionAction(toast: message)
+                }
+                pendingBulkCategory = nil
+                pendingBulkSubcategory = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingBulkCategory = nil
+                pendingBulkSubcategory = nil
+            }
+        } message: {
+            Text(bulkCategorySelectionConfirmMessage)
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private var bulkCategorySelectionConfirmMessage: String {
+        let count = selectedItems.count
+        let itemPhrase = "\(count) selected item\(count == 1 ? "" : "s")"
+        if let sub = pendingBulkSubcategory {
+            let cat = pendingBulkCategory?.name ?? ""
+            let subName = sub.name ?? ""
+            return "Set “\(cat) › \(subName)” on \(itemPhrase)?"
+        }
+        let name = pendingBulkCategory?.name ?? "category"
+        return "Set category “\(name)” on \(itemPhrase)?"
+    }
+
+    private func expandBulkSetCategoryForCurrentSelection(categories: [Category]) {
+        bulkSetCategoryExpanded = []
+        guard !selectedItems.isEmpty,
+              let first = selectedItems.first,
+              let sharedCategory = first.category,
+              selectedItems.allSatisfy({ $0.category?.objectID == sharedCategory.objectID }),
+              let listCategory = categories.first(where: { $0.objectID == sharedCategory.objectID })
+        else { return }
+
+        if let sharedSub = first.subcategory,
+           sharedSub.category == sharedCategory,
+           selectedItems.allSatisfy({ $0.subcategory?.objectID == sharedSub.objectID }) {
+            bulkSetCategoryExpanded.insert(listCategory.objectID)
+        }
+    }
+
+    private func allSelectedItemsMatch(category: Category, subcategory: Subcategory?) -> Bool {
+        guard !selectedItems.isEmpty else { return false }
+        return selectedItems.allSatisfy { item in
+            guard item.category?.objectID == category.objectID else { return false }
+            if let subcategory {
+                return item.subcategory?.objectID == subcategory.objectID
+            }
+            return item.subcategory == nil
+        }
+    }
+
+    @discardableResult
+    private func applyCategoryToSelectedItems(category: Category, subcategory: Subcategory?) -> String? {
+        guard !selectedItems.isEmpty else { return nil }
+
+        let selectionCount = selectedItems.count
+        for item in selectedItems {
+            item.category = category
+            item.subcategory = subcategory
+            setUpdatedAt(item)
+        }
+
+        let label: String
+        if let subName = subcategory?.name, !subName.isEmpty {
+            let catName = category.name ?? "category"
+            label = "\(catName) › \(subName)"
+        } else {
+            label = category.name ?? "category"
+        }
+
+        do {
+            try viewContext.save()
+            for item in selectedItems {
+                SyncService.shared.syncItemIfNeeded(item)
+            }
+            print("✅ Set category '\(label)' on \(selectionCount) items")
+            return "Set category “\(label)” on \(selectionCount) item\(selectionCount == 1 ? "" : "s")."
+        } catch {
+            print("❌ Failed to set category on items: \(error.localizedDescription)")
+            return nil
+        }
     }
 
     private var outfitsTab: some View {
         Group {
-            if outfits.isEmpty {
+            if isOutfitsTabLoading {
+                closetContentLoadingView(
+                    syncStatus: appCapabilities.enablesCloudSync && syncService.isSyncing ? syncService.syncStatus : nil
+                )
+            } else if outfits.isEmpty {
                 EmptyOutfitStateView()
             } else {
                 ScrollView(showsIndicators: false) {

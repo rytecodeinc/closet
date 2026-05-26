@@ -12,6 +12,7 @@ import CoreData
 // MARK: - ItemAddView (init with parentContext; child ctx ready before body)
 struct ItemAddView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.appCapabilities) private var appCapabilities
     @EnvironmentObject private var bulkItemImportCoordinator: BulkItemImportCoordinator
     @EnvironmentObject private var authSession: AuthSession
 
@@ -30,7 +31,6 @@ struct ItemAddView: View {
 
     // Match ItemDetailView: hero shows "Item(front)" + "Worn" with a segmented picker row.
     @State private var heroCarouselPage: Int = 0 // 0 = item(front), 1 = worn
-    @State private var showHeroDisplayOptionsDialog: Bool = false
     @State private var showAddMultipleDialog: Bool = false
     @State private var showMultiImagePicker: Bool = false
     @State private var multiPickedImages: [UIImage] = []
@@ -244,7 +244,7 @@ struct ItemAddView: View {
         } message: {
             Text("Your item has been saved as a draft.")
         }
-        .alert("Save as draft?", isPresented: $showingSaveDraftConfirmation) {
+        .alert("Save draft?", isPresented: $showingSaveDraftConfirmation) {
             Button("Yes") { saveDraft() }
             Button("No", role: .cancel) {
                 if queueCoordinator.isQueueActive && queueCoordinator.hasMore {
@@ -255,6 +255,8 @@ struct ItemAddView: View {
                     dismiss()
                 }
             }
+        } message: {
+            Text("Saving this item to drafts will allow you to finish editing it later.")
         }
         .onAppear {
             initializeSelectedImageType()
@@ -297,6 +299,13 @@ struct ItemAddView: View {
         if selectedImageType == .back { selectedImageType = .front }
         heroCarouselPage = (selectedImageType == .worn) ? 1 : 0
     }
+
+    /// Hero carousel + segmented picker only use front/worn slots (page 0 / 1).
+    private func syncHeroCarouselWithSelectedImageType() {
+        let page = (selectedImageType == .worn) ? 1 : 0
+        guard heroCarouselPage != page else { return }
+        withAnimation { heroCarouselPage = page }
+    }
     
     private func itemWornPickerRow() -> some View {
         HStack(spacing: 24) {
@@ -338,10 +347,13 @@ struct ItemAddView: View {
         .padding(.horizontal, 14)
         .background(Color(.systemBackground))
         .confirmationDialog("Add Multiple Images", isPresented: $showAddMultipleDialog, titleVisibility: .visible) {
-            Button("From Camera") {
-                pendingImageType = selectedImageType
-                imagePickerSource = .camera
-                isImagePickerPresented = true
+            if appCapabilities.enablesAddMultipleCamera,
+               UIImagePickerController.isSourceTypeAvailable(.camera) {
+                Button("From Camera") {
+                    pendingImageType = selectedImageType
+                    imagePickerSource = .camera
+                    isImagePickerPresented = true
+                }
             }
             Button("From Library") {
                 showMultiImagePicker = true
@@ -350,20 +362,19 @@ struct ItemAddView: View {
         }
     }
     
+    private var screenWidth: CGFloat { UIScreen.main.bounds.width }
+
     private func itemImageDisplay() -> some View {
-        let side = UIScreen.main.bounds.width
         let frontImage = getImage(for: .front)
         let wornImage = getImage(for: .worn)
         
-        return ZStack(alignment: .topTrailing) {
-            TabView(selection: $heroCarouselPage) {
+        return TabView(selection: $heroCarouselPage) {
                 Group {
                     if let uiImage = frontImage {
                         Image(uiImage: uiImage)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: side)
+                            .frame(width: screenWidth, height: screenWidth)
                             .clipped()
                     } else {
                         heroImagePlaceholder(for: .front)
@@ -376,8 +387,7 @@ struct ItemAddView: View {
                         Image(uiImage: uiImage)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: side)
+                            .frame(width: screenWidth, height: screenWidth)
                             .clipped()
                     } else {
                         heroImagePlaceholder(for: .worn)
@@ -385,84 +395,54 @@ struct ItemAddView: View {
                 }
                 .tag(1)
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .frame(height: side)
-            
-            if (heroCarouselPage == 0 && frontImage != nil) || (heroCarouselPage == 1 && wornImage != nil) {
-                heroDisplayAreaOptionsButton
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: side)
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .frame(width: screenWidth, height: screenWidth)
         .onChange(of: heroCarouselPage) { _, newPage in
             selectedImageType = (newPage == 0) ? .front : .worn
             _ = vm.draftItem.photos
         }
-        .confirmationDialog("Photo", isPresented: $showHeroDisplayOptionsDialog, titleVisibility: .visible) {
-            if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                Button("Retake Photo") {
-                    pendingImageType = selectedImageType
-                    imagePickerSource = .camera
-                    isImagePickerPresented = true
-                }
-            }
-            Button("Replace from Library") {
-                pendingImageType = selectedImageType
-                imagePickerSource = .photoLibrary
-                isImagePickerPresented = true
-            }
-            if getImage(for: selectedImageType) != nil {
-                Button("Edit Image") {
-                    presentCropperForImage(type: selectedImageType)
-                }
-            }
-            if selectedImageType == .worn, getImage(for: selectedImageType) != nil {
-                Button("Remove Image", role: .destructive) {
-                    deleteImage(type: selectedImageType)
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        }
-    }
-
-    /// Top-trailing control on the hero image area.
-    private var heroDisplayAreaOptionsButton: some View {
-        Button {
-            showHeroDisplayOptionsDialog = true
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.primary)
-                .frame(width: 36, height: 36)
-                .background(.ultraThinMaterial, in: Circle())
-        }
-        .buttonStyle(.plain)
-        .padding(12)
-        .accessibilityLabel("More options")
     }
 
     private func heroImagePlaceholder(for type: ImageType) -> some View {
         Rectangle()
             .fill(Color.gray.opacity(0.2))
-            .frame(maxWidth: .infinity)
-            .frame(height: UIScreen.main.bounds.width)
+            .frame(width: screenWidth, height: screenWidth)
             .overlay {
                 VStack(spacing: 10) {
-                    Image(systemName: "photo")
+                    Image(systemName: heroPlaceholderSystemImage(for: type))
                         .foregroundStyle(.secondary)
                         .font(.system(size: 40))
-                    Text(placeholderText(for: type))
+                    Text(heroPlaceholderMessage(for: type))
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.secondary)
-                    Text("Tap to add a photo")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
                 }
             }
             .contentShape(Rectangle())
             .onTapGesture {
                 presentImagePicker(for: type)
             }
+    }
+
+    private func heroPlaceholderSystemImage(for type: ImageType) -> String {
+        switch type {
+        case .worn:
+            return "person.crop.square.badge.camera"
+        case .front, .back:
+            return "photo"
+        }
+    }
+
+    private func heroPlaceholderMessage(for type: ImageType) -> String {
+        switch type {
+        case .front:
+            return "Tap to add a photo of the front of the item"
+        case .worn:
+            return "Tap to add a photo of you wearing this item"
+        case .back:
+            return "Tap to add a photo of the back of the item"
+        }
     }
     
     private func imageThumbnailRow() -> some View {
@@ -491,7 +471,14 @@ struct ItemAddView: View {
                         if selectedImageType == type {
                             showThumbnailActionSheet(for: type)
                         } else {
-                            withAnimation { selectedImageType = type }
+                            withAnimation {
+                                selectedImageType = type
+                                if type == .worn {
+                                    heroCarouselPage = 1
+                                } else if type == .front {
+                                    heroCarouselPage = 0
+                                }
+                            }
                         }
                     }
             } else {
@@ -679,6 +666,7 @@ struct ItemAddView: View {
                 setUpdatedAt(vm.draftItem)
                 vm.photoRefreshToken = UUID()
                 selectedImageType = .worn
+                syncHeroCarouselWithSelectedImageType()
             }
         }
     }
@@ -764,6 +752,7 @@ struct ItemAddView: View {
             setUpdatedAt(vm.draftItem)
             vm.photoRefreshToken = UUID()
             selectedImageType = .worn
+            syncHeroCarouselWithSelectedImageType()
         }
     }
 
@@ -778,7 +767,10 @@ struct ItemAddView: View {
         if let photo = photoToDelete {
             vm.childContext.delete(photo)
             vm.photoRefreshToken = UUID()
-            if selectedImageType == type { selectedImageType = .front }
+            if selectedImageType == type {
+                selectedImageType = .front
+                syncHeroCarouselWithSelectedImageType()
+            }
         }
     }
     
@@ -990,6 +982,17 @@ final class ItemAddViewModel: ObservableObject {
     private static func fetchPrimaryWardrobe(forType type: String, userId: String, in context: NSManagedObjectContext) -> Wardrobe? {
         try? WardrobeBootstrap.fetchPrimaryWardrobe(forType: type, userIdString: userId, in: context)
     }
+
+    private static func stampUserId(_ authUserId: String?, on item: Item) {
+        if let authUserId = authUserId, !authUserId.isEmpty,
+           item.userId == nil || item.userId?.isEmpty == true {
+            item.userId = authUserId
+        }
+    }
+
+    private func stampUserId(on item: Item) {
+        Self.stampUserId(authUserId, on: item)
+    }
     
     init(parentContext: NSManagedObjectContext, selectedWardrobe: Wardrobe?, initialURL: URL? = nil, initialImage: UIImage? = nil, authUserId: String? = nil) {
         self.initialURL = initialURL
@@ -1028,6 +1031,7 @@ final class ItemAddViewModel: ObservableObject {
             }
         }
         
+        Self.stampUserId(authUserId, on: item)
         self.draftItem = item
     }
 
@@ -1045,6 +1049,7 @@ final class ItemAddViewModel: ObservableObject {
         self.childContext = ctx
 
         if let draftInChild = try? ctx.existingObject(with: existingDraft.objectID) as? Item {
+            Self.stampUserId(authUserId, on: draftInChild)
             self.draftItem = draftInChild
         } else {
             // Fallback: create a blank item (shouldn't happen in practice)
@@ -1053,6 +1058,7 @@ final class ItemAddViewModel: ObservableObject {
             let now = Date()
             item.timestamp = now
             item.createdAt = now
+            Self.stampUserId(authUserId, on: item)
             self.draftItem = item
             print("⚠️ Could not load existing draft into child context — creating blank item")
         }
@@ -1069,6 +1075,7 @@ final class ItemAddViewModel: ObservableObject {
         childContext.rollback()
         originalDraftObjectID = draft.objectID
         if let draftInChild = try? childContext.existingObject(with: draft.objectID) as? Item {
+            stampUserId(on: draftInChild)
             draftItem = draftInChild
         } else {
             print("⚠️ Could not load draft into child context")
@@ -1234,6 +1241,7 @@ final class ItemAddViewModel: ObservableObject {
             }
         }
         
+        stampUserId(on: item)
         self.draftItem = item
         self.photoRefreshToken = UUID()
         print("✅ New item created and ready for next image")
@@ -1447,215 +1455,5 @@ final class ItemAddViewModel: ObservableObject {
             return domain.capitalized
         }
         return "Product Link"
-    }
-}
-
-// MARK: - Reusable attributes section
-private struct ItemAttributesSection: View {
-    @ObservedObject var item: Item
-    
-    @State private var isWardrobeDrawerPresented = false
-    @State private var isCategoryDrawerPresented = false
-    @State private var isSizeDrawerPresented = false
-    @State private var isColorDrawerPresented = false
-    @State private var isSeasonDrawerPresented = false
-    @State private var isBrandDrawerPresented = false
-    @State private var isLocationDrawerPresented = false
-    @State private var isPriceDrawerPresented = false
-    @State private var isLinkDrawerPresented = false
-    @State private var isTagDrawerPresented = false
-
-    private let currencySymbol = Locale.current.currencySymbol ?? "$"
-
-    var body: some View {
-        Section {
-            wardrobeRow()
-            categoryRow()
-            sizeRow()
-            colorRow()
-            seasonRow()
-            brandRow()
-            priceRow()
-            linkRow()
-            locationRow()
-            tagRow()
-        } header: {
-            Text("ATTRIBUTES").fontWeight(.semibold)
-        }
-    }
-
-    private func wardrobeRow() -> some View {
-        Button { isWardrobeDrawerPresented = true } label: {
-            HStack {
-                Text("Wardrobes").foregroundColor(.primary)
-                Spacer()
-                if let selected = item.wardrobes as? Set<Wardrobe>, !selected.isEmpty {
-                    let names = Array(Set(selected.compactMap { $0.name }.filter { !$0.isEmpty })).sorted()
-                    Text(names.prefix(2).joined(separator: ", ")).foregroundColor(.gray).lineLimit(1)
-                    if names.count > 2 { Text("…").foregroundColor(.gray) }
-                }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
-            }
-        }
-        .sheet(isPresented: $isWardrobeDrawerPresented) {
-            SetWardrobeView(item: item).environment(\.managedObjectContext, item.managedObjectContext!)
-        }
-    }
-
-    private func categoryRow() -> some View {
-        Button { isCategoryDrawerPresented = true } label: {
-            HStack {
-                Text("Category").foregroundColor(.primary)
-                Spacer()
-                if let name = item.category?.name, !name.isEmpty { Text(name).foregroundColor(.gray) }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
-            }
-        }
-        .sheet(isPresented: $isCategoryDrawerPresented) {
-            SetCategoryView(item: item).environment(\.managedObjectContext, item.managedObjectContext!)
-        }
-    }
-    
-    private func sizeRow() -> some View {
-        Button { isSizeDrawerPresented = true } label: {
-            HStack {
-                Text("Size").foregroundColor(.primary)
-                Spacer()
-                if let size = item.size, let value = size.value, !value.isEmpty { Text(value).foregroundColor(.gray) }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
-            }
-        }
-        .sheet(isPresented: $isSizeDrawerPresented) {
-            SetSizeView(item: item).environment(\.managedObjectContext, item.managedObjectContext!)
-        }
-    }
-
-    private func colorRow() -> some View {
-        Button { isColorDrawerPresented = true } label: {
-            HStack {
-                Text("Colors").foregroundColor(.primary)
-                Spacer()
-                if let selected = item.colors as? Set<AppColor>, !selected.isEmpty {
-                    let sorted = selected.sorted { ($0.name ?? "") < ($1.name ?? "") }
-                    HStack(spacing: 8) {
-                        ForEach(sorted.prefix(4), id: \.self) { appColor in
-                            Circle()
-                                .fill(colorFromName(appColor.name ?? ""))
-                                .frame(width: 20, height: 20)
-                                .overlay(Circle().stroke(Color.gray, lineWidth: 1))
-                        }
-                        if sorted.count > 4 { Text("…").foregroundColor(.gray).font(.headline) }
-                    }
-                }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
-            }
-        }
-        .sheet(isPresented: $isColorDrawerPresented) {
-            SetColorView(item: item).environment(\.managedObjectContext, item.managedObjectContext!)
-        }
-    }
-
-    private func seasonRow() -> some View {
-        Button { isSeasonDrawerPresented = true } label: {
-            HStack {
-                Text("Seasons").foregroundColor(.primary)
-                Spacer()
-                if let seasons = item.seasons as? Set<Season>, !seasons.isEmpty {
-                    let names = seasons.compactMap { $0.name }.sorted()
-                    Text(names.prefix(2).joined(separator: ", ")).foregroundColor(.gray)
-                    if names.count > 2 { Text("…").foregroundColor(.gray).font(.headline) }
-                }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
-            }
-        }
-        .sheet(isPresented: $isSeasonDrawerPresented) {
-            SetSeasonView(item: item).environment(\.managedObjectContext, item.managedObjectContext!)
-        }
-    }
-
-    private func brandRow() -> some View {
-        Button { isBrandDrawerPresented = true } label: {
-            HStack {
-                Text("Brand").foregroundColor(.primary)
-                Spacer()
-                if let brand = item.brand?.name, !brand.isEmpty { Text(brand).foregroundColor(.gray) }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
-            }
-        }
-        .sheet(isPresented: $isBrandDrawerPresented) {
-            BrandSelectionView(item: item).environment(\.managedObjectContext, item.managedObjectContext!)
-        }
-    }
-
-    private func priceRow() -> some View {
-        Button { isPriceDrawerPresented = true } label: {
-            HStack {
-                Text("Price").foregroundColor(.primary)
-                Spacer()
-                if let amount = item.price?.amount {
-                    HStack(spacing: 0) {
-                        Text(currencySymbol).foregroundColor(.gray)
-                        Text(NumberFormatter.currency2.string(from: amount) ?? "0.00").foregroundColor(.gray).multilineTextAlignment(.trailing)
-                    }
-                }
-                Image(systemName: "chevron.right").foregroundColor(.gray).padding(.leading, 4)
-            }
-        }
-        .sheet(isPresented: $isPriceDrawerPresented) {
-            SetPriceView(item: item).environment(\.managedObjectContext, item.managedObjectContext!)
-        }
-    }
-
-    private func linkRow() -> some View {
-        let names = (item.links as? Set<Link>)?.compactMap { $0.name }.sorted() ?? []
-        let display = names.prefix(2).joined(separator: ", ")
-        let hasMore = names.count > 2
-        return Button { isLinkDrawerPresented = true } label: {
-            HStack {
-                Text(names.count <= 1 ? "Link" : "Links").foregroundColor(.primary)
-                Spacer()
-                if !display.isEmpty {
-                    HStack(spacing: 2) {
-                        Text(display).foregroundColor(.gray).lineLimit(1)
-                        if hasMore { Text("…").foregroundColor(.gray).font(.headline) }
-                    }
-                }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
-            }
-        }
-        .sheet(isPresented: $isLinkDrawerPresented) {
-            SetLinkView(item: item).environment(\.managedObjectContext, item.managedObjectContext!)
-        }
-    }
-
-    private func locationRow() -> some View {
-        Button { isLocationDrawerPresented = true } label: {
-            HStack {
-                Text("Location").foregroundColor(.primary)
-                Spacer()
-                if let loc = item.location?.name, !loc.isEmpty { Text(loc).foregroundColor(.gray) }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
-            }
-        }
-        .sheet(isPresented: $isLocationDrawerPresented) {
-            SetLocationView(item: item).environment(\.managedObjectContext, item.managedObjectContext!)
-        }
-    }
-
-    private func tagRow() -> some View {
-        Button { isTagDrawerPresented = true } label: {
-            HStack {
-                Text("Tags").foregroundColor(.primary)
-                Spacer()
-                if let tagSet = item.tags as? Set<Tag>, !tagSet.isEmpty {
-                    let names = tagSet.compactMap { $0.name }.sorted().joined(separator: ", ")
-                    Text(names.prefix(20)).foregroundColor(.gray).lineLimit(1).truncationMode(.tail)
-                }
-                Image(systemName: "chevron.right").foregroundColor(.gray)
-            }
-        }
-        .sheet(isPresented: $isTagDrawerPresented) {
-            SetTagView(item: item).environment(\.managedObjectContext, item.managedObjectContext!)
-        }
     }
 }

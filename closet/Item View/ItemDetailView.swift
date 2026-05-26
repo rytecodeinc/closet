@@ -14,7 +14,9 @@ struct ItemDetailView: View {
     @ObservedObject var item: Item
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.appCapabilities) private var appCapabilities
     @EnvironmentObject private var supabaseService: SupabaseService
+    @EnvironmentObject private var authSession: AuthSession
     
     @State private var outfits: [Outfit] = []
     @State private var isEditingAttributes = false
@@ -41,7 +43,6 @@ struct ItemDetailView: View {
     @State private var pendingShareText: String?
     @State private var pendingShareImage: UIImage?
     @State private var showShareFriendsSheet = false
-    @State private var showPhotoStorageSheet = false
     @State private var selectedImageType: ImageType = .front
     /// Inline hero carousel: 0 = front, 1 = worn (fixed slots; fullscreen still skips empty slots).
     @State private var heroCarouselPage: Int = 0
@@ -121,6 +122,20 @@ struct ItemDetailView: View {
         heroCarouselPage = 0
     }
 
+    private func selectHeroImageSlot(_ type: ImageType) {
+        switch type {
+        case .front:
+            selectedImageType = .front
+            heroCarouselPage = 0
+        case .worn:
+            selectedImageType = .worn
+            heroCarouselPage = 1
+        case .back:
+            selectedImageType = .back
+            heroCarouselPage = 0
+        }
+    }
+
     /// Hero carousel only has front + worn; map `.back` (e.g. after fullscreen swipe) back to a valid slot.
     private func syncHeroCarouselAfterFullscreenOrBackSelection() {
         switch selectedImageType {
@@ -158,13 +173,13 @@ struct ItemDetailView: View {
                                 }
                             ),
                             favoriteSelection: item.isFavorite,
+                            showsShareButton: appCapabilities.enablesFriendsAndSharing,
                             onLike: {
                                 withAnimation {
                                     toggleFavorite()
                                 }
                             },
-                            onShare: { showShareFriendsSheet = true },
-                            onPhotoStorage: { showPhotoStorageSheet = true }
+                            onShare: { showShareFriendsSheet = true }
                         )
                     }
                     .listRowInsets(EdgeInsets(.zero))
@@ -274,10 +289,12 @@ struct ItemDetailView: View {
         .sheet(item: $attributesSheet) { $0.destination(for: item) }
         .onAppear {
             fetchOutfits()
-            initializeSelectedImageType()
             if pairedItems.isEmpty {
                 isSetsExpanded = false
             }
+        }
+        .onChange(of: authSession.userId) { _, _ in
+            fetchOutfits()
         }
         .onChange(of: pairedItems.count) { oldCount, newCount in
             if newCount == 0 {
@@ -318,10 +335,12 @@ struct ItemDetailView: View {
         }
         .navigationDestination(item: $createOutfitNavigation) { _ in
             let uri = item.objectID.uriRepresentation().absoluteString
+            let wardrobe = preferredWardrobeForNewOutfit
             return OutfitAddView(
                 outfitToEdit: nil,
-                wardrobeType: "closet",
-                initialWardrobe: preferredWardrobeForNewOutfit,
+                wardrobeType: wardrobe?.type ?? "closet",
+                initialWardrobe: wardrobe,
+                lockWardrobeSource: wardrobe?.isDefault != true,
                 preselectedItemURI: uri,
                 sessionID: createOutfitSessionID
             )
@@ -434,13 +453,13 @@ struct ItemDetailView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            let isWishlist = (item.wardrobes as? Set<Wardrobe>)?.contains { $0.type?.lowercased() == "wishlist" } ?? false
-            if isWishlist {
-                moveToClosetButton()
-                    .background(Color(UIColor.systemBackground))
-                // .shadow(radius: 5)
+            if appCapabilities.showsWishlistTab {
+                let isWishlist = (item.wardrobes as? Set<Wardrobe>)?.contains { $0.type?.lowercased() == "wishlist" } ?? false
+                if isWishlist {
+                    moveToClosetButton()
+                        .background(Color(UIColor.systemBackground))
+                }
             }
-                
         }
         .navigationTitle("Item Details")
         .navigationBarTitleDisplayMode(.inline)
@@ -493,12 +512,12 @@ struct ItemDetailView: View {
             }
             .presentationDetents(outfits.count > 6 ? [.medium, .large] : [.medium])
         }
-        .sheet(isPresented: $showShareFriendsSheet) {
+        .sheet(isPresented: Binding(
+            get: { appCapabilities.enablesFriendsAndSharing && showShareFriendsSheet },
+            set: { showShareFriendsSheet = $0 }
+        )) {
             ShareItemFriendsSheet()
                 .environmentObject(supabaseService)
-        }
-        .sheet(isPresented: $showPhotoStorageSheet) {
-            ItemPhotoStorageSheet(item: item)
         }
     }
     
@@ -605,9 +624,12 @@ struct ItemDetailView: View {
         do {
             try viewContext.save()
             print("✅ Replaced worn photo.")
-            selectedImageType = .worn
-            heroCarouselPage = 1
-            
+            selectHeroImageSlot(.worn)
+            // TabView can reset selection when page content updates; re-apply after layout.
+            DispatchQueue.main.async {
+                selectHeroImageSlot(.worn)
+            }
+
             // Trigger automatic sync for the modified item
             SyncService.shared.syncItemIfNeeded(item)
         } catch {
@@ -707,8 +729,9 @@ struct ItemDetailView: View {
         )
     }
     
+    private var screenWidth: CGFloat { UIScreen.main.bounds.width }
+
     private func itemImageDisplay() -> some View {
-        let side = UIScreen.main.bounds.width
         let frontImage = getImage(for: .front)
         let wornImage = getImage(for: .worn)
 
@@ -719,8 +742,7 @@ struct ItemDetailView: View {
                         Image(uiImage: uiImage)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: side)
+                            .frame(width: screenWidth, height: screenWidth)
                             .clipped()
                             .onTapGesture { isImageFullScreen = true }
                     } else {
@@ -734,8 +756,7 @@ struct ItemDetailView: View {
                         Image(uiImage: uiImage)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: side)
+                            .frame(width: screenWidth, height: screenWidth)
                             .clipped()
                             .onTapGesture { isImageFullScreen = true }
                     } else {
@@ -745,7 +766,7 @@ struct ItemDetailView: View {
                 .tag(1)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-            .frame(height: side)
+            .frame(width: screenWidth, height: screenWidth)
 
             if heroCarouselPage == 0, frontImage != nil {
                 heroDisplayAreaOptionsButton
@@ -753,8 +774,7 @@ struct ItemDetailView: View {
                 heroDisplayAreaOptionsButton
             }
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: side)
+        .frame(width: screenWidth, height: screenWidth)
         .onChange(of: heroCarouselPage) { _, newPage in
             selectedImageType = newPage == 0 ? .front : .worn
             _ = item.photos
@@ -763,12 +783,14 @@ struct ItemDetailView: View {
             if UIImagePickerController.isSourceTypeAvailable(.camera) {
                 Button("Retake Photo") {
                     pendingImageType = selectedImageType
+                    selectHeroImageSlot(selectedImageType)
                     imagePickerSource = .camera
                     isImagePickerPresented = true
                 }
             }
             Button("Replace from Library") {
                 pendingImageType = selectedImageType
+                selectHeroImageSlot(selectedImageType)
                 imagePickerSource = .photoLibrary
                 isImagePickerPresented = true
             }
@@ -808,25 +830,43 @@ struct ItemDetailView: View {
     private func heroImagePlaceholder(for type: ImageType) -> some View {
         Rectangle()
             .fill(Color.gray.opacity(0.2))
-            .frame(maxWidth: .infinity)
-            .frame(height: UIScreen.main.bounds.width)
+            .frame(width: screenWidth, height: screenWidth)
             .overlay {
                 VStack(spacing: 10) {
-                    Image(systemName: "photo")
+                    Image(systemName: heroPlaceholderSystemImage(for: type))
                         .foregroundStyle(.secondary)
                         .font(.system(size: 40))
-                    Text(placeholderText(for: type))
+                    Text(heroPlaceholderMessage(for: type))
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.secondary)
-                    Text("Tap to add a photo")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
                 }
             }
             .contentShape(Rectangle())
             .onTapGesture {
                 presentImagePicker(for: type)
             }
+    }
+
+    private func heroPlaceholderSystemImage(for type: ImageType) -> String {
+        switch type {
+        case .worn:
+            return "person.crop.square.badge.camera"
+        case .front, .back:
+            return "photo"
+        }
+    }
+
+    private func heroPlaceholderMessage(for type: ImageType) -> String {
+        switch type {
+        case .front:
+            return "Tap to add a photo of the front of the item"
+        case .worn:
+            return "Tap to add a photo of you wearing this item"
+        case .back:
+            return "Tap to add a photo of the back of the item"
+        }
     }
     
     private func shareActiveImage() {
@@ -915,6 +955,7 @@ struct ItemDetailView: View {
                             withAnimation {
                                 selectedImageType = type
                             }
+                            syncHeroCarouselAfterFullscreenOrBackSelection()
                             // Ensure photos relationship is loaded when switching images
                             _ = item.photos
                         }
@@ -1017,7 +1058,8 @@ struct ItemDetailView: View {
     
     private func presentImagePicker(for type: ImageType) {
         pendingImageType = type
-        
+        selectHeroImageSlot(type)
+
         // Show action sheet to choose camera or library
         let alert = UIAlertController(title: "Add \(placeholderText(for: type)) Photo", message: nil, preferredStyle: .actionSheet)
         
@@ -1153,30 +1195,36 @@ struct ItemDetailView: View {
 
     
     private func fetchWardrobe(type: String) -> Wardrobe? {
-        if let uid = item.userId, !uid.isEmpty,
-           let w = try? WardrobeBootstrap.fetchPrimaryWardrobe(forType: type, userIdString: uid, in: viewContext) {
-            return w
-        }
-        let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
-        request.predicate = NSPredicate(format: "type == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)", type)
-        let rows = (try? viewContext.fetch(request)) ?? []
-        return WardrobeBootstrap.primaryWardrobe(in: rows)
+        guard let uid = effectiveReferenceDataUserId(
+            signedInUserId: authSession.userId,
+            entityUserId: item.userId
+        ) else { return nil }
+        return try? WardrobeBootstrap.fetchPrimaryWardrobe(forType: type, userIdString: uid, in: viewContext)
     }
     
     private func fetchOutfits() {
-        // Only fetch if the object has been saved and has an ID
         guard !item.objectID.isTemporaryID else {
             outfits = []
             return
         }
-        
+
+        guard let userId = effectiveReferenceDataUserId(
+            signedInUserId: authSession.userId,
+            entityUserId: item.userId
+        ), !userId.isEmpty else {
+            outfits = []
+            return
+        }
+
         let request: NSFetchRequest<Outfit> = Outfit.fetchRequest()
-        // Exclude drafts and soft-deleted outfits from outfit listings
-        let basePredicate = NSPredicate(format: "ANY items == %@ AND isDraft != YES", item)
-        let softDeleteFilter = NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
-        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [basePredicate, softDeleteFilter])
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            NSPredicate(format: "ANY items == %@", item),
+            NSPredicate(format: "userId == %@", userId),
+            NSPredicate(format: "isDraft != YES"),
+            NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
+        ])
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.createdAt, ascending: false)]
-        
+
         do {
             outfits = try viewContext.fetch(request)
         } catch {
@@ -1424,11 +1472,13 @@ struct ItemDetailView: View {
             available.insert(.price)
         }
         // Use primitiveValue to properly check optional scalar types
-        if item.primitiveValue(forKey: "minTemperature") != nil && item.primitiveValue(forKey: "maxTemperature") != nil {
+        if appCapabilities.showsWeatherAttribute,
+           item.primitiveValue(forKey: "minTemperature") != nil,
+           item.primitiveValue(forKey: "maxTemperature") != nil {
             available.insert(.weather)
         }
-        // Use primitiveValue to properly check optional scalar types
-        if item.primitiveValue(forKey: "weight") != nil {
+        if appCapabilities.showsWeightAttribute,
+           item.primitiveValue(forKey: "weight") != nil {
             available.insert(.weight)
         }
         if let links = item.links as? Set<Link>, !links.isEmpty {
@@ -1510,6 +1560,7 @@ struct ShareSelectionView: View {
     let onShare: (String) -> Void
     
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.appCapabilities) private var appCapabilities
     
     private let currencySymbol = Locale.current.currencySymbol ?? "$"
     
@@ -1541,11 +1592,13 @@ struct ShareSelectionView: View {
             available.insert(.price)
         }
         // Use primitiveValue to properly check optional scalar types
-        if item.primitiveValue(forKey: "minTemperature") != nil && item.primitiveValue(forKey: "maxTemperature") != nil {
+        if appCapabilities.showsWeatherAttribute,
+           item.primitiveValue(forKey: "minTemperature") != nil,
+           item.primitiveValue(forKey: "maxTemperature") != nil {
             available.insert(.weather)
         }
-        // Use primitiveValue to properly check optional scalar types
-        if item.primitiveValue(forKey: "weight") != nil {
+        if appCapabilities.showsWeightAttribute,
+           item.primitiveValue(forKey: "weight") != nil {
             available.insert(.weight)
         }
         if let links = item.links as? Set<Link>, !links.isEmpty {
@@ -1740,7 +1793,8 @@ struct ShareSelectionView: View {
             }
         }
         
-        if attributes.contains(.weather),
+        if appCapabilities.showsWeatherAttribute,
+           attributes.contains(.weather),
            let minC = item.primitiveValue(forKey: "minTemperature") as? Double,
            let maxC = item.primitiveValue(forKey: "maxTemperature") as? Double {
             let unit = (item.primitiveValue(forKey: "temperatureUnit") as? String) ?? "C"
@@ -1750,7 +1804,8 @@ struct ShareSelectionView: View {
             lines.append("Weather: \(displayMin) to \(displayMax)\(symbol)")
         }
         
-        if attributes.contains(.weight),
+        if appCapabilities.showsWeightAttribute,
+           attributes.contains(.weight),
            let weightKg = item.primitiveValue(forKey: "weight") as? Double {
             let unit = (item.primitiveValue(forKey: "weightUnit") as? String) ?? "kg"
             let symbol = unit == "kg" ? "kg" : "lbs"
