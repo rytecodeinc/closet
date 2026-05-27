@@ -429,8 +429,13 @@ struct ItemDetailView: View {
         }
         .sheet(isPresented: $showShareSelectionSheet, onDismiss: {
             // When selection sheet dismisses, check if we should show share sheet
-            if let shareText = pendingShareText, let image = pendingShareImage {
-                shareItems = [shareText, image]
+            if let image = pendingShareImage {
+                if let shareText = pendingShareText?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !shareText.isEmpty {
+                    shareItems = [shareText, image]
+                } else {
+                    shareItems = [image]
+                }
                 pendingShareText = nil
                 pendingShareImage = nil
                 // Small delay to ensure sheet is fully dismissed
@@ -1557,7 +1562,7 @@ private struct DefaultShareAttributes {
 struct ShareSelectionView: View {
     @ObservedObject var item: Item
     @Binding var selectedAttributes: Set<ShareableAttribute>
-    let onShare: (String) -> Void
+    let onShare: (String?) -> Void
     
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appCapabilities) private var appCapabilities
@@ -1732,10 +1737,16 @@ struct ShareSelectionView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Share") {
-                        let shareText = generateShareText(from: selectedAttributes)
+                        let shareText: String?
+                        if selectedAttributes.isEmpty {
+                            shareText = nil
+                        } else {
+                            let generated = generateShareText(from: selectedAttributes)
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                            shareText = generated.isEmpty ? nil : generated
+                        }
                         onShare(shareText)
                     }
-                    .disabled(selectedAttributes.isEmpty)
                     .fontWeight(.semibold)
                 }
             }
