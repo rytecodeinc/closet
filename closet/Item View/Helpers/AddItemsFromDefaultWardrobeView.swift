@@ -10,6 +10,7 @@ import CoreData
 
 struct AddItemsFromDefaultWardrobeView: View {
     @ObservedObject var wardrobe: Wardrobe
+    var onCompleted: ((Int) -> Void)? = nil
     @EnvironmentObject private var authSession: AuthSession
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
@@ -52,7 +53,30 @@ struct AddItemsFromDefaultWardrobeView: View {
     }
 
     var body: some View {
-        NavigationView {
+        VStack(spacing: 0) {
+            HStack {
+                Button("Cancel") {
+                    dismiss()
+                }
+                .disabled(isAddingItems)
+
+                Spacer()
+
+                Button("Done") {
+                    if selectedItemIDs.isEmpty {
+                        dismiss()
+                    } else {
+                        showAddConfirmation = true
+                    }
+                }
+                .disabled(isAddingItems)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color(UIColor.secondarySystemBackground))
+
+            SelectionHeader(title: navigationTitle)
+            
             Group {
                 if sourceItems.isEmpty {
                     VStack(spacing: 12) {
@@ -98,38 +122,19 @@ struct AddItemsFromDefaultWardrobeView: View {
                     }
                 }
             }
-            .navigationTitle(navigationTitle)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                    .disabled(isAddingItems)
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        if selectedItemIDs.isEmpty {
-                            dismiss()
-                        } else {
-                            showAddConfirmation = true
-                        }
-                    }
-                    .disabled(isAddingItems)
-                }
-            }
-            .onAppear {
-                fetchSourceItems()
-            }
-            .alert("Add Items", isPresented: $showAddConfirmation) {
-                Button("Cancel", role: .cancel) {}
-                Button("Add") {
-                    addSelectedItems()
-                }
-            } message: {
-                Text("Add \(selectedItemIDs.count) item\(selectedItemIDs.count == 1 ? "" : "s") from your \(sourceWardrobeLabel) to \"\(wardrobeDisplayName)\"?")
-            }
         }
+        .onAppear {
+            fetchSourceItems()
+        }
+        .alert("Add Items", isPresented: $showAddConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Add") {
+                addSelectedItems()
+            }
+        } message: {
+            Text("Add \(selectedItemIDs.count) item\(selectedItemIDs.count == 1 ? "" : "s") from your \(sourceWardrobeLabel) to \"\(wardrobeDisplayName)\"?")
+        }
+        .presentationDetents([.medium, .large])
     }
 
     private func fetchSourceItems() {
@@ -204,6 +209,7 @@ struct AddItemsFromDefaultWardrobeView: View {
             for item in itemsToAdd {
                 SyncService.shared.syncItemIfNeeded(item)
             }
+            onCompleted?(itemsToAdd.count)
             dismiss()
         } catch {
             print("❌ Failed to add items to wardrobe: \(error.localizedDescription)")

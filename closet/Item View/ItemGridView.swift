@@ -81,6 +81,7 @@ struct ItemGridView: View {
     @State private var pendingFavoriteSelectionWillUnfavorite = false
     /// Bumps when favorites change so the bottom bar heart reflects Core Data without relying on `selectedItems` identity.
     @State private var favoriteToolbarTick = 0
+    @State private var showAddFromClosetSheet = false
     
     // Multi-image picker state
     @StateObject private var queueCoordinator = ImageQueueCoordinator()
@@ -403,6 +404,16 @@ struct ItemGridView: View {
         }
         .sheet(isPresented: $showColorSelectionSheet) {
             colorSelectionSheet()
+        }
+        .sheet(isPresented: $showAddFromClosetSheet) {
+            AddItemsFromDefaultWardrobeView(
+                wardrobe: selectedWardrobe,
+                onCompleted: { addedCount in
+                    let dest = selectedWardrobe.name ?? "this wardrobe"
+                    let sourceLabel = (selectedWardrobe.type ?? "closet").lowercased() == "wishlist" ? "wishlist" : "closet"
+                    showToast("Added \(addedCount) item\(addedCount == 1 ? "" : "s") from your \(sourceLabel) to \"\(dest)\".")
+                }
+            )
         }
         .sheet(isPresented: $showCategorySelectionSheet) {
             categorySelectionSheet()
@@ -1028,10 +1039,27 @@ struct ItemGridView: View {
                 Image(systemName: "airplane.circle")
             }
             if selectedTab == "Items" {
-                Button {
-                    shouldNavigateToItemAddDirect = true
-                } label: {
-                    Image(systemName: "plus")
+                if selectedWardrobe.isDefault == true {
+                    Button {
+                        shouldNavigateToItemAddDirect = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                } else {
+                    Menu {
+                        Button {
+                            showAddFromClosetSheet = true
+                        } label: {
+                            Label("Add from Closet", systemImage: "hanger")
+                        }
+                        Button {
+                            shouldNavigateToItemAddDirect = true
+                        } label: {
+                            Label("Add Item", systemImage: "plus")
+                        }
+                    } label: {
+                        Image(systemName: "plus")
+                    }
                 }
             } else {
                 NavigationLink(
