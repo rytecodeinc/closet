@@ -17,6 +17,8 @@ struct WardrobeListView: View {
     var excludeWardrobeType: String? = nil
     /// Only show wardrobes belonging to this user. Orphaned/unowned wardrobes are hidden.
     var userId: String? = nil
+    /// When true (item grid filter): default vs secondary are mutually exclusive; multiple secondaries are ANDed in fetch.
+    var filterSelectionMode: Bool = false
 
     @State private var wardrobes: [Wardrobe] = []
     
@@ -85,8 +87,6 @@ struct WardrobeListView: View {
                     Spacer()
 
                     if isDefault {
-                        // Replace the checkmark with a "Default" pill — makes it
-                        // visually clear the row is always selected and non-removable.
                         Text("Default")
                             .font(.caption2)
                             .foregroundColor(.secondary)
@@ -96,21 +96,16 @@ struct WardrobeListView: View {
                                 Capsule()
                                     .fill(Color(UIColor.secondarySystemBackground))
                             )
-                    } else if selectedWardrobes.contains(wardrobe) {
+                    }
+
+                    if selectedWardrobes.contains(wardrobe) {
                         Image(systemName: "checkmark")
                             .foregroundColor(.blue)
                     }
                 }
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    if selectedWardrobes.contains(wardrobe) {
-                        // The primary/default wardrobe can never be deselected —
-                        // an item must always belong to at least the base wardrobe.
-                        guard !isDefault else { return }
-                        selectedWardrobes.remove(wardrobe)
-                    } else {
-                        selectedWardrobes.insert(wardrobe)
-                    }
+                    handleWardrobeTap(wardrobe, isDefault: isDefault)
                 }
             }
         }
@@ -119,10 +114,46 @@ struct WardrobeListView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             fetchWardrobes()
-            // Ensure default wardrobe is always selected
-            if let defaultWardrobe = defaultWardrobe {
+            guard let defaultWardrobe else { return }
+            if filterSelectionMode {
+                let secondaries = selectedWardrobes.filter { $0.isDefault != true }
+                if secondaries.isEmpty {
+                    selectedWardrobes = [defaultWardrobe]
+                } else {
+                    selectedWardrobes = secondaries
+                }
+            } else {
                 selectedWardrobes.insert(defaultWardrobe)
             }
+        }
+    }
+
+    private func handleWardrobeTap(_ wardrobe: Wardrobe, isDefault: Bool) {
+        if filterSelectionMode {
+            guard let defaultWardrobe else { return }
+            if isDefault {
+                selectedWardrobes = [defaultWardrobe]
+                return
+            }
+            var next = selectedWardrobes.filter { $0.isDefault != true }
+            if next.contains(wardrobe) {
+                next.remove(wardrobe)
+            } else {
+                next.insert(wardrobe)
+            }
+            if next.isEmpty {
+                selectedWardrobes = [defaultWardrobe]
+            } else {
+                selectedWardrobes = next
+            }
+            return
+        }
+
+        if selectedWardrobes.contains(wardrobe) {
+            guard !isDefault else { return }
+            selectedWardrobes.remove(wardrobe)
+        } else {
+            selectedWardrobes.insert(wardrobe)
         }
     }
     

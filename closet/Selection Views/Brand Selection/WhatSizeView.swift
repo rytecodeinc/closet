@@ -84,7 +84,7 @@ struct WhatSizeView: View {
         
         do {
             let items = try viewContext.fetch(request)
-            let sizes = items.compactMap { $0.size?.value }
+            let sizes = items.compactMap { $0.itemSize?.value }
             return Array(Set(sizes)).sorted() // unique and sorted
         } catch {
             print("❌ Failed to fetch items for brand \(brand.name ?? ""): \(error.localizedDescription)")
@@ -122,7 +122,7 @@ struct BrandItemsView: View {
                     VStack(alignment: .leading) {
                         Text(item.category?.name ?? "Unknown")
                             .font(.subheadline)
-                        Text(item.size?.value ?? "N/A")
+                        Text(item.itemSize?.value ?? "N/A")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }

@@ -25,7 +25,7 @@ struct AttributesDisplayView: View {
                         .foregroundColor(.secondary)
                 }
                 Spacer()
-                if let size = item.size?.value {
+                if let size = item.itemSize?.value {
                     Text(size)
                         .font(.body)
                 } else {
