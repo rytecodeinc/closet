@@ -90,7 +90,7 @@ struct RegisterView: View {
                                 } label: {
                                     Text("Sign In")
                                         .fontWeight(.semibold)
-                                        .foregroundColor(.teal)
+                                        .foregroundColor(.cayenne)
                                 }
                                 .buttonStyle(.plain)
                             } else {
@@ -99,7 +99,7 @@ struct RegisterView: View {
                                 } label: {
                                     Text("Sign In")
                                         .fontWeight(.semibold)
-                                        .foregroundColor(.teal)
+                                        .foregroundColor(.cayenne)
                                 }
                                 .buttonStyle(.plain)
                             }

@@ -299,7 +299,14 @@ struct SignInView: View {
                                     .textContentType(.password)
                                     .autocorrectionDisabled(true)
                             }
-
+                            
+                            if let error = errorMessage {
+                                Text(error)
+                                    .foregroundColor(.red)
+                                    .font(.caption)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            
                             NavigationLink {
                                 ForgotPasswordView(initialEmail: email)
                             } label: {
@@ -308,13 +315,6 @@ struct SignInView: View {
                                     .foregroundColor(.accentColor)
                             }
                             .frame(maxWidth: .infinity, alignment: .trailing)
-
-                            if let error = errorMessage {
-                                Text(error)
-                                    .foregroundColor(.red)
-                                    .font(.caption)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
                         }
                         .disabled(isLoading)
 
@@ -338,14 +338,14 @@ struct SignInView: View {
                         Button {
                             authFlowRouter.showRegisterFromSignIn()
                         } label: {
-                            Text("Register").fontWeight(.semibold).foregroundColor(.teal)
+                            Text("Register").fontWeight(.semibold).foregroundColor(.cayenne)
                         }
                         .buttonStyle(.plain)
                     } else {
                         NavigationLink {
                             RegisterView()
                         } label: {
-                            Text("Register").fontWeight(.semibold).foregroundColor(.teal)
+                            Text("Register").fontWeight(.semibold).foregroundColor(.cayenne)
                         }
                     }
                 }

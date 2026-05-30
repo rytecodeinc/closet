@@ -82,7 +82,7 @@ struct ForgotPasswordView: View {
                                         .padding(.vertical, 12)
                                         .clipShape(RoundedRectangle(cornerRadius: 12))
                                         .foregroundStyle(.white)
-                                        .background(.teal.gradient)
+                                        .background(Color.cayenne.gradient)
                                         .cornerRadius(12)
                                 }
                             }
@@ -116,7 +116,7 @@ struct ForgotPasswordView: View {
                             } label: {
                                 Text("Register")
                                     .fontWeight(.semibold)
-                                    .foregroundColor(.teal)
+                                    .foregroundColor(Color.cayenne)
                             }
                             .buttonStyle(.plain)
                         } else {

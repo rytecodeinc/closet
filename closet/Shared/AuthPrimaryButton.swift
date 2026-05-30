@@ -40,7 +40,7 @@ struct AuthPrimaryButton: View {
             .frame(minHeight: 24)
             .padding(.vertical, 12)
             .foregroundStyle(.white)
-            .background(.teal.gradient)
+            .background(.cayenne.gradient)
             .clipShape(RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
