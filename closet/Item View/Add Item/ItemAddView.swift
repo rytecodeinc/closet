@@ -149,6 +149,7 @@ struct ItemAddView: View {
             "Add Item")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
+        .toolbar(.hidden, for: .tabBar)
         // Only ONE navigationDestination — solely for the image cropper
         .navigationDestination(item: $cropperDestination) { destination in
             if case .cropper(let imageType, let image) = destination {
