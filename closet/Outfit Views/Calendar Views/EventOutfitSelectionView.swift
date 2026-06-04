@@ -34,7 +34,22 @@ struct EventOutfitSelectionView: View {
     }
 
     public var body: some View {
-        VStack {
+        VStack(spacing: 0) {
+            SelectionPanelHeader(
+                title: "Select Outfits",
+                leading: {
+                    Button("Back") {
+                        dismiss()
+                    }
+                },
+                trailing: {
+                    Button("Done") {
+                        saveSelectedOutfits()
+                        dismiss()
+                    }
+                }
+            )
+
             if outfits.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "tshirt")
@@ -77,7 +92,7 @@ struct EventOutfitSelectionView: View {
                                     }
                                 }
                                 .buttonStyle(PlainButtonStyle())
-                                
+
                                 if selectedOutfitIDs.contains(outfit.id ?? UUID()) {
                                     Image(systemName: "checkmark.circle.fill")
                                         .foregroundColor(.blue)
@@ -89,15 +104,9 @@ struct EventOutfitSelectionView: View {
                     }
                 }
             }
-            
-            Button("Done") {
-                saveSelectedOutfits()
-                dismiss()
-            }
-            .buttonStyle(.borderedProminent)
-            .padding()
         }
-        .navigationTitle("Select Outfits for Event")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         .onAppear {
             fetchOutfits()
             preselectExistingOutfits()

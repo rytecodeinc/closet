@@ -25,7 +25,9 @@ struct AddItemsByTagView: View {
     }
     
     var body: some View {
-        NavigationView {
+        VStack(spacing: 0) {
+            SelectionPanelHeader(title: "Add by Tag")
+
             List {
                 if tags.isEmpty {
                     Text("No tags available. Add tags to items first.")
@@ -51,33 +53,24 @@ struct AddItemsByTagView: View {
                 }
             }
             .listStyle(.plain)
-            .navigationTitle("Add by Tag")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
+        }
+        .onAppear {
+            fetchTags()
+        }
+        .alert("Add Items by Tag", isPresented: $showAddConfirmation) {
+            Button("Cancel", role: .cancel) {
+                tagPendingAdd = nil
             }
-            .onAppear {
-                fetchTags()
-            }
-            .alert("Add Items by Tag", isPresented: $showAddConfirmation) {
-                Button("Cancel", role: .cancel) {
-                    tagPendingAdd = nil
-                }
-                Button("Add") {
-                    if let tag = tagPendingAdd {
-                        selectedTag = tag
-                        addItemsByTag(tag)
-                    }
-                    tagPendingAdd = nil
-                }
-            } message: {
+            Button("Add") {
                 if let tag = tagPendingAdd {
-                    Text("Add all items tagged \"\(tag.name ?? "")\" to \"\(wardrobeDisplayName)\"?")
+                    selectedTag = tag
+                    addItemsByTag(tag)
                 }
+                tagPendingAdd = nil
+            }
+        } message: {
+            if let tag = tagPendingAdd {
+                Text("Add all items tagged \"\(tag.name ?? "")\" to \"\(wardrobeDisplayName)\"?")
             }
         }
     }

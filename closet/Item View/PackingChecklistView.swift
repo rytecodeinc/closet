@@ -8,17 +8,17 @@ import CoreData
 
 private enum PackingChecklistKind: Int16 {
     case items = 0
-    case todo = 1
+    case tasks = 1
 
     var segmentTag: String {
         switch self {
         case .items: return "Items"
-        case .todo: return "To-Do"
+        case .tasks: return "Tasks"
         }
     }
 
     static func fromSegment(_ tag: String) -> PackingChecklistKind {
-        tag == "To-Do" ? .todo : .items
+        tag == "Tasks" ? .tasks : .items
     }
 }
 
@@ -82,37 +82,35 @@ struct PackingChecklistView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SelectionHeader(title: "Checklist")
-                .overlay {
-                    HStack {
-                        Button(checklistEditMode == .active ? "Done" : "Edit") {
-                            toggleChecklistEditMode()
-                        }
-                        Spacer()
-                        Button {
-                            newSectionName = ""
-                            showNewSectionAlert = true
-                        } label: {
-                            Image(systemName: "plus")
-                        }
-                        .disabled(reorderEditingActive)
-                        .accessibilityLabel("Add section")
+            SelectionPanelHeader(
+                title: "Checklist",
+                leading: {
+                    Button(checklistEditMode == .active ? "Done" : "Edit") {
+                        toggleChecklistEditMode()
                     }
-                    .padding(.horizontal, 16)
+                },
+                trailing: {
+                    Button {
+                        newSectionName = ""
+                        showNewSectionAlert = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .disabled(reorderEditingActive)
+                    .accessibilityLabel("Add section")
+                },
+                picker: {
+                    Picker("", selection: $selectedTab) {
+                        Text("Items")
+                            .tag("Items")
+                        Text("Tasks")
+                            .tag("Tasks")
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .disabled(reorderEditingActive)
                 }
-
-            Picker("", selection: $selectedTab) {
-                Text("Items")
-                    .tag("Items")
-                Text("To-Do")
-                    .tag("To-Do")
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-            .background(Color(UIColor.secondarySystemBackground))
-            .disabled(reorderEditingActive)
+            )
 
             Group {
                 if reorderEditingActive {
@@ -120,7 +118,7 @@ struct PackingChecklistView: View {
                 } else {
                     TabView(selection: $selectedTab) {
                         checklistList(kind: .items).tag("Items")
-                        checklistList(kind: .todo).tag("To-Do")
+                        checklistList(kind: .tasks).tag("Tasks")
                     }
                     .tabViewStyle(.page(indexDisplayMode: .never))
                 }
@@ -213,7 +211,7 @@ struct PackingChecklistView: View {
 
     /// Ensures each checklist tab has at least one section (GENERAL by default) for this wardrobe.
     private func migrateChecklistSectionsIfNeeded() {
-        for kind in [PackingChecklistKind.items, .todo] {
+        for kind in [PackingChecklistKind.items, .tasks] {
             let existing = sections(kind: kind)
             if existing.isEmpty {
                 let defaultTitle: String

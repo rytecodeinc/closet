@@ -52,29 +52,21 @@ struct SetWeatherView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            SelectionHeader(title: "Set Weather")
-            
-            // Segmented picker for temperature unit
-            Picker("Temperature Unit", selection: $selectedUnit) {
-                ForEach(TemperatureUnit.allCases, id: \.self) { unit in
-                    Text(unit.rawValue).tag(unit)
+            SelectionPanelHeader(title: "Set Weather") {
+                Picker("Temperature Unit", selection: $selectedUnit) {
+                    ForEach(TemperatureUnit.allCases, id: \.self) { unit in
+                        Text(unit.rawValue).tag(unit)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: selectedUnit) { newUnit in
+                    if !isLoading, let previous = previousUnit, previous != newUnit {
+                        convertBetweenUnits()
+                    }
+                    previousUnit = newUnit
                 }
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-            .background(Color(UIColor.secondarySystemBackground))
-            .onChange(of: selectedUnit) { newUnit in
-                // Only convert if:
-                // 1. We're not loading AND
-                // 2. The value actually changed from a previous value (user-initiated change)
-                if !isLoading, let previous = previousUnit, previous != newUnit {
-                    convertBetweenUnits()
-                }
-                // Update previous value for next time
-                previousUnit = newUnit
-            }
-            
+
             VStack(spacing: 6) {
                 // Temperature Range Section
                 VStack(alignment: .leading, spacing: 12) {

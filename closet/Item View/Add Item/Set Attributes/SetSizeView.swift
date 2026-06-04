@@ -37,18 +37,14 @@ struct SetSizeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SelectionHeader(title: "Select Size")
-            
-            // Segmented picker for size types - always show all three options
-            Picker("Size Type", selection: $selectedSizeType) {
-                ForEach(SizeType.allCases, id: \.self) { type in
-                    Text(type.rawValue).tag(type)
+            SelectionPanelHeader(title: "Select Size") {
+                Picker("Size Type", selection: $selectedSizeType) {
+                    ForEach(SizeType.allCases, id: \.self) { type in
+                        Text(type.rawValue).tag(type)
+                    }
                 }
+                .pickerStyle(.segmented)
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-            .background(Color(UIColor.secondarySystemBackground))
 
             if sizes.isEmpty {
                 Text("No sizes are available.")
@@ -67,7 +63,7 @@ struct SetSizeView: View {
         .onAppear {
             refreshSizes()
             setInitialSizeType()
-            if let current = item.size {
+            if let current = item.itemSize {
                 selectedSizeID = current.id
             } else {
                 selectedSizeID = nil
@@ -84,9 +80,9 @@ struct SetSizeView: View {
     
     private func applySizeSelectionToItem() {
         if let sid = selectedSizeID, let chosen = fetchSize(by: sid) {
-            item.size = chosen
+            item.itemSize = chosen
         } else {
-            item.size = nil
+            item.itemSize = nil
         }
         
         // Set updatedAt since we're modifying the item
@@ -129,10 +125,10 @@ struct SetSizeView: View {
             if selectedSizeID == id {
                 // Deselect if tapped again
                 selectedSizeID = nil
-                item.size = nil
+                item.itemSize = nil
             } else {
                 selectedSizeID = id
-                item.size = size
+                item.itemSize = size
             }
         }
     }
@@ -152,7 +148,7 @@ struct SetSizeView: View {
         }
         
         // Remove duplicates by value, keeping the first occurrence
-        // But if we encounter item.size, replace the existing entry with it
+        // But if we encounter item.itemSize, replace the existing entry with it
         var seenValues = Set<String>()
         var uniqueSizes: [Size] = []
         
@@ -161,7 +157,7 @@ struct SetSizeView: View {
                 if !seenValues.contains(value) {
                     seenValues.insert(value)
                     uniqueSizes.append(size)
-                } else if size == item.size {
+                } else if size == item.itemSize {
                     // If this is the current item's size and we've already seen this value,
                     // replace the existing entry with this one
                     if let index = uniqueSizes.firstIndex(where: { $0.value == value }) {
@@ -176,7 +172,7 @@ struct SetSizeView: View {
     
     private func setInitialSizeType() {
         // If current size matches a type, select that type
-        if let currentSize = item.size, let scale = currentSize.scale {
+        if let currentSize = item.itemSize, let scale = currentSize.scale {
             if SizeType.alpha.matches(scale: scale) {
                 selectedSizeType = .alpha
             } else if SizeType.numeric.matches(scale: scale) {
@@ -192,7 +188,7 @@ struct SetSizeView: View {
 
     private func isSelected(_ size: Size) -> Bool {
         if let sid = selectedSizeID, let id = size.id { return sid == id }
-        if let current = item.size { return current == size }
+        if let current = item.itemSize { return current == size }
         return false
     }
 

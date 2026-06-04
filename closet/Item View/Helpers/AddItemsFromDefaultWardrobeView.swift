@@ -54,29 +54,21 @@ struct AddItemsFromDefaultWardrobeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Button("Cancel") {
-                    dismiss()
-                }
-                .disabled(isAddingItems)
-
-                Spacer()
-
-                Button("Done") {
-                    if selectedItemIDs.isEmpty {
-                        dismiss()
-                    } else {
-                        showAddConfirmation = true
+            SelectionPanelHeader(
+                title: navigationTitle,
+                leading: { EmptyView() },
+                trailing: {
+                    Button("Done") {
+                        if selectedItemIDs.isEmpty {
+                            dismiss()
+                        } else {
+                            showAddConfirmation = true
+                        }
                     }
+                    .disabled(isAddingItems)
                 }
-                .disabled(isAddingItems)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(Color(UIColor.secondarySystemBackground))
+            )
 
-            SelectionHeader(title: navigationTitle)
-            
             Group {
                 if sourceItems.isEmpty {
                     VStack(spacing: 12) {

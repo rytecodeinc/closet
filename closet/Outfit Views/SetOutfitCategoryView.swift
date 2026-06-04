@@ -14,27 +14,28 @@ struct SetOutfitCategoryView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var authSession: AuthSession
 
-    @State private var categories: [String] = []
+    @State private var categories: [OutfitCategory] = []
     @State private var newCategoryName: String = ""
 
     private var referenceUserId: String? {
         effectiveReferenceDataUserId(signedInUserId: authSession.userId, entityUserId: outfit.userId)
     }
     
-    var filteredCategories: [String] {
+    var filteredCategories: [OutfitCategory] {
         guard !newCategoryName.isEmpty else { return categories }
         let lowercaseInput = newCategoryName.lowercased()
-        return categories.filter { $0.lowercased().contains(lowercaseInput) }
+        return categories.filter { ($0.name ?? "").lowercased().contains(lowercaseInput) }
     }
     
     var body: some View {
         VStack(spacing: 0) {
-            SelectionHeader(title: "Select Category")
+            SelectionPanelHeader(title: "Select Category")
             
             VStack(spacing: 12) {
                 HStack {
                     TextField("Add or select a category", text: $newCategoryName)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .autocapitalization(.words)
 
                     Button("Add") {
                         addCategory()
@@ -52,28 +53,16 @@ struct SetOutfitCategoryView: View {
                     Spacer()
                 } else {
                     List {
-                        ForEach(filteredCategories, id: \.self) { category in
+                        ForEach(filteredCategories, id: \.objectID) { category in
                             Button(action: {
-                                // Toggle selection
-                                if outfit.category == category {
-                                    outfit.category = nil
-                                } else {
-                                    outfit.category = category
-                                }
-                                
-                                do {
-                                    try viewContext.save()
-                                } catch {
-                                    print("❌ Failed to save category: \(error.localizedDescription)")
-                                }
-                                
+                                toggleCategory(category)
                                 dismiss()
                             }) {
                                 HStack {
-                                    highlightedText(for: category, matching: newCategoryName)
+                                    highlightedText(for: category.name ?? "", matching: newCategoryName)
                                         .foregroundColor(.black)
                                     Spacer()
-                                    if outfit.category == category {
+                                    if outfit.category?.objectID == category.objectID {
                                         Image(systemName: "checkmark")
                                             .foregroundColor(.blue)
                                     }
@@ -88,6 +77,7 @@ struct SetOutfitCategoryView: View {
         .onAppear {
             fetchCategories()
         }
+        .presentationDetents([.medium, .large])
     }
 
     // MARK: - Highlight Matching Text
@@ -113,60 +103,68 @@ struct SetOutfitCategoryView: View {
 
     // MARK: - Fetch Categories
     private func fetchCategories() {
-        guard let uid = referenceUserId else {
+        guard let uid = referenceUserId, !uid.isEmpty else {
             categories = []
             return
         }
-
-        let request: NSFetchRequest<Outfit> = Outfit.fetchRequest()
-        request.propertiesToFetch = ["category"]
-        request.predicate = NSPredicate(format: "userId == %@", uid)
-
         do {
-            let allOutfits = try viewContext.fetch(request)
-            let allCategories = allOutfits.compactMap { $0.category }.filter { !$0.isEmpty }
-            categories = Array(Set(allCategories)).sorted()
+            var fetched = try viewContext.fetchOutfitCategoriesForAttributePicker(userId: uid)
+            if let current = outfit.category,
+               !fetched.contains(where: { $0.objectID == current.objectID }) {
+                fetched.append(current)
+                fetched.sort { ($0.name ?? "").localizedCaseInsensitiveCompare($1.name ?? "") == .orderedAscending }
+            }
+            categories = fetched
         } catch {
             print("❌ Failed to fetch categories: \(error)")
             categories = []
         }
     }
 
-    // MARK: - Add Category
+    // MARK: - Toggle / Add Category
+    private func toggleCategory(_ category: OutfitCategory) {
+        if outfit.category?.objectID == category.objectID {
+            let previous = outfit.category
+            outfit.category = nil
+            do {
+                try viewContext.save()
+                if let previous {
+                    cleanupOutfitCategoryIfOrphaned(previous)
+                }
+            } catch {
+                print("❌ Failed to save category: \(error.localizedDescription)")
+            }
+        } else {
+            outfit.category = category
+            setUpdatedAt(outfit)
+            do {
+                try viewContext.save()
+            } catch {
+                print("❌ Failed to save category: \(error.localizedDescription)")
+            }
+        }
+    }
+
     private func addCategory() {
         let trimmed = newCategoryName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty, let uid = referenceUserId else { return }
 
-        let categoryExists = categories.contains { $0.localizedCaseInsensitiveCompare(trimmed) == .orderedSame }
-        
-        if categoryExists {
-            // Category exists - just assign it
-            if let existing = categories.first(where: { $0.localizedCaseInsensitiveCompare(trimmed) == .orderedSame }) {
-                outfit.category = existing
-                
-                do {
-                    try viewContext.save()
-                } catch {
-                    print("❌ Failed to save category: \(error.localizedDescription)")
-                }
-                
-                dismiss()
-            }
+        if let existing = categories.first(where: { ($0.name ?? "").localizedCaseInsensitiveCompare(trimmed) == .orderedSame }) {
+            toggleCategory(existing)
+            newCategoryName = ""
             return
         }
 
-        // Set new category
-        outfit.category = trimmed
-        
         do {
+            let category = try viewContext.fetchOrCreateOutfitCategory(named: trimmed, userId: uid)
+            outfit.category = category
+            setUpdatedAt(outfit)
             try viewContext.save()
+            newCategoryName = ""
+            fetchCategories()
+            dismiss()
         } catch {
             print("❌ Failed to save category: \(error.localizedDescription)")
         }
-        
-        newCategoryName = ""
-        fetchCategories()
-        dismiss()
     }
 }
-

@@ -37,7 +37,9 @@ struct AddItemsByCategoryView: View {
     }
     
     var body: some View {
-        NavigationView {
+        VStack(spacing: 0) {
+            SelectionPanelHeader(title: "Add by Category")
+
             List {
                 if categories.isEmpty {
                     Text("No categories available. Add categories to items first.")
@@ -50,14 +52,14 @@ struct AddItemsByCategoryView: View {
                         let hasSubs = !subs.isEmpty
                         let isOpen = expanded.contains(category.objectID)
                         let isCategorySelected = selectedCategory?.objectID == category.objectID && selectedSubcategory == nil
-                        
+
                         // Category Row
                         HStack {
                             Text(catName)
                                 .foregroundColor(.primary)
-                            
+
                             Spacer()
-                            
+
                             if isCategorySelected {
                                 if isAddingItems {
                                     ProgressView()
@@ -66,7 +68,7 @@ struct AddItemsByCategoryView: View {
                                         .foregroundColor(.blue)
                                 }
                             }
-                            
+
                             if hasSubs {
                                 Image(systemName: isOpen ? "chevron.down" : "chevron.right")
                                     .foregroundColor(.gray)
@@ -76,32 +78,29 @@ struct AddItemsByCategoryView: View {
                         .contentShape(Rectangle())
                         .onTapGesture {
                             if hasSubs {
-                                // Toggle expansion
                                 toggle(category)
-                                // If already open, also select the category
                                 if isOpen {
                                     selectCategory(category, subcategory: nil)
                                 }
                             } else {
-                                // No subcategories: select the category
                                 selectCategory(category, subcategory: nil)
                             }
                         }
                         .disabled(isAddingItems)
-                        
+
                         // Subcategories (only when expanded)
                         if isOpen {
                             ForEach(subs, id: \.self) { sub in
                                 let subName = sub.name ?? ""
                                 let isSubSelected = selectedCategory?.objectID == category.objectID && selectedSubcategory?.objectID == sub.objectID
-                                
+
                                 HStack {
                                     Text(subName)
                                         .padding(.leading, 20)
                                         .foregroundColor(.primary)
-                                    
+
                                     Spacer()
-                                    
+
                                     if isSubSelected {
                                         if isAddingItems {
                                             ProgressView()
@@ -122,38 +121,29 @@ struct AddItemsByCategoryView: View {
                 }
             }
             .listStyle(.plain)
-            .navigationTitle("Add by Category")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
+        }
+        .onAppear {
+            fetchCategories()
+        }
+        .alert("Add Items by Category", isPresented: $showAddConfirmation) {
+            Button("Cancel", role: .cancel) {
+                pendingCategory = nil
+                pendingSubcategory = nil
             }
-            .onAppear {
-                fetchCategories()
-            }
-            .alert("Add Items by Category", isPresented: $showAddConfirmation) {
-                Button("Cancel", role: .cancel) {
-                    pendingCategory = nil
-                    pendingSubcategory = nil
+            Button("Add") {
+                guard let category = pendingCategory else { return }
+                selectedCategory = category
+                selectedSubcategory = pendingSubcategory
+                if let subcategory = pendingSubcategory {
+                    addItemsByCategoryAndSubcategory(category: category, subcategory: subcategory)
+                } else {
+                    addItemsByCategory(category)
                 }
-                Button("Add") {
-                    guard let category = pendingCategory else { return }
-                    selectedCategory = category
-                    selectedSubcategory = pendingSubcategory
-                    if let subcategory = pendingSubcategory {
-                        addItemsByCategoryAndSubcategory(category: category, subcategory: subcategory)
-                    } else {
-                        addItemsByCategory(category)
-                    }
-                    pendingCategory = nil
-                    pendingSubcategory = nil
-                }
-            } message: {
-                Text("Add all items in \"\(pendingCategoryLabel)\" to \"\(wardrobeDisplayName)\"?")
+                pendingCategory = nil
+                pendingSubcategory = nil
             }
+        } message: {
+            Text("Add all items in \"\(pendingCategoryLabel)\" to \"\(wardrobeDisplayName)\"?")
         }
     }
     

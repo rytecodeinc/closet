@@ -18,26 +18,21 @@ struct SetOutfitNameView: View {
     @FocusState private var isTextFieldFocused: Bool
 
     var body: some View {
-        VStack(spacing: 20) {
-            SelectionHeader(title: "Name")
-            
-            VStack(alignment: .leading, spacing: 12) {
+        VStack(spacing: 12) {
+            SelectionPanelHeader(title: "Name")
+
+            HStack {
                 TextField("Enter outfit name", text: $nameText)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .textInputAutocapitalization(.words)
                     .focused($isTextFieldFocused)
-                    .padding(.horizontal)
-                
-                HStack {
-                    Spacer()
-                    Button("Save") {
-                        saveName()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .padding(.horizontal)
-                    Spacer()
+
+                Button("Save") {
+                    saveName()
                 }
             }
-            
+            .padding(.horizontal)
+
             Spacer()
         }
         .onAppear {
@@ -47,7 +42,7 @@ struct SetOutfitNameView: View {
                 isTextFieldFocused = true
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.height(150)])
     }
 
     private func saveName() {

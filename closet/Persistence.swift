@@ -64,8 +64,12 @@ struct PersistenceController {
 
     init(inMemory: Bool = false) {
         container = NSPersistentContainer(name: "closet")
-        if inMemory {
-            container.persistentStoreDescriptions.first!.url = URL(fileURLWithPath: "/dev/null")
+        if let description = container.persistentStoreDescriptions.first {
+            description.setOption(true as NSNumber, forKey: NSMigratePersistentStoresAutomaticallyOption)
+            description.setOption(true as NSNumber, forKey: NSInferMappingModelAutomaticallyOption)
+            if inMemory {
+                description.url = URL(fileURLWithPath: "/dev/null")
+            }
         }
         container.loadPersistentStores(completionHandler: { [weak container] (storeDescription, error) in
             if let error = error as NSError? {

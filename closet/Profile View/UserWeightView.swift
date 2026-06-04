@@ -42,24 +42,21 @@ struct UserWeightView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            SelectionHeader(title: "My Weight")
-            
-            Picker("Weight Unit", selection: $selectedUnit) {
-                ForEach(WeightUnit.allCases, id: \.self) { unit in
-                    Text(unit.rawValue).tag(unit)
+            SelectionPanelHeader(title: "My Weight") {
+                Picker("Weight Unit", selection: $selectedUnit) {
+                    ForEach(WeightUnit.allCases, id: \.self) { unit in
+                        Text(unit.rawValue).tag(unit)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: selectedUnit) { newUnit in
+                    if !isLoading, let previous = previousUnit, previous != newUnit {
+                        convertBetweenUnits()
+                    }
+                    previousUnit = newUnit
                 }
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-            .padding(.bottom)
-            .background(Color(UIColor.secondarySystemBackground))
-            .onChange(of: selectedUnit) { newUnit in
-                if !isLoading, let previous = previousUnit, previous != newUnit {
-                    convertBetweenUnits()
-                }
-                previousUnit = newUnit
-            }
-            
+
             VStack(spacing: 6) {
                 VStack(alignment: .leading, spacing: 12) {
                     VStack(spacing: 0) {

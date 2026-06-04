@@ -21,7 +21,7 @@ struct SetPriceView: View {
 
     var body: some View {
         VStack(spacing: 20) {
-            SelectionHeader(title: "Set Price")
+            SelectionPanelHeader(title: "Set Price")
 
             HStack {
                 // Currency button
@@ -82,7 +82,7 @@ struct SetPriceView: View {
                 selectedCurrency = existingCurrency
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.height(150)])
     }
 
     private var isValidDecimal: Bool {

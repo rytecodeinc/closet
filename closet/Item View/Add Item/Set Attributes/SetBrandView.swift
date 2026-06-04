@@ -28,7 +28,7 @@ struct SetBrandView: View {
     }
     
     var body: some View {
-        SelectionHeader(title: "Select Brand")
+        SelectionPanelHeader(title: "Select Brand")
         
         VStack(spacing: 12) {
             HStack {

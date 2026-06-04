@@ -18,7 +18,7 @@ struct SetNameView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            SelectionHeader(title: "Name")
+            SelectionPanelHeader(title: "Name")
 
             HStack {
                 TextField("Enter item name", text: $nameText)

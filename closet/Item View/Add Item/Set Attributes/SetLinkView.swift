@@ -18,19 +18,22 @@ struct SetLinkView: View {
     @State private var linkToEdit: Link? = nil
 
     var body: some View {
-        SelectionHeader(title: "Links")
-
-        VStack(spacing: 16) {
-            Button(action: {
-                showAddForm = true
-                linkToEdit = nil // make sure it's clear you're adding
-            }) {
-                Label("Add Link", systemImage: "plus")
+        VStack(spacing: 0) {
+            SelectionPanelHeader(
+                title: "Links",
+                leading: { EmptyView() },
+                trailing: {
+                    Button {
+                        showAddForm = true
+                        linkToEdit = nil
+                    } label: {
+                        Image(systemName: "plus")
+                    }
                     .foregroundColor(.blue)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .padding(.horizontal)
-            }
+                }
+            )
 
+            VStack(spacing: 16) {
             if links.isEmpty {
                 Text("No links have been added.")
                     .foregroundColor(.gray)
@@ -71,6 +74,7 @@ struct SetLinkView: View {
                     .onDelete(perform: deleteLinks)
                 }
                 .listStyle(PlainListStyle())
+            }
             }
         }
         .sheet(isPresented: $showAddForm) {

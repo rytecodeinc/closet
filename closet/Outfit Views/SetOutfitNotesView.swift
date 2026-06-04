@@ -18,7 +18,7 @@ struct SetOutfitNotesView: View {
 
     var body: some View {
         VStack(spacing: 20) {
-            SelectionHeader(title: "Notes")
+            SelectionPanelHeader(title: "Notes")
             
             VStack(alignment: .leading, spacing: 12) {
                 TextEditor(text: $notesText)

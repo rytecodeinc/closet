@@ -28,7 +28,7 @@ struct SetLocationView: View {
     }
 
     var body: some View {
-        SelectionHeader(title: "Select Location")
+        SelectionPanelHeader(title: "Select Location")
 
         VStack(spacing: 12) {
             HStack {
