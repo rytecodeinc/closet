@@ -15,7 +15,7 @@ struct SetOutfitTagView: View {
     @EnvironmentObject private var authSession: AuthSession
 
     @State private var tags: [Tag] = []
-    @State private var showAddTagView: Bool = false
+    @State private var navigateToTagList = false
 
     private var referenceUserId: String? {
         effectiveReferenceDataUserId(signedInUserId: authSession.userId, entityUserId: outfit.userId)
@@ -25,50 +25,50 @@ struct SetOutfitTagView: View {
         (outfit.tags as? Set<Tag>)?.sorted(by: { ($0.name ?? "") < ($1.name ?? "") }) ?? []
     }
 
-    private var wardrobeTypeForTags: String {
-        guard let items = outfit.items as? Set<Item> else { return "closet" }
-        return items.contains { item in
-            (item.wardrobes as? Set<Wardrobe>)?.contains { $0.type?.lowercased() == "wishlist" } == true
-        } ? "wishlist" : "closet"
-    }
-
     var body: some View {
-        VStack(spacing: 0) {
-            SelectionHeader(title: "Select Tags")
-            
-            VStack(alignment: .leading, spacing: 12) {
-                Button(action: {
-                    showAddTagView = true
-                }) {
-                    Label("Add Tag", systemImage: "plus")
+        NavigationStack {
+            VStack(spacing: 0) {
+                SelectionPanelHeader(
+                    title: "Set Tags",
+                    leading: { EmptyView() },
+                    trailing: {
+                        Button {
+                            navigateToTagList = true
+                        } label: {
+                            Image(systemName: "plus")
+                        }
                         .foregroundColor(.blue)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                        .padding(.horizontal)
-                        .padding(.top)
-                }
+                    }
+                )
 
                 if selectedTags.isEmpty {
                     Text("No tags have been added.")
                         .foregroundColor(.gray)
                         .padding()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Spacer()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 } else {
-                    TagCloudView(tags: selectedTags) { tagToRemove in
-                        toggleTag(tagToRemove)
+                    ScrollView(showsIndicators: false) {
+                        TagCloudView(
+                            tags: selectedTags,
+                            removeConfirmationMessage: { tag in
+                                "Remove \"\(tag.name ?? "this tag")\" from this outfit?"
+                            },
+                            onRemove: { tagToRemove in
+                                toggleTag(tagToRemove)
+                            }
+                        )
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
                     }
-                    .padding(.horizontal)
                 }
-
-                Spacer()
+            }
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(isPresented: $navigateToTagList) {
+                TagListView(outfit: outfit)
             }
         }
         .onAppear {
             fetchTags()
-        }
-        .sheet(isPresented: $showAddTagView) {
-            SetOutfitTagDisplayView(outfit: outfit)
-                .environment(\.managedObjectContext, viewContext)
         }
         .presentationDetents([.medium, .large])
     }
@@ -79,10 +79,7 @@ struct SetOutfitTagView: View {
             return
         }
         do {
-            var fetched = try viewContext.fetchTagsForItemPicker(
-                userId: uid,
-                wardrobeType: wardrobeTypeForTags
-            )
+            var fetched = try viewContext.fetchOutfitTagsForFilterList(userId: uid)
             if let outfitTags = outfit.tags as? Set<Tag> {
                 for tag in outfitTags where !fetched.contains(where: { $0.objectID == tag.objectID }) {
                     fetched.append(tag)

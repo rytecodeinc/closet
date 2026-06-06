@@ -1,5 +1,5 @@
 //
-//  TagSelectionView.swift
+//  SetTagView.swift
 //  closet
 //
 //  Created by Dan Warner on 10/25/25.
@@ -15,10 +15,16 @@ struct SetTagView: View {
     @EnvironmentObject private var authSession: AuthSession
 
     @State private var tags: [Tag] = []
-    @State private var showAddTagView: Bool = false
+    @State private var navigateToTagList = false
 
     private var referenceUserId: String? {
         effectiveReferenceDataUserId(signedInUserId: authSession.userId, entityUserId: item.userId)
+    }
+
+    /// Wishlist items use the full tag library (no wardrobe filter), matching brand picker behavior.
+    private var wardrobeTypeForTagPicker: String? {
+        let isWishlist = (item.wardrobes as? Set<Wardrobe>)?.contains { $0.type?.lowercased() == "wishlist" } == true
+        return isWishlist ? nil : "closet"
     }
 
     var selectedTags: [Tag] {
@@ -26,41 +32,49 @@ struct SetTagView: View {
     }
 
     var body: some View {
-        SelectionHeader(title: "Select Tags")
+        NavigationStack {
+            VStack(spacing: 0) {
+                SelectionPanelHeader(
+                    title: "Set Tags",
+                    leading: { EmptyView() },
+                    trailing: {
+                        Button {
+                            navigateToTagList = true
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .foregroundColor(.blue)
+                    }
+                )
 
-        VStack(alignment: .leading, spacing: 12) {
-            // Add Tag Button
-            Button(action: {
-                showAddTagView = true
-            }) {
-                Label("Add Tag", systemImage: "plus")
-                    .foregroundColor(.blue)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .padding(.horizontal)
-            }
-
-            // Tag Cloud
-            if selectedTags.isEmpty {
-                Text("No tags have been added.")
-                    .foregroundColor(.gray)
-                    .padding()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Spacer()
-            } else {
-                TagCloudView(tags: selectedTags) { tagToRemove in
-                    toggleTag(tagToRemove)
+                if selectedTags.isEmpty {
+                    Text("No tags have been added.")
+                        .foregroundColor(.gray)
+                        .padding()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                } else {
+                    ScrollView(showsIndicators: false) {
+                        TagCloudView(
+                            tags: selectedTags,
+                            removeConfirmationMessage: { tag in
+                                "Remove \"\(tag.name ?? "this tag")\" from this item?"
+                            },
+                            onRemove: { tagToRemove in
+                                toggleTag(tagToRemove)
+                            }
+                        )
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                    }
                 }
-                .padding(.horizontal)
             }
-
-            Spacer()
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(isPresented: $navigateToTagList) {
+                TagListView(item: item)
+            }
         }
         .onAppear {
             fetchTags()
-        }
-        .sheet(isPresented: $showAddTagView) {
-            SetTagDisplayView(item: item)
-                .environment(\.managedObjectContext, viewContext)
         }
         .presentationDetents([.medium, .large])
     }
@@ -71,13 +85,10 @@ struct SetTagView: View {
             tags = []
             return
         }
-        let wardrobeType = (item.wardrobes as? Set<Wardrobe>)?.contains { $0.type?.lowercased() == "wishlist" } == true
-            ? "wishlist"
-            : "closet"
         do {
             tags = try viewContext.fetchTagsForItemPicker(
                 userId: uid,
-                wardrobeType: wardrobeType,
+                wardrobeType: wardrobeTypeForTagPicker,
                 includingTagsOn: item
             )
         } catch {
