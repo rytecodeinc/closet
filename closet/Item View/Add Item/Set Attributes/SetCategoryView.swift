@@ -13,9 +13,13 @@ struct SetCategoryView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject private var authSession: AuthSession
 
-    @State private var selectedCategoryName: String?
-    @State private var selectedSubcategoryName: String?
+    @State private var selectedCategoryId: UUID?
+    @State private var selectedSubcategoryId: UUID?
+    @State private var selectedCategoryObjectID: NSManagedObjectID?
+    @State private var selectedSubcategoryObjectID: NSManagedObjectID?
     @State private var expanded: Set<NSManagedObjectID> = []
+    @State private var loadedCategories: [Category] = []
+    @State private var userDidChangeSelection = false
 
     private var referenceUserId: String? {
         effectiveReferenceDataUserId(signedInUserId: authSession.userId, entityUserId: item.userId)
@@ -26,70 +30,158 @@ struct SetCategoryView: View {
             title: "Select Category",
             userId: referenceUserId ?? "",
             expanded: $expanded,
-            onCategoriesLoaded: configureInitialSelection(categories:),
-            showsCategoryCheckmark: { category in
-                let name = category.name ?? ""
-                return selectedCategoryName == name && selectedSubcategoryName == nil
+            pinnedCategory: item.category,
+            pinnedSubcategory: item.subcategory,
+            onCategoriesLoaded: { categories in
+                loadedCategories = categories
+                if !userDidChangeSelection {
+                    seedSelectionFromItem(categories: categories)
+                }
             },
-            showsSubcategoryCheckmark: { category, sub in
-                let name = category.name ?? ""
-                let subName = sub.name ?? ""
-                return selectedCategoryName == name && selectedSubcategoryName == subName
-            },
+            showsCategoryCheckmark: displayCategoryCheckmark(for:),
+            showsSubcategoryCheckmark: { _, sub in displaySubcategoryCheckmark(for: sub) },
             onCategoryTap: { category in
-                let name = category.name ?? ""
-                if selectedCategoryName == name && selectedSubcategoryName == nil {
-                    selectedCategoryName = nil
-                    selectedSubcategoryName = nil
+                userDidChangeSelection = true
+                if isCategoryRowSelected(category) {
+                    clearSelection()
                 } else {
-                    selectedCategoryName = name
-                    selectedSubcategoryName = nil
+                    selectedCategoryId = category.id
+                    selectedCategoryObjectID = category.objectID
+                    selectedSubcategoryId = nil
+                    selectedSubcategoryObjectID = nil
                 }
             },
             onSubcategoryTap: { category, sub in
-                let name = category.name ?? ""
-                let subName = sub.name ?? ""
-                let isThisSelected = selectedCategoryName == name && selectedSubcategoryName == subName
-                if isThisSelected {
-                    selectedCategoryName = nil
-                    selectedSubcategoryName = nil
+                userDidChangeSelection = true
+                if isSubcategoryRowSelected(sub) {
+                    clearSelection()
                 } else {
-                    selectedCategoryName = name
-                    selectedSubcategoryName = subName
+                    selectedCategoryId = category.id
+                    selectedCategoryObjectID = category.objectID
+                    selectedSubcategoryId = sub.id
+                    selectedSubcategoryObjectID = sub.objectID
+                    expanded.insert(category.objectID)
                 }
             }
         )
+        .onAppear {
+            seedSelectionFromItem(categories: loadedCategories)
+        }
         .onDisappear {
+            guard userDidChangeSelection, !selectionMatchesItem() else { return }
             applySelectionToItem()
         }
         .presentationDetents([.medium, .large])
     }
 
-    private func configureInitialSelection(categories: [Category]) {
-        selectedCategoryName = item.category?.name
+    // MARK: - Display checkmarks (item is source of truth until user taps)
 
-        if let currentCat = item.category,
-           let currentSub = item.subcategory,
-           currentSub.category == currentCat {
-            selectedSubcategoryName = currentSub.name
-            if let match = categories.first(where: { $0.objectID == currentCat.objectID }) {
-                expanded.insert(match.objectID)
-            }
-        } else {
-            selectedSubcategoryName = nil
+    private func displayCategoryCheckmark(for category: Category) -> Bool {
+        if userDidChangeSelection {
+            guard selectedSubcategoryId == nil, selectedSubcategoryObjectID == nil else { return false }
+            return pickerCategoriesMatch(category, selectionCategory())
         }
+        guard effectiveItemSubcategory() == nil else { return false }
+        return pickerCategoriesMatch(item.category, category)
+    }
+
+    private func displaySubcategoryCheckmark(for sub: Subcategory) -> Bool {
+        if userDidChangeSelection {
+            return pickerSubcategoriesMatch(sub, selectionSubcategory())
+        }
+        return pickerSubcategoriesMatch(effectiveItemSubcategory(), sub)
+    }
+
+    private func isCategoryRowSelected(_ category: Category) -> Bool {
+        if userDidChangeSelection {
+            return pickerCategoriesMatch(category, selectionCategory())
+                && selectedSubcategoryId == nil
+                && selectedSubcategoryObjectID == nil
+        }
+        return pickerCategoriesMatch(item.category, category) && effectiveItemSubcategory() == nil
+    }
+
+    private func isSubcategoryRowSelected(_ sub: Subcategory) -> Bool {
+        if userDidChangeSelection {
+            return pickerSubcategoriesMatch(sub, selectionSubcategory())
+        }
+        return pickerSubcategoriesMatch(effectiveItemSubcategory(), sub)
+    }
+
+    /// Subcategory on the item when it belongs to the item's current category.
+    private func effectiveItemSubcategory() -> Subcategory? {
+        guard let cat = item.category, let sub = item.subcategory,
+              subcategoryBelongsToPickerCategory(sub, listCategory: cat) else { return nil }
+        return sub
+    }
+
+    // MARK: - Selection state
+
+    private func clearSelection() {
+        selectedCategoryId = nil
+        selectedSubcategoryId = nil
+        selectedCategoryObjectID = nil
+        selectedSubcategoryObjectID = nil
+    }
+
+    /// Seeds pending apply state from the item (expand subcategory row when needed).
+    private func seedSelectionFromItem(categories: [Category]) {
+        guard let currentCat = item.category else {
+            clearSelection()
+            return
+        }
+
+        let listCat = categories.isEmpty
+            ? currentCat
+            : (resolveCategoryInPickerList(currentCat, categories: categories) ?? currentCat)
+        selectedCategoryId = listCat.id ?? currentCat.id
+        selectedCategoryObjectID = listCat.objectID
+
+        if let currentSub = effectiveItemSubcategory(),
+           let uid = referenceUserId {
+            let subs = viewContext.sortedSubcategoriesForAttributePicker(listCat, userId: uid)
+            let listSub = resolveSubcategoryInPickerList(currentSub, subcategories: subs) ?? currentSub
+            selectedSubcategoryId = listSub.id ?? currentSub.id
+            selectedSubcategoryObjectID = listSub.objectID
+            expanded.insert(listCat.objectID)
+        } else {
+            selectedSubcategoryId = nil
+            selectedSubcategoryObjectID = nil
+        }
+    }
+
+    private func selectionCategory() -> Category? {
+        guard let objectID = selectedCategoryObjectID else { return nil }
+        return try? viewContext.existingObject(with: objectID) as? Category
+    }
+
+    private func selectionSubcategory() -> Subcategory? {
+        guard let objectID = selectedSubcategoryObjectID else { return nil }
+        return try? viewContext.existingObject(with: objectID) as? Subcategory
+    }
+
+    private func selectionMatchesItem() -> Bool {
+        let itemSub = effectiveItemSubcategory()
+        let pendingSub = selectionSubcategory()
+        if pendingSub == nil && itemSub == nil {
+            return pickerCategoriesMatch(selectionCategory(), item.category)
+        }
+        return pickerCategoriesMatch(selectionCategory(), item.category)
+            && pickerSubcategoriesMatch(pendingSub, itemSub)
     }
 
     // MARK: - Apply Selection
 
     private func applySelectionToItem() {
-        guard let catName = selectedCategoryName, !catName.isEmpty else {
+        guard let categoryObjectID = selectedCategoryObjectID,
+              let category = try? viewContext.existingObject(with: categoryObjectID) as? Category else {
             item.category = nil
             item.subcategory = nil
 
             if viewContext.parent == nil {
                 do {
                     try viewContext.save()
+                    SyncService.shared.syncItemIfNeeded(item)
                 } catch {
                     print("❌ Failed to save category: \(error.localizedDescription)")
                 }
@@ -97,12 +189,18 @@ struct SetCategoryView: View {
             return
         }
 
-        let category = fetchOrCreateCategory(named: catName)
-        item.category = category
+        let uid = referenceUserId ?? ""
+        item.category = uid.isEmpty
+            ? category
+            : viewContext.canonicalCategoryForAttributePicker(category, userId: uid)
 
-        if let subName = selectedSubcategoryName, !subName.isEmpty,
-           let sub = fetchSubcategory(named: subName, in: category) {
-            item.subcategory = sub
+        if let subcategoryObjectID = selectedSubcategoryObjectID,
+           let sub = try? viewContext.existingObject(with: subcategoryObjectID) as? Subcategory,
+           let parent = item.category,
+           subcategoryBelongsToPickerCategory(sub, listCategory: parent) {
+            item.subcategory = uid.isEmpty
+                ? sub
+                : viewContext.canonicalSubcategoryForAttributePicker(sub, parent: parent, userId: uid)
         } else {
             item.subcategory = nil
         }
@@ -117,38 +215,5 @@ struct SetCategoryView: View {
                 print("❌ Failed to save category: \(error.localizedDescription)")
             }
         }
-    }
-
-    private func fetchOrCreateCategory(named name: String) -> Category {
-        let request = NSFetchRequest<Category>(entityName: "Category")
-        if let uid = referenceUserId, !uid.isEmpty {
-            request.predicate = NSPredicate(format: "name ==[c] %@ AND userId == %@", name, uid)
-        } else {
-            request.predicate = NSPredicate(format: "name ==[c] %@", name)
-        }
-        do {
-            if let match = try viewContext.fetch(request).first {
-                return match
-            }
-        } catch {
-            print("❌ Fetch category error: \(error)")
-        }
-
-        let newCategory = Category(context: viewContext)
-        newCategory.name = name
-        newCategory.id = UUID()
-        newCategory.userId = referenceUserId ?? item.userId
-        return newCategory
-    }
-
-    private func fetchSubcategory(named name: String, in category: Category) -> Subcategory? {
-        let req = NSFetchRequest<Subcategory>(entityName: "Subcategory")
-        req.fetchLimit = 1
-        if let uid = referenceUserId, !uid.isEmpty {
-            req.predicate = NSPredicate(format: "name ==[c] %@ AND category == %@ AND userId == %@", name, category, uid)
-        } else {
-            req.predicate = NSPredicate(format: "name ==[c] %@ AND category == %@", name, category)
-        }
-        return try? viewContext.fetch(req).first
     }
 }

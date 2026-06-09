@@ -11,6 +11,10 @@ struct CategoryPickerList: View {
     let title: String
     let userId: String
     @Binding var expanded: Set<NSManagedObjectID>
+    /// Ensures the item's current category appears even if not returned by the attribute-picker fetch.
+    var pinnedCategory: Category? = nil
+    /// Ensures the item's current subcategory appears under its parent row when missing from fetch.
+    var pinnedSubcategory: Subcategory? = nil
     var onCategoriesLoaded: (([Category]) -> Void)? = nil
     var showsCategoryCheckmark: (Category) -> Bool
     var showsSubcategoryCheckmark: (Category, Subcategory) -> Bool
@@ -22,7 +26,7 @@ struct CategoryPickerList: View {
 
     var body: some View {
         VStack {
-            SelectionHeader(title: title)
+            SelectionPanelHeader(title: title)
 
             if categories.isEmpty {
                 Text("No categories have been added.")
@@ -39,6 +43,12 @@ struct CategoryPickerList: View {
             }
         }
         .onAppear {
+            reloadCategories()
+        }
+        .onChange(of: pinnedCategory?.id) { _, _ in
+            reloadCategories()
+        }
+        .onChange(of: pinnedSubcategory?.id) { _, _ in
             reloadCategories()
         }
     }
@@ -106,7 +116,13 @@ struct CategoryPickerList: View {
             return
         }
         do {
-            categories = try viewContext.fetchCategoriesForAttributePicker(userId: userId)
+            var fetched = try viewContext.fetchCategoriesForAttributePicker(userId: userId)
+            if let pinned = pinnedCategory,
+               resolveCategoryInPickerList(pinned, categories: fetched) == nil {
+                fetched.append(pinned)
+                fetched = dedupeNamedReferenceRows(fetched, preferredUserId: userId)
+            }
+            categories = fetched
             onCategoriesLoaded?(categories)
         } catch {
             print("❌ Failed to fetch categories: \(error.localizedDescription)")
@@ -117,7 +133,17 @@ struct CategoryPickerList: View {
 
     private func sortedSubcategories(for category: Category) -> [Subcategory] {
         guard !userId.isEmpty else { return [] }
-        return viewContext.sortedSubcategoriesForAttributePicker(category, userId: userId)
+        var subs = viewContext.sortedSubcategoriesForAttributePicker(category, userId: userId)
+        if let pinned = pinnedSubcategory,
+           subcategoryBelongsToPickerCategory(pinned, listCategory: category),
+           resolveSubcategoryInPickerList(pinned, subcategories: subs) == nil {
+            subs.append(pinned)
+            subs = dedupeNamedReferenceRows(subs, preferredUserId: userId).sorted {
+                if $0.sortOrder != $1.sortOrder { return $0.sortOrder < $1.sortOrder }
+                return ($0.name ?? "") < ($1.name ?? "")
+            }
+        }
+        return subs
     }
 
     private func toggleExpansion(_ category: Category) {
