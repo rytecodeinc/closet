@@ -18,7 +18,10 @@ struct ItemDraftsView: View {
 
     @FetchRequest(
         entity: Item.entity(),
-        sortDescriptors: [NSSortDescriptor(keyPath: \Item.createdAt, ascending: false)],
+        sortDescriptors: [
+            NSSortDescriptor(keyPath: \Item.updatedAt, ascending: false),
+            NSSortDescriptor(keyPath: \Item.timestamp, ascending: false)
+        ],
         predicate: NSPredicate(format: "isDraft == YES AND (isSoftDeleted != YES OR isSoftDeleted == nil)")
     ) private var allDrafts: FetchedResults<Item>
 

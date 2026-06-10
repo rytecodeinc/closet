@@ -99,6 +99,7 @@ final class BulkItemImportCoordinator: ObservableObject {
                 photo.item = item
 
                 Self.attachDefaultWardrobes(to: item, wardrobeObjectID: wardrobeObjectID, in: context)
+                ItemLifecycleDates.applyOnSave(for: item, at: now)
                 setUpdatedAt(item)
 
                 do {
