@@ -40,7 +40,7 @@ struct SingleWardrobeSelectionView: View {
         List {
             ForEach(wardrobes, id: \.self) { wardrobe in
                 let name = wardrobe.name ?? "Untitled"
-                
+
                 Button {
                     selectedWardrobe = wardrobe
                     dismiss()
@@ -60,6 +60,19 @@ struct SingleWardrobeSelectionView: View {
         .listStyle(.plain)
         .navigationTitle("Select Wardrobe")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    dismiss()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text("Back")
+                    }
+                }
+            }
+        }
         .onAppear {
             // Run deduplication to ensure no duplicates are shown
             // deduplicateWardrobes(context: viewContext, userId: authSession.userId?.uuidString)
