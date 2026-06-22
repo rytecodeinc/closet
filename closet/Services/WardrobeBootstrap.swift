@@ -163,6 +163,7 @@ enum WardrobeBootstrap {
         w.type = type
         w.userId = uid
         w.isDefault = false
+        w.wardrobeVisibility = .public
         let now = Date()
         w.timestamp = now
         setCreatedAndUpdatedAt(w)
