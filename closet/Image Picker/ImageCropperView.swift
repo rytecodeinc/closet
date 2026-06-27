@@ -19,6 +19,8 @@ struct ImageCropperView: View {
     let isEditing: Bool // true when editing existing image, false when adding new
     /// When non-`nil`, Cancel calls this instead of `dismiss()` (e.g. queue flows with confirmation).
     let onCancel: (() -> Void)?
+    /// When false, rely on navigation back instead of a leading Cancel button.
+    let showsCancelButton: Bool
 
     // The image currently shown/edited
     @State private var currentImage: UIImage
@@ -28,6 +30,8 @@ struct ImageCropperView: View {
     // Transform state
     @State private var scale: CGFloat = 1.0
     @State private var lastScale: CGFloat = 1.0
+    @State private var rotation: Angle = .zero
+    @State private var lastRotation: Angle = .zero
     @State private var offset: CGSize = .zero
     @State private var lastOffset: CGSize = .zero // Track the offset at the start of drag
     @State private var isDragging: Bool = false // Track if we're currently dragging
@@ -49,16 +53,22 @@ struct ImageCropperView: View {
     @State private var lastErasePoint: CGPoint?
 
     private static let maxBrushSize: CGFloat = 100
-    private static let cropChromeBackground = Color(white: 0.8)
-    private static let bottomToolbarHeight: CGFloat = 0
+    private static let editActionsRowHeight: CGFloat = 56
+    private static let brushActionsRowHeight: CGFloat = 56
+    private static let brushSliderRowHeight: CGFloat = 52
+    private static let framingActionsRowHeight: CGFloat = 56
 
-    @State private var bottomSafeInset: CGFloat = 0
-
-    private struct BottomSafeAreaInsetKey: PreferenceKey {
-        static var defaultValue: CGFloat = 0
-        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-            value = nextValue()
+    private var stackedActionBarHeight: CGFloat {
+        var height = Self.framingActionsRowHeight + 1
+        height += Self.editActionsRowHeight + 1 + Self.brushActionsRowHeight
+        if isBrushEditing {
+            height += 1 + Self.brushSliderRowHeight
         }
+        return height
+    }
+
+    private func cropSquareSide(for geoSize: CGSize) -> CGFloat {
+        min(geoSize.width, max(0, geoSize.height - stackedActionBarHeight))
     }
 
     private struct BrushStroke: Equatable {
@@ -91,12 +101,14 @@ struct ImageCropperView: View {
         originalImage: UIImage,
         onCrop: @escaping (UIImage) -> Void,
         isEditing: Bool = false,
-        onCancel: (() -> Void)? = nil
+        onCancel: (() -> Void)? = nil,
+        showsCancelButton: Bool = true
     ) {
         self.originalImage = originalImage
         self.onCrop = onCrop
         self.isEditing = isEditing
         self.onCancel = onCancel
+        self.showsCancelButton = showsCancelButton
         _currentImage = State(initialValue: originalImage)
         let initialSnapshot = EditSnapshot(
             currentImage: originalImage,
@@ -110,17 +122,15 @@ struct ImageCropperView: View {
 
     var body: some View {
         ZStack {
-                Self.cropChromeBackground
+                Color(.systemBackground)
 
                 GeometryReader { geo in
-                    let actionBarHeight: CGFloat = 52
-                    let side = min(geo.size.width, max(0, geo.size.height - actionBarHeight))
-                    
+                    let side = cropSquareSide(for: geo.size)
+
                     VStack(spacing: 0) {
-                        Spacer(minLength: 0)
                         HStack {
                             Spacer(minLength: 0)
-                            
+
                             ZStack {
                                 cropTransparencyCheckerboard(side: side)
                                 cropImageLayer(side: side)
@@ -128,23 +138,38 @@ struct ImageCropperView: View {
                             .frame(width: side, height: side)
                             .contentShape(Rectangle())
                             .highPriorityGesture(brushDragGesture(side: side), including: isBrushEditing ? .all : .subviews)
-                            .frame(width: side, height: side)
                             .onAppear {
                                 cropViewSize = CGSize(width: side, height: side)
                             }
-                            .onChange(of: geo.size) { newSize in
-                                let s = min(newSize.width, max(0, newSize.height - actionBarHeight))
+                            .onChange(of: geo.size) { _, newSize in
+                                let s = cropSquareSide(for: newSize)
                                 cropViewSize = CGSize(width: s, height: s)
                             }
-                            
+                            .onChange(of: isBrushEditing) { _, _ in
+                                let s = cropSquareSide(for: geo.size)
+                                cropViewSize = CGSize(width: s, height: s)
+                            }
+
                             Spacer(minLength: 0)
                         }
                         Divider()
-                        cropEditActionsRow
-                            .frame(width: side)
+                        VStack(spacing: 0) {
+                            cropFramingActionsRow
+                            Divider()
+                            autoRemoveBackgroundRow
+                            Divider()
+                            cropBrushActionsRow
+                            if isBrushEditing {
+                                Divider()
+                                brushSizeSliderBar
+                            }
+                        }
+                        .frame(width: side)
+                        .animation(.easeInOut(duration: 0.2), value: isBrushEditing)
 
                         Spacer(minLength: 0)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
 
                 if isProcessingBackgroundRemoval {
@@ -158,51 +183,16 @@ struct ImageCropperView: View {
         .navigationTitle("Crop")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") {
-                    if let onCancel {
-                        onCancel()
-                    } else {
-                        dismiss()
+            if showsCancelButton {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        if let onCancel {
+                            onCancel()
+                        } else {
+                            dismiss()
+                        }
                     }
                 }
-            }
-            ToolbarItem(placement: .bottomBar) {
-                HStack(spacing: 24) {
-                    HStack(spacing: 24) {
-                        Button {
-                            toggleEraseMode()
-                        } label: {
-                            cropToolLabel(icon: "eraser", title: "Erase", isActive: isErasing)
-                        }
-                        .disabled(isProcessingBackgroundRemoval)
-                        .accessibilityLabel(isErasing ? "Erase mode on" : "Erase")
-
-                        Button {
-                            toggleRestoreBrushMode()
-                        } label: {
-                            cropToolLabel(
-                                icon: "paintbrush",
-                                title: "Repaint",
-                                isActive: isRestoringBrush,
-                                tint: repaintToolTint
-                            )
-                        }
-                        .disabled(isRepaintDisabled)
-                        .accessibilityLabel(isRestoringBrush ? "Repaint mode on" : "Repaint")
-                    }
-
-                    Spacer(minLength: 12)
-
-                    Button {
-                        restoreErase()
-                    } label: {
-                        cropToolLabel(icon: "arrow.counterclockwise", title: "Restore", tint: .red)
-                    }
-                    .disabled(isProcessingBackgroundRemoval || !hasEraseEdits)
-                    .accessibilityLabel("Restore all erased areas")
-                }
-                .frame(maxWidth: .infinity)
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button(isEditing ? "Save" : "Add") {
@@ -210,72 +200,98 @@ struct ImageCropperView: View {
                 }
             }
         }
-        .background {
-            GeometryReader { geo in
-                Color.clear.preference(
-                    key: BottomSafeAreaInsetKey.self,
-                    value: geo.safeAreaInsets.bottom
-                )
-            }
-        }
-        .onPreferenceChange(BottomSafeAreaInsetKey.self) { bottomSafeInset = $0 }
-        .overlay(alignment: .bottom) {
-            if isBrushEditing {
-                brushSizeSliderBar
-                    .padding(.bottom, Self.bottomToolbarHeight + bottomSafeInset)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-        }
     }
 
-    /// Size control for erase and repaint (only one brush mode active at a time).
+    /// Size control for erase and repaint — shown in the row below erase/repaint when active.
     private var brushSizeSliderBar: some View {
-        VStack(spacing: 0) {
-            Divider()
-            HStack(spacing: 12) {
-                Text("Size")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Slider(
-                    value: $brushSize,
-                    in: 1...Self.maxBrushSize,
-                    step: 1
-                )
-                Text("\(Int(brushSize.rounded()))")
-                    .font(.subheadline)
-                    .monospacedDigit()
-                    .frame(minWidth: 28, alignment: .trailing)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+        HStack(spacing: 12) {
+            Text("Size")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Slider(
+                value: $brushSize,
+                in: 1...Self.maxBrushSize,
+                step: 1
+            )
+            Text("\(Int(brushSize.rounded()))")
+                .font(.subheadline)
+                .monospacedDigit()
+                .frame(minWidth: 28, alignment: .trailing)
         }
+        .padding(.horizontal, 16)
         .frame(maxWidth: .infinity)
+        .frame(height: Self.brushSliderRowHeight)
         .background(Color(.systemBackground))
     }
 
-    /// Icon action row directly under the crop square (matches `SocialEngagementActionsRow` on item detail).
-    private var cropEditActionsRow: some View {
-        HStack(spacing: 24) {
-            Button {
-                undoEdit()
-            } label: {
-                cropToolLabel(icon: "arrowshape.turn.up.backward", title: "Undo", isActive: canUndoEdit)
-            }
-            .buttonStyle(.plain)
-            .disabled(isProcessingBackgroundRemoval || !canUndoEdit)
-            .accessibilityLabel("Undo")
+    private var isRemoveBackgroundEnabled: Bool {
+        !isProcessingBackgroundRemoval && !hasBackgroundRemoved
+    }
 
-            Button {
-                redoEdit()
-            } label: {
-                cropToolLabel(icon: "arrowshape.turn.up.forward", title: "Redo", isActive: canRedoEdit)
-            }
-            .buttonStyle(.plain)
-            .disabled(isProcessingBackgroundRemoval || !canRedoEdit)
-            .accessibilityLabel("Redo")
+    private var canRestoreToOriginal: Bool {
+        guard !isProcessingBackgroundRemoval else { return false }
+        guard let initial = editHistory.first else { return false }
+        let hasTransformChanges = scale != 1.0 || rotation != .zero || offset != .zero
+        return hasEraseEdits
+            || hasBackgroundRemoved
+            || hasTransformChanges
+            || currentImage !== initial.currentImage
+            || eraseSourceImage != nil
+            || !brushEditOps.isEmpty
+    }
 
-            Spacer(minLength: 12)
+    @ViewBuilder
+    private func cropDisplayedImage(side: CGFloat) -> some View {
+        Image(uiImage: currentImage)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
+            .scaleEffect(scale)
+            .rotationEffect(rotation)
+            .offset(offset)
+            .frame(width: side, height: side)
+            .clipped()
+    }
 
+    private var cropTransformGestures: some Gesture {
+        SimultaneousGesture(
+            SimultaneousGesture(
+                DragGesture(minimumDistance: 2)
+                    .onChanged { value in
+                        if !isDragging {
+                            lastOffset = offset
+                            isDragging = true
+                        }
+                        offset = CGSize(
+                            width: lastOffset.width + value.translation.width,
+                            height: lastOffset.height + value.translation.height
+                        )
+                    }
+                    .onEnded { _ in
+                        lastOffset = offset
+                        isDragging = false
+                    },
+                MagnificationGesture()
+                    .onChanged { value in
+                        scale = lastScale * value
+                    }
+                    .onEnded { _ in
+                        lastScale = scale
+                    }
+            ),
+            RotationGesture()
+                .onChanged { value in
+                    rotation = lastRotation + value
+                }
+                .onEnded { _ in
+                    lastRotation = rotation
+                }
+        )
+    }
+
+    /// Remove Background — centered on its row.
+    private var autoRemoveBackgroundRow: some View {
+        HStack {
+            Spacer(minLength: 0)
             Button {
                 removeBackground()
             } label: {
@@ -286,17 +302,320 @@ struct ImageCropperView: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
                 }
-                .foregroundStyle(hasBackgroundRemoved ? Color.secondary : Color.accentColor)
+                .foregroundStyle(isRemoveBackgroundEnabled ? Color.white : Color.secondary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(isRemoveBackgroundEnabled ? Color.accentColor : Color(.systemGray4))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
-            .buttonStyle(.bordered)
-            .disabled(isProcessingBackgroundRemoval || hasBackgroundRemoved)
+            .buttonStyle(.plain)
+            .padding(.vertical)
+            .disabled(!isRemoveBackgroundEnabled)
             .accessibilityLabel("Remove Background")
+            Spacer(minLength: 0)
         }
         .foregroundStyle(.primary)
         .padding(.horizontal, 14)
         .frame(maxWidth: .infinity)
-        .frame(height: 56)
+    }
+
+    /// Erase / Repaint (leading), Restore (center), Undo / Redo (trailing).
+    private var cropBrushActionsRow: some View {
+        ZStack {
+            HStack(spacing: 0) {
+                HStack(spacing: 24) {
+                    Button {
+                        toggleEraseMode()
+                    } label: {
+                        cropToolLabel(icon: "eraser", title: "Erase", isActive: isErasing)
+                    }
+                    .disabled(isProcessingBackgroundRemoval)
+                    .accessibilityLabel(isErasing ? "Erase mode on" : "Erase")
+
+                    Button {
+                        toggleRestoreBrushMode()
+                    } label: {
+                        cropToolLabel(
+                            icon: "paintbrush",
+                            title: "Repaint",
+                            isActive: isRestoringBrush,
+                            tint: repaintToolTint
+                        )
+                    }
+                    .disabled(isRepaintDisabled)
+                    .accessibilityLabel(isRestoringBrush ? "Repaint mode on" : "Repaint")
+                }
+
+                Spacer(minLength: 0)
+
+                HStack(spacing: 24) {
+                    Button {
+                        undoEdit()
+                    } label: {
+                        cropToolLabel(icon: "arrowshape.turn.up.backward", title: "Undo", isActive: canUndoEdit)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isProcessingBackgroundRemoval || !canUndoEdit)
+                    .accessibilityLabel("Undo")
+
+                    Button {
+                        redoEdit()
+                    } label: {
+                        cropToolLabel(icon: "arrowshape.turn.up.forward", title: "Redo", isActive: canRedoEdit)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isProcessingBackgroundRemoval || !canRedoEdit)
+                    .accessibilityLabel("Redo")
+                }
+            }
+
+            Button {
+                restoreToOriginal()
+            } label: {
+                cropToolLabel(
+                    icon: "arrow.counterclockwise",
+                    title: "Restore",
+                    tint: canRestoreToOriginal ? .red : .secondary
+                )
+            }
+            .disabled(!canRestoreToOriginal)
+            .accessibilityLabel("Restore original image")
+        }
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity)
+        .frame(height: Self.brushActionsRowHeight)
         .background(Color(.systemBackground))
+    }
+
+    /// Fit / Fill / Center / Rotate controls directly under the crop square.
+    private var cropFramingActionsRow: some View {
+        HStack(spacing: 0) {
+            framingToolButton(icon: "arrow.down.right.and.arrow.up.left", title: "Fit") {
+                applyFitFraming()
+            }
+            .accessibilityLabel("Fit image in crop area")
+
+            framingToolButton(icon: "arrow.up.left.and.arrow.down.right", title: "Fill") {
+                applyFillFraming()
+            }
+            .accessibilityLabel("Fill crop area with image")
+
+            framingToolButton(icon: "scope", title: "Center") {
+                applyCenterFraming()
+            }
+            .accessibilityLabel("Center image in crop area")
+
+            framingToolButton(icon: "arrow.left.and.right", title: "H Center") {
+                applyHorizontalCenterFraming()
+            }
+            .accessibilityLabel("Center image horizontally")
+
+            framingToolButton(icon: "arrow.up.and.down", title: "V Center") {
+                applyVerticalCenterFraming()
+            }
+            .accessibilityLabel("Center image vertically")
+
+            framingToolButton(icon: "rotate.right", title: "Rotate") {
+                applyRotate90Degrees()
+            }
+            .accessibilityLabel("Rotate image 90 degrees")
+        }
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity)
+        .frame(height: Self.framingActionsRowHeight)
+        .background(Color(.systemBackground))
+    }
+
+    private func framingToolButton(
+        icon: String,
+        title: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            cropToolLabel(icon: icon, title: title)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+        .disabled(isProcessingBackgroundRemoval || isBrushEditing)
+    }
+
+    private func applyFillFraming() {
+        applyContentFraming(mode: .fill)
+    }
+
+    private func applyFitFraming() {
+        applyContentFraming(mode: .fit)
+    }
+
+    private func applyCenterFraming() {
+        applyContentFraming(mode: .center)
+    }
+
+    private func applyHorizontalCenterFraming() {
+        applyAxisCentering(.horizontal)
+    }
+
+    private func applyVerticalCenterFraming() {
+        applyAxisCentering(.vertical)
+    }
+
+    private enum AxisCentering {
+        case horizontal
+        case vertical
+    }
+
+    /// Centers content on one axis while preserving scale and the other axis offset.
+    private func applyAxisCentering(_ axis: AxisCentering) {
+        guard cropViewSize.width > 0, cropViewSize.height > 0 else { return }
+
+        let imageSize = currentImage.size
+        guard imageSize.width > 0, imageSize.height > 0 else { return }
+
+        let contentRect = contentRectInImagePoints(for: currentImage)
+        guard contentRect.width > 0, contentRect.height > 0 else { return }
+
+        let baseScale = baseFillScale(canvas: cropViewSize, imageSize: imageSize)
+        guard baseScale > 0 else { return }
+
+        let effectiveScale = baseScale * scale
+        let centeredOffset = centerOffsetForContent(
+            effectiveScale: effectiveScale,
+            canvas: cropViewSize,
+            imageSize: imageSize,
+            contentRect: contentRect
+        )
+
+        withAnimation(.easeInOut(duration: 0.2)) {
+            switch axis {
+            case .horizontal:
+                offset.width = centeredOffset.width
+            case .vertical:
+                offset.height = centeredOffset.height
+            }
+            lastOffset = offset
+        }
+    }
+
+    private func applyRotate90Degrees() {
+        guard !isProcessingBackgroundRemoval, !isBrushEditing else { return }
+
+        currentImage = rotateUIImage90DegreesClockwise(normalizedImage(currentImage))
+        clearEraseSession()
+
+        withAnimation(.easeInOut(duration: 0.2)) {
+            scale = 1.0
+            lastScale = 1.0
+            rotation = .zero
+            lastRotation = .zero
+            offset = .zero
+            lastOffset = .zero
+        }
+        recordEditHistory()
+    }
+
+    /// Bakes orientation, then rotates pixel data 90° clockwise.
+    private func rotateUIImage90DegreesClockwise(_ image: UIImage) -> UIImage {
+        let size = image.size
+        let newSize = CGSize(width: size.height, height: size.width)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = image.scale
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
+        return renderer.image { ctx in
+            let cg = ctx.cgContext
+            cg.translateBy(x: newSize.width / 2, y: newSize.height / 2)
+            cg.rotate(by: .pi / 2)
+            cg.translateBy(x: -size.width / 2, y: -size.height / 2)
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }
+    }
+
+    private enum ContentFramingMode {
+        case fill
+        case fit
+        case center
+    }
+
+    /// Visible (non-transparent) region of `image` in UIKit point coordinates.
+    private func contentRectInImagePoints(for image: UIImage) -> CGRect {
+        let normalized = PhotoContentBounds.normalizedBounds(for: image)
+        let size = image.size
+        return CGRect(
+            x: normalized.x * size.width,
+            y: normalized.y * size.height,
+            width: normalized.width * size.width,
+            height: normalized.height * size.height
+        )
+    }
+
+    private func baseFillScale(canvas: CGSize, imageSize: CGSize) -> CGFloat {
+        guard imageSize.width > 0, imageSize.height > 0 else { return 1 }
+        return max(canvas.width / imageSize.width, canvas.height / imageSize.height)
+    }
+
+    /// Offset that places the content rect's center on the crop canvas center at `effectiveScale`.
+    private func centerOffsetForContent(
+        effectiveScale: CGFloat,
+        canvas: CGSize,
+        imageSize: CGSize,
+        contentRect: CGRect
+    ) -> CGSize {
+        CGSize(
+            width: effectiveScale * (imageSize.width / 2 - contentRect.midX),
+            height: effectiveScale * (imageSize.height / 2 - contentRect.midY)
+        )
+    }
+
+    private func applyContentFraming(mode: ContentFramingMode) {
+        guard cropViewSize.width > 0, cropViewSize.height > 0 else { return }
+
+        let imageSize = currentImage.size
+        guard imageSize.width > 0, imageSize.height > 0 else { return }
+
+        let contentRect = contentRectInImagePoints(for: currentImage)
+        guard contentRect.width > 0, contentRect.height > 0 else { return }
+
+        let baseScale = baseFillScale(canvas: cropViewSize, imageSize: imageSize)
+        guard baseScale > 0 else { return }
+
+        let effectiveScale: CGFloat
+        let newScale: CGFloat
+
+        switch mode {
+        case .fill:
+            effectiveScale = max(
+                cropViewSize.width / contentRect.width,
+                cropViewSize.height / contentRect.height
+            )
+            newScale = effectiveScale / baseScale
+        case .fit:
+            effectiveScale = min(
+                cropViewSize.width / contentRect.width,
+                cropViewSize.height / contentRect.height
+            )
+            newScale = effectiveScale / baseScale
+        case .center:
+            effectiveScale = baseScale * scale
+            newScale = scale
+        }
+
+        let newOffset = centerOffsetForContent(
+            effectiveScale: effectiveScale,
+            canvas: cropViewSize,
+            imageSize: imageSize,
+            contentRect: contentRect
+        )
+
+        withAnimation(.easeInOut(duration: 0.2)) {
+            scale = newScale
+            lastScale = newScale
+            rotation = .zero
+            lastRotation = .zero
+            offset = newOffset
+            lastOffset = newOffset
+        }
     }
 
     private var repaintToolTint: Color {
@@ -348,6 +667,7 @@ struct ImageCropperView: View {
     }
 
     private func applyEditSnapshot(_ snapshot: EditSnapshot) {
+        let sizeChanged = currentImage.size != snapshot.currentImage.size
         currentImage = snapshot.currentImage
         eraseSourceImage = snapshot.eraseSourceImage
         brushEditOps = snapshot.brushEditOps
@@ -356,6 +676,14 @@ struct ImageCropperView: View {
         activeRestoreStroke = nil
         lastErasePoint = nil
         hasEraseEdits = !brushEditOps.isEmpty
+        if sizeChanged {
+            scale = 1.0
+            lastScale = 1.0
+            rotation = .zero
+            lastRotation = .zero
+            offset = .zero
+            lastOffset = .zero
+        }
     }
 
     private func undoEdit() {
@@ -412,44 +740,11 @@ struct ImageCropperView: View {
 
     @ViewBuilder
     private func cropImageLayer(side: CGFloat) -> some View {
-        let image = Image(uiImage: currentImage)
-            .resizable()
-            .aspectRatio(contentMode: .fill)
-            .scaleEffect(scale)
-            .offset(offset)
-            .frame(width: side, height: side)
-            .clipped()
-
         if isBrushEditing {
-            image
+            cropDisplayedImage(side: side)
         } else {
-            image
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            if !isDragging {
-                                lastOffset = offset
-                                isDragging = true
-                            }
-                            offset = CGSize(
-                                width: lastOffset.width + value.translation.width,
-                                height: lastOffset.height + value.translation.height
-                            )
-                        }
-                        .onEnded { _ in
-                            lastOffset = offset
-                            isDragging = false
-                        }
-                )
-                .simultaneousGesture(
-                    MagnificationGesture()
-                        .onChanged { value in
-                            scale = lastScale * value
-                        }
-                        .onEnded { _ in
-                            lastScale = scale
-                        }
-                )
+            cropDisplayedImage(side: side)
+                .gesture(cropTransformGestures)
         }
     }
 
@@ -532,15 +827,27 @@ struct ImageCropperView: View {
         beginEraseSessionIfNeeded()
     }
 
-    /// Restores all erased regions while keeping other edits (e.g. background removal).
-    func restoreErase() {
-        guard let source = eraseSourceImage else { return }
-        brushEditOps = []
-        activeEraseStroke = nil
-        activeRestoreStroke = nil
-        hasEraseEdits = false
-        lastErasePoint = nil
-        currentImage = source
+    /// Resets image and edit flags to the original imported photo (undoes background removal, rotation, erase, etc.).
+    func restoreToOriginal() {
+        guard canRestoreToOriginal, let initial = editHistory.first else { return }
+
+        commitActiveEraseStroke()
+        commitActiveRestoreStroke()
+        isErasing = false
+        isRestoringBrush = false
+
+        currentImage = initial.currentImage
+        clearEraseSession()
+        hasBackgroundRemoved = false
+
+        withAnimation(.easeInOut(duration: 0.2)) {
+            scale = 1.0
+            lastScale = 1.0
+            rotation = .zero
+            lastRotation = .zero
+            offset = .zero
+            lastOffset = .zero
+        }
         recordEditHistory()
     }
 
@@ -593,12 +900,25 @@ struct ImageCropperView: View {
     func convertToImageCoordinates(touchPoint: CGPoint, side: CGFloat, imageSize: CGSize) -> CGPoint {
         let baseScale = max(side / imageSize.width, side / imageSize.height)
         let effectiveScale = baseScale * scale
-        let drawnW = imageSize.width * effectiveScale
-        let drawnH = imageSize.height * effectiveScale
-        let originX = (side - drawnW) / 2 + offset.width
-        let originY = (side - drawnH) / 2 + offset.height
-        let x = (touchPoint.x - originX) / effectiveScale
-        let y = (touchPoint.y - originY) / effectiveScale
+
+        var point = CGPoint(
+            x: touchPoint.x - side / 2 - offset.width,
+            y: touchPoint.y - side / 2 - offset.height
+        )
+
+        let radians = -CGFloat(rotation.radians)
+        let cosR = cos(radians)
+        let sinR = sin(radians)
+        let rotatedX = point.x * cosR - point.y * sinR
+        let rotatedY = point.x * sinR + point.y * cosR
+        point = CGPoint(x: rotatedX, y: rotatedY)
+
+        guard effectiveScale > 0 else {
+            return CGPoint(x: imageSize.width / 2, y: imageSize.height / 2)
+        }
+
+        let x = point.x / effectiveScale + imageSize.width / 2
+        let y = point.y / effectiveScale + imageSize.height / 2
         return CGPoint(
             x: max(0, min(imageSize.width, x)),
             y: max(0, min(imageSize.height, y))
@@ -780,39 +1100,24 @@ struct ImageCropperView: View {
     }
 
     func cropAndSaveImage() {
-    let canvasSize = cropViewSize
-    let imageSize = currentImage.size
+        let canvasSize = cropViewSize
+        guard canvasSize.width > 0, canvasSize.height > 0 else { return }
 
-    // 1. Base scale to cover the square view (mimics .aspectRatio(.fill), centered)
-    let baseScale = max(canvasSize.width / imageSize.width, canvasSize.height / imageSize.height)
+        let side = canvasSize.width
+        let captureView = ZStack {
+            Color.clear
+            cropDisplayedImage(side: side)
+        }
+        .frame(width: side, height: side)
 
-    // 2. User gesture scale applied on top of base fill
-    let finalScale = baseScale * scale
+        let renderer = ImageRenderer(content: captureView)
+        renderer.isOpaque = false
+        renderer.scale = UIScreen.main.scale
 
-    // 3. Calculate how big the image will be when drawn
-    let drawnSize = CGSize(width: imageSize.width * finalScale,
-                           height: imageSize.height * finalScale)
-
-    // 4. Calculate centered origin, then apply user drag offset
-    let origin = CGPoint(
-        x: (canvasSize.width - drawnSize.width) / 2 + offset.width,
-        y: (canvasSize.height - drawnSize.height) / 2 + offset.height
-    )
-
-    // 5. Render the image exactly how it appears onscreen
-    let rendererFormat = UIGraphicsImageRendererFormat()
-    rendererFormat.opaque = false
-
-    let renderer = UIGraphicsImageRenderer(size: canvasSize, format: rendererFormat)
-    let croppedImage = renderer.image { ctx in
-        UIColor.clear.setFill()
-        ctx.fill(CGRect(origin: .zero, size: canvasSize))
-        currentImage.draw(in: CGRect(origin: origin, size: drawnSize))
+        guard let croppedImage = renderer.uiImage else { return }
+        onCrop(croppedImage)
+        dismiss()
     }
-
-    onCrop(croppedImage)
-    dismiss()
-}
 
 
 }
