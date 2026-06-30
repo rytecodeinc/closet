@@ -149,7 +149,7 @@ struct CanvasSceneView: View {
                     .padding()
                 }
             }
-            .navigationTitle("Outfit Collage")
+            .navigationTitle("Outfit")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 Button("Save") { saveOutfit() }
