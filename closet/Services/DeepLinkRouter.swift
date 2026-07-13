@@ -14,8 +14,21 @@ class DeepLinkRouter: ObservableObject {
     static let shared = DeepLinkRouter()
     
     @Published var navigationIntent: NavigationIntent?
+
+    /// Set when the user taps an APNs notification; ContentView switches to Profile and ProfileView presents the list.
+    @Published var shouldOpenNotifications = false
     
     private init() {}
+
+    func openNotificationsFromPush() {
+        DispatchQueue.main.async { [weak self] in
+            self?.shouldOpenNotifications = true
+        }
+    }
+
+    func consumeOpenNotifications() {
+        shouldOpenNotifications = false
+    }
     
     /// Processes incoming deep link URL and stores navigation intent
     func handleURL(_ url: URL) {

@@ -15,6 +15,16 @@ build/
 # Supabase configuration (contains sensitive credentials)
 closet/Services/SupabaseConfig.swift
 
+# Apple Push (.p8) — never commit
+*.p8
+AuthKey_*.p8
+
+# Local tooling / agent scratch (supabase CLI install, home override)
+node_modules/
+package.json
+package-lock.json
+.agent-home/
+scripts/.env.push
 
 # Core ML model artifacts (compiled - large binary weights, ~1GB total)
 *.mlmodelc/

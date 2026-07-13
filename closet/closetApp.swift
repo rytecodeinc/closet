@@ -10,6 +10,8 @@ import CoreData
 
 @main
 struct closetApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     static let didPrint = {
             print("Static property initialized")
             return true
@@ -33,7 +35,7 @@ struct closetApp: App {
         print("App init: Seeding default colors")
         // ✅ Set Core Data context for sync service IMMEDIATELY
         // This ensures context is available before any views appear
-        SyncService.shared.setContext(persistenceController.container.viewContext)
+        SyncService.shared.configure(container: persistenceController.container)
     }
     
     var body: some Scene {
@@ -70,6 +72,19 @@ struct closetApp: App {
                     // On foreground/activation, purge any tombstones that have already been deleted in Supabase.
                     if phase == .active {
                         syncService.schedulePurgeLocalTombstones(delayNanoseconds: 1_200_000_000)
+                        if authSession.isAuthenticated {
+                            PushNotificationService.shared.requestAuthorizationAndRegisterIfNeeded()
+                            Task {
+                                await PushNotificationService.shared.syncStoredTokenIfNeeded()
+                            }
+                        }
+                    }
+                }
+                .onChange(of: authSession.userId) { _, userId in
+                    guard userId != nil else { return }
+                    PushNotificationService.shared.requestAuthorizationAndRegisterIfNeeded()
+                    Task {
+                        await PushNotificationService.shared.syncStoredTokenIfNeeded()
                     }
                 }
                 .onChange(of: networkMonitor.isConnected) { isConnected in

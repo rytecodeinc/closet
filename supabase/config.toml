@@ -1,0 +1,6 @@
+# A config.toml is required for local Supabase CLI.
+# Project ref is set via `supabase link`.
+
+[functions.send-push]
+# Called by Database Webhook / service role, not end-user JWTs.
+verify_jwt = false

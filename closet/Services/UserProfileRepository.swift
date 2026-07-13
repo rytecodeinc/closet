@@ -45,7 +45,9 @@ class UserProfileRepository {
     }
 
     /// Re-links Core Data to an on-disk TestFlight avatar when the JPEG still exists.
+    /// Never runs when cloud sync is enabled — a leftover local JPEG must not overwrite the CDN URL.
     func restoreLocalAvatarIfNeeded(userId: String) throws {
+        guard !AppEnvironment.capabilities.enablesCloudSync else { return }
         guard let uuid = UUID(uuidString: userId),
               ProfileAvatarLocalStorage.hasSavedAvatar(userId: uuid) else { return }
         let urlString = ProfileAvatarLocalStorage.canonicalStoredURLString(for: uuid)
@@ -199,6 +201,33 @@ class UserProfileRepository {
         SyncService.shared.syncUserProfileIfNeeded(profile)
     }
 
+    /// Updates the user's profile style tags (max 3, catalog values only).
+    func updateStyleTags(_ tags: [ProfileStyleTag], userId: String? = nil) throws {
+        let profile = getOrCreateProfile(userId: userId)
+        let next = Array(tags.prefix(ProfileStyleTag.maxSelectionCount))
+        let current = profile.profileStyleTags
+        if current == next {
+            if let userId = userId, !userId.isEmpty, profile.userId != userId {
+                profile.userId = userId
+                guard context.hasChanges else { return }
+                try context.save()
+            }
+            return
+        }
+
+        profile.profileStyleTags = next
+        profile.updatedAt = Date()
+
+        if let userId = userId, !userId.isEmpty {
+            profile.userId = userId
+        }
+
+        guard context.hasChanges else { return }
+        try context.save()
+
+        SyncService.shared.syncUserProfileIfNeeded(profile)
+    }
+
     /// Sets the profile avatar URL (`https://…` from R2 or `file://…` for local-only builds). Pass `nil` to clear.
     func updateAvatarUrl(_ url: String?, userId: String? = nil, syncToCloud: Bool = true) throws {
         let profile = getOrCreateProfile(userId: userId)
@@ -248,11 +277,11 @@ class UserProfileRepository {
     }
     
     /// Updates (persists) the cached friend count in Core Data.
+    /// Does not touch `updatedAt` — that field is used for avatar remount identity.
     func updateFriendCount(_ count: Int, userId: String? = nil) throws {
         let profile = getOrCreateProfile(userId: userId)
         profile.setValue(Int64(count), forKey: "friendCount")
         profile.setValue(Date(), forKey: "friendCountUpdatedAt")
-        profile.updatedAt = Date()
         
         if let userId = userId, !userId.isEmpty {
             profile.userId = userId
