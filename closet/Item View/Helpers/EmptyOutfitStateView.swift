@@ -10,15 +10,19 @@ import SwiftUI
 import CoreData
 
 struct EmptyOutfitStateView: View {
+    var title: String = "No saved outfits yet"
+    var message: String = "Click the '+' button to create an outfit"
+    var systemImage: String = "tshirt"
+
     var body: some View {
         VStack(spacing: 12) {
-            Image(systemName: "tshirt")
+            Image(systemName: systemImage)
                 .font(.system(size: 40))
                 .foregroundColor(.secondary)
-            Text("No saved outfits yet")
+            Text(title)
                 .font(.headline)
                 .foregroundColor(.secondary)
-            Text("Click the '+' button to create an outfit")
+            Text(message)
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
