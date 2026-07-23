@@ -17,8 +17,8 @@ struct LaunchView: View {
     @State private var logoScale: CGFloat = 1.0
     @State private var logoOpacity: Double = 1.0
 
-    private static let brandGradientTop = Color(hex: "#d13438")
-    private static let brandGradientBottom = Color(hex: "#931013")
+    private static let brandGradientTop = Color(hex: "#DF1332")
+    private static let brandGradientBottom = Color.cayenne
     private static let logoSize: CGFloat = 150
     private static let logoExpandedScale: CGFloat = 1.35
     private static let minimumSplashNanoseconds: UInt64 = 400_000_000
@@ -33,9 +33,10 @@ struct LaunchView: View {
             )
             .ignoresSafeArea()
 
-            Image("AppIconTransparent")
+            Image("Redress.SFSymbol")
                 .resizable()
                 .scaledToFit()
+                .foregroundStyle(.white)
                 .frame(width: Self.logoSize, height: Self.logoSize)
                 .scaleEffect(logoScale)
                 .opacity(logoOpacity)

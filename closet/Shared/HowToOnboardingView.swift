@@ -41,7 +41,7 @@ struct HowToWelcomeContent {
                 items: [
                     HowToWelcomeIconItem(text: "Closet Organizer", systemImage: "tshirt"),
                     HowToWelcomeIconItem(text: "Outfit Canvas", systemImage: "square.grid.3x3.fill"),
-                    HowToWelcomeIconItem(text: "Travel Packing", systemImage: "airplane.circle"),
+                    HowToWelcomeIconItem(text: "Travel Packing", systemImage: "suitcase"),
                     HowToWelcomeIconItem(text: "Calendar Events", systemImage: "calendar"),
                 ]
             ),
@@ -108,7 +108,7 @@ struct HowToFeatureTip: Identifiable {
             id: 2,
             imageName: "PackForTrips",
             title: "Pack For Trips",
-            message: "Tap the airplane button at the top of the Closet tab to pack for your upcoming trips."
+            message: "Tap the luggage button at the top of the Closet tab to pack for your upcoming trips."
         ),
         HowToFeatureTip(
             id: 3,
@@ -311,7 +311,7 @@ struct HowToWelcomeIconRow: View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: systemImage)
                 .font(.subheadline)
-                .foregroundStyle(.teal)
+                .foregroundStyle(.cayenne)
                 .frame(width: 22, alignment: .leading)
                 .padding(.top, 2)
                 .accessibilityHidden(true)
@@ -332,7 +332,7 @@ struct HowToFeatureTipPageView: View {
         VStack(spacing: 12) {
             Text(tip.title)
                 .font(.headline)
-                .foregroundStyle(.teal)
+                .foregroundStyle(.blue)
                 .fontWeight(.semibold)
                 .multilineTextAlignment(.center)
 
@@ -422,7 +422,7 @@ struct HowToOnboardingView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
                 .foregroundStyle(.white)
-                .background(Color.teal.gradient)
+                .background(Color.black.gradient)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)

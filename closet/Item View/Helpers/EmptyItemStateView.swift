@@ -48,11 +48,12 @@ struct EmptyItemStateView: View {
     var body: some View {
         VStack(spacing: 12) {
             Spacer()
-            Image("AppIconBlack")
+            Image("Redress.SFSymbol")
                 .resizable()
                 .scaledToFit()
+                .foregroundStyle(.black)
                 .frame(width: 60, height: 60)
-                .foregroundColor(.gray)
+                .opacity(0.45)
             Text("No saved items yet")
                 .font(.headline)
                 .foregroundColor(.gray)

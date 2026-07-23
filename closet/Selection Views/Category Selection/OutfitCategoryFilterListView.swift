@@ -10,32 +10,44 @@ import CoreData
 
 struct OutfitCategoryFilterListView: View {
     @Environment(\.managedObjectContext) private var viewContext
-    @Binding var selectedCategory: String?
-    /// Only outfit categories used by this user's outfits.
+    @Binding var selectedCategory: OutfitCategory?
+    /// Only outfit categories used by this user's visible outfits.
     var userId: String? = nil
-    
-    @State private var categories: [String] = []
+    /// When set, only categories on outfits visible in this wardrobe tab appear.
+    var outfitFilterWardrobe: Wardrobe? = nil
+
+    @State private var categories: [OutfitCategory] = []
+
+    private var emptyStateLabel: String {
+        if outfitFilterWardrobe?.type?.lowercased() == "wishlist" {
+            return "Categories added to outfits in this wishlist will appear here."
+        }
+        if outfitFilterWardrobe?.type?.lowercased() == "closet" {
+            return "Categories added to outfits in this closet will appear here."
+        }
+        return "No categories have been added."
+    }
 
     var body: some View {
         List {
             if categories.isEmpty {
-                Text("No categories have been added.")
+                Text(emptyStateLabel)
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                ForEach(categories, id: \.self) { category in
+                ForEach(categories, id: \.objectID) { category in
                     Button {
-                        if selectedCategory == category {
+                        if selectedCategory?.objectID == category.objectID {
                             selectedCategory = nil
                         } else {
                             selectedCategory = category
                         }
                     } label: {
                         HStack {
-                            Text(category)
+                            Text(category.name ?? "")
                                 .foregroundColor(.primary)
                             Spacer()
-                            if selectedCategory == category {
+                            if selectedCategory?.objectID == category.objectID {
                                 Image(systemName: "checkmark")
                                     .foregroundColor(.blue)
                             }
@@ -55,20 +67,18 @@ struct OutfitCategoryFilterListView: View {
 
     // MARK: - Fetch Categories
     private func fetchCategories() {
-        let request: NSFetchRequest<Outfit> = Outfit.fetchRequest()
-        request.propertiesToFetch = ["category"]
-        if let uid = userId {
-            request.predicate = NSPredicate(format: "userId == %@", uid)
+        guard let uid = userId, !uid.isEmpty else {
+            categories = []
+            return
         }
-
         do {
-            let allOutfits = try viewContext.fetch(request)
-            let allCategories = allOutfits.compactMap { $0.category }.filter { !$0.isEmpty }
-            categories = Array(Set(allCategories)).sorted()
+            categories = try viewContext.fetchOutfitCategoriesForFilterList(
+                userId: uid,
+                wardrobe: outfitFilterWardrobe
+            )
         } catch {
             print("❌ Failed to fetch categories: \(error)")
             categories = []
         }
     }
 }
-
