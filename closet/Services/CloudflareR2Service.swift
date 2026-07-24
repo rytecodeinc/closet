@@ -25,6 +25,17 @@ class CloudflareR2Service {
             print("⚠️ Cloudflare R2 configuration error: \(error.localizedDescription)")
         }
     }
+
+    /// Fresh JWT + Supabase user id for Worker auth. Never use cached `currentSession` alone —
+    /// it can hold an expired access token while the Auth client still has a valid refresh token.
+    private func authenticatedUploadContext() async throws -> (accessToken: String, userId: UUID) {
+        do {
+            let session = try await supabaseService.freshSession()
+            return (session.accessToken, session.user.id)
+        } catch {
+            throw R2Error.notAuthenticated
+        }
+    }
     
     /// Uploads a photo to Cloudflare R2 via Worker and returns the public URL
     /// - Parameters:
@@ -34,18 +45,7 @@ class CloudflareR2Service {
     ///   - userId: The ID of the user (will be validated against Supabase session)
     /// - Returns: The public URL of the uploaded photo
     func uploadPhoto(imageData: Data, itemId: UUID, photoId: UUID, userId: UUID) async throws -> String {
-        // Get Supabase JWT token for authentication
-        guard let session = supabaseService.currentSession else {
-            throw R2Error.notAuthenticated
-        }
-        
-        // CRITICAL: Always use the Supabase user ID from the session
-        guard let supabaseUserId = supabaseService.currentUser?.id else {
-            throw R2Error.notAuthenticated
-        }
-        
-        // Use Supabase user ID (the source of truth)
-        let actualUserId = supabaseUserId
+        let (accessToken, actualUserId) = try await authenticatedUploadContext()
         
         // Create file path: userId/itemId/photoId.jpg
         let fileName = "\(actualUserId.uuidString)/\(itemId.uuidString)/\(photoId.uuidString).jpg"
@@ -55,7 +55,7 @@ class CloudflareR2Service {
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
         request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.httpBody = imageData
         
         print("📤 Uploading photo to R2 via Worker: \(fileName)")
@@ -63,7 +63,7 @@ class CloudflareR2Service {
         print("   Worker URL: \(CloudflareR2Config.workerURL)")
         print("   Full URL: \(url.absoluteString)")
         print("   Image size: \(imageData.count) bytes")
-        print("   Auth token (first 20 chars): \(String(session.accessToken.prefix(20)))...")
+        print("   Auth token (first 20 chars): \(String(accessToken.prefix(20)))...")
         
         // Upload to Worker (which proxies to R2)
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -117,15 +117,7 @@ class CloudflareR2Service {
     ///   - photoId: The ID of the photo
     ///   - userId: The ID of the user (will be validated against Supabase session)
     func deletePhoto(itemId: UUID, photoId: UUID, userId: UUID) async throws {
-        // Get Supabase JWT token for authentication
-        guard let session = supabaseService.currentSession else {
-            throw R2Error.notAuthenticated
-        }
-        
-        // CRITICAL: Always use the Supabase user ID from the session
-        guard let supabaseUserId = supabaseService.currentUser?.id else {
-            throw R2Error.notAuthenticated
-        }
+        let (accessToken, supabaseUserId) = try await authenticatedUploadContext()
         
         // Use the Supabase user ID to ensure it matches the JWT token
         let actualUserId = (userId == supabaseUserId) ? userId : supabaseUserId
@@ -134,7 +126,7 @@ class CloudflareR2Service {
         
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
-        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         
         print("🗑️ Deleting photo from R2 via Worker: \(fileName)")
         
@@ -166,18 +158,7 @@ class CloudflareR2Service {
     ///   - userId: The ID of the user (will be validated against Supabase session)
     /// - Returns: The public URL of the uploaded thumbnail
     func uploadThumbnail(imageData: Data, itemId: UUID, photoId: UUID, userId: UUID) async throws -> String {
-        // Get Supabase JWT token for authentication
-        guard let session = supabaseService.currentSession else {
-            throw R2Error.notAuthenticated
-        }
-        
-        // CRITICAL: Always use the Supabase user ID from the session
-        guard let supabaseUserId = supabaseService.currentUser?.id else {
-            throw R2Error.notAuthenticated
-        }
-        
-        // Use Supabase user ID (the source of truth)
-        let actualUserId = supabaseUserId
+        let (accessToken, actualUserId) = try await authenticatedUploadContext()
         
         // Create file path with _thumb suffix: userId/itemId/photoId_thumb.jpg
         let fileName = "\(actualUserId.uuidString)/\(itemId.uuidString)/\(photoId.uuidString)_thumb.jpg"
@@ -187,7 +168,7 @@ class CloudflareR2Service {
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
         request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.httpBody = imageData
         
         print("📤 Uploading thumbnail to R2 via Worker: \(fileName)")
@@ -236,12 +217,7 @@ class CloudflareR2Service {
     /// Uploads an outfit collage image to Cloudflare R2 via Worker
     /// Path format: userId/outfits/outfitId.jpg
     func uploadOutfitImage(imageData: Data, outfitId: UUID, userId: UUID) async throws -> String {
-        guard let session = supabaseService.currentSession else {
-            throw R2Error.notAuthenticated
-        }
-        guard let supabaseUserId = supabaseService.currentUser?.id else {
-            throw R2Error.notAuthenticated
-        }
+        let (accessToken, supabaseUserId) = try await authenticatedUploadContext()
 
         let fileName = "\(supabaseUserId.uuidString)/outfits/\(outfitId.uuidString).jpg"
         let url = URL(string: "\(CloudflareR2Config.workerURL)/\(fileName)")!
@@ -249,7 +225,7 @@ class CloudflareR2Service {
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
         request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.httpBody = imageData
 
         print("📤 Uploading outfit image to R2: \(fileName)")
@@ -279,21 +255,57 @@ class CloudflareR2Service {
         return imageURL
     }
 
+    /// Uploads a Redress outfit suggestion collage to R2.
+    /// Path format: userId/outfit-suggestions/suggestionId.jpg
+    func uploadOutfitSuggestionImage(imageData: Data, suggestionId: UUID, userId: UUID) async throws -> String {
+        let (accessToken, supabaseUserId) = try await authenticatedUploadContext()
+
+        let fileName = "\(supabaseUserId.uuidString)/outfit-suggestions/\(suggestionId.uuidString).jpg"
+        let url = URL(string: "\(CloudflareR2Config.workerURL)/\(fileName)")!
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.httpBody = imageData
+
+        print("📤 Uploading outfit suggestion image to R2: \(fileName)")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw R2Error.invalidResponse
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            if let errorData = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let errorMessage = errorData["error"] as? String {
+                throw R2Error.uploadFailed(errorMessage)
+            }
+            throw R2Error.uploadFailed("HTTP \(httpResponse.statusCode)")
+        }
+
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let imageURL = json["url"] as? String {
+            print("✅ Outfit suggestion image uploaded: \(imageURL)")
+            return imageURL
+        }
+
+        let imageURL = "\(CloudflareR2Config.customDomain)/\(fileName)"
+        print("✅ Outfit suggestion image uploaded: \(imageURL)")
+        return imageURL
+    }
+
     /// Deletes an outfit collage image from Cloudflare R2 via Worker
     func deleteOutfitImage(outfitId: UUID, userId: UUID) async throws {
-        guard let session = supabaseService.currentSession else {
-            throw R2Error.notAuthenticated
-        }
-        guard let supabaseUserId = supabaseService.currentUser?.id else {
-            throw R2Error.notAuthenticated
-        }
+        let (accessToken, supabaseUserId) = try await authenticatedUploadContext()
 
         let fileName = "\(supabaseUserId.uuidString)/outfits/\(outfitId.uuidString).jpg"
         let url = URL(string: "\(CloudflareR2Config.workerURL)/\(fileName)")!
 
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
-        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
         print("🗑️ Deleting outfit image from R2: \(fileName)")
 
@@ -316,12 +328,7 @@ class CloudflareR2Service {
 
     /// Path format: userId/outfits/outfitId_worn.jpg
     func uploadOutfitWornImage(imageData: Data, outfitId: UUID, userId: UUID) async throws -> String {
-        guard let session = supabaseService.currentSession else {
-            throw R2Error.notAuthenticated
-        }
-        guard let supabaseUserId = supabaseService.currentUser?.id else {
-            throw R2Error.notAuthenticated
-        }
+        let (accessToken, supabaseUserId) = try await authenticatedUploadContext()
 
         let fileName = "\(supabaseUserId.uuidString)/outfits/\(outfitId.uuidString)_worn.jpg"
         let url = URL(string: "\(CloudflareR2Config.workerURL)/\(fileName)")!
@@ -329,7 +336,7 @@ class CloudflareR2Service {
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
         request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.httpBody = imageData
 
         print("📤 Uploading outfit worn image to R2: \(fileName)")
@@ -360,19 +367,14 @@ class CloudflareR2Service {
     }
 
     func deleteOutfitWornImage(outfitId: UUID, userId: UUID) async throws {
-        guard let session = supabaseService.currentSession else {
-            throw R2Error.notAuthenticated
-        }
-        guard let supabaseUserId = supabaseService.currentUser?.id else {
-            throw R2Error.notAuthenticated
-        }
+        let (accessToken, supabaseUserId) = try await authenticatedUploadContext()
 
         let fileName = "\(supabaseUserId.uuidString)/outfits/\(outfitId.uuidString)_worn.jpg"
         let url = URL(string: "\(CloudflareR2Config.workerURL)/\(fileName)")!
 
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
-        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
         print("🗑️ Deleting outfit worn image from R2: \(fileName)")
 
@@ -394,24 +396,20 @@ class CloudflareR2Service {
     }
 
     /// Profile avatar uses exactly **one** object per user: `userId/profile/avatar.jpg`.
-    /// Each PUT replaces that object; there are no versioned paths. Persist the canonical CDN URL below.
+    /// Each PUT replaces that object. The returned public URL includes a `v` query param so
+    /// CDN / URLSession caches treat each upload as a new resource (same path, new cache key).
     func uploadProfileAvatar(imageData: Data, userId _: UUID) async throws -> String {
-        guard let session = supabaseService.currentSession else {
-            throw R2Error.notAuthenticated
-        }
-        guard let supabaseUserId = supabaseService.currentUser?.id else {
-            throw R2Error.notAuthenticated
-        }
+        let (accessToken, supabaseUserId) = try await authenticatedUploadContext()
 
         let fileName = "\(supabaseUserId.uuidString)/profile/avatar.jpg"
         let workerPutURL = URL(string: "\(CloudflareR2Config.workerURL)/\(fileName)")!
-        /// Single public URL for that key (same string on every replacement — only bytes change in R2).
-        let canonicalPublicURL = "\(CloudflareR2Config.customDomain)/\(fileName)"
+        let version = Int(Date().timeIntervalSince1970 * 1000)
+        let canonicalPublicURL = "\(CloudflareR2Config.customDomain)/\(fileName)?v=\(version)"
 
         var request = URLRequest(url: workerPutURL)
         request.httpMethod = "PUT"
         request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.httpBody = imageData
 
         print("📤 Uploading profile avatar to R2 (replaces existing): \(fileName)")
@@ -430,24 +428,22 @@ class CloudflareR2Service {
             throw R2Error.uploadFailed("HTTP \(httpResponse.statusCode)")
         }
 
+        // Drop any cached responses for this avatar path (with or without prior ?v=).
+        Self.removeCachedResponses(forAvatarPath: fileName)
+
         print("✅ Profile avatar replaced in R2: \(canonicalPublicURL)")
         return canonicalPublicURL
     }
 
     func deleteProfileAvatar(userId _: UUID) async throws {
-        guard let session = supabaseService.currentSession else {
-            throw R2Error.notAuthenticated
-        }
-        guard let supabaseUserId = supabaseService.currentUser?.id else {
-            throw R2Error.notAuthenticated
-        }
+        let (accessToken, supabaseUserId) = try await authenticatedUploadContext()
 
         let fileName = "\(supabaseUserId.uuidString)/profile/avatar.jpg"
         let url = URL(string: "\(CloudflareR2Config.workerURL)/\(fileName)")!
 
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
-        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
         print("🗑️ Deleting profile avatar from R2: \(fileName)")
 
@@ -465,7 +461,15 @@ class CloudflareR2Service {
             throw R2Error.deleteFailed("HTTP \(httpResponse.statusCode)")
         }
 
+        Self.removeCachedResponses(forAvatarPath: fileName)
         print("✅ Profile avatar deleted from R2: \(fileName)")
+    }
+
+    /// Removes URLCache entries for the avatar object (bare CDN URL).
+    private static func removeCachedResponses(forAvatarPath fileName: String) {
+        let bare = "\(CloudflareR2Config.customDomain)/\(fileName)"
+        guard let bareURL = URL(string: bare) else { return }
+        URLCache.shared.removeCachedResponse(for: URLRequest(url: bareURL))
     }
 
     /// Gets the public URL for a photo (for display)

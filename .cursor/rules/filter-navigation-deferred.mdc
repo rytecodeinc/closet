@@ -1,0 +1,34 @@
+---
+description: Deferred — Filter attribute navigation back-stack / freeze issues
+globs: closet/Filter/**/*.swift,closet/Item View/ItemGridView.swift
+alwaysApply: false
+---
+
+# Deferred: ItemFilterView attribute navigation
+
+**Status:** Parked. Revisit later. Do not reintroduce experimental nav changes unless the user asks.
+
+## Symptoms
+
+- Sibling `NavigationLink(destination:)` on Filter: Back after Attribute B can land on Attribute A instead of Filter.
+- Nested `.navigationDestination(item:)` for Category/Brand: Filter can be popped from the stack (e.g. Brand → Category → Closet).
+- Keeping `itemFilterNavigation` set (not clearing on Filter appear) caused **Filter freeze**.
+- Nested `NavigationStack(path:)` inside Filter did not fix the bug.
+- `@Environment(\.dismiss)` on Filter root + navigation destinations caused freezes; Apply uses `ItemFilterApplyButton` subview instead.
+
+## Current baseline
+
+- ItemGridView: `.navigationDestination(item: $itemFilterNavigation)` **clears** `itemFilterNavigation = nil` on Filter appear (required to avoid freeze for now).
+- ItemFilterView: draft model + Apply commits; Back discards.
+- Category / Brand: Button + `attributeDestination` + `.navigationDestination(item:)`.
+- Wardrobe / Size / Color / Location / Tags: classic `NavigationLink(destination:)` (Season still commented as before).
+- No `@Environment(\.dismiss)` on ItemFilterView root.
+
+## Likely root cause (for later)
+
+`navigationDestination(item:)` needs the binding non-nil while pushed; clearing on appear orphans Filter. Nested attribute destinations then fight Closet’s stack. Keeping the binding set freezes. Need a presentation model that doesn’t orphan Filter and doesn’t freeze.
+
+## When revisiting
+
+- Prefer one small experiment at a time; smoke-test Filter → Category → Back → Brand → Back → Filter and Apply vs Back discard.
+- Do not combine with wholesale “None” attribute work or sheet-based attribute pickers unless requested.

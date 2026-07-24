@@ -20,6 +20,8 @@ struct ImagePicker: UIViewControllerRepresentable {
     var allowsEditing: Bool
     /// When true, the picked image is passed to `completionHandler` directly after dismiss (no second full-screen crop UI).
     var skipEmbeddedCrop: Bool
+    /// When true (and not skipping crop), presents `ProfileCropView` with a circular frame instead of `ImageCropperView`.
+    var usesProfileCrop: Bool
     var completionHandler: ((UIImage?) -> Void)?
 
     @Environment(\.presentationMode) private var presentationMode
@@ -29,12 +31,14 @@ struct ImagePicker: UIViewControllerRepresentable {
         sourceType: Binding<UIImagePickerController.SourceType>,
         allowsEditing: Bool,
         skipEmbeddedCrop: Bool = false,
+        usesProfileCrop: Bool = false,
         completionHandler: ((UIImage?) -> Void)? = nil
     ) {
         _image = image
         _sourceType = sourceType
         self.allowsEditing = allowsEditing
         self.skipEmbeddedCrop = skipEmbeddedCrop
+        self.usesProfileCrop = usesProfileCrop
         self.completionHandler = completionHandler
     }
 
@@ -76,18 +80,17 @@ struct ImagePicker: UIViewControllerRepresentable {
             }
 
             picker.dismiss(animated: true) {
-                let cropper = NavigationStack {
-                    ImageCropperView(
-                        originalImage: originalImage,
-                        onCrop: { croppedImage in
-                            self.parent.image = croppedImage
-                            self.parent.completionHandler?(croppedImage)
-                        }
-                    )
+                let onCrop: (UIImage) -> Void = { croppedImage in
+                    self.parent.image = croppedImage
+                    self.parent.completionHandler?(croppedImage)
                 }
-
+                let cropRoot = ImagePickerCropRoot(
+                    originalImage: originalImage,
+                    usesProfileCrop: self.parent.usesProfileCrop,
+                    onCrop: onCrop
+                )
                 if let rootVC = UIApplication.shared.windows.first?.rootViewController {
-                    let hosting = UIHostingController(rootView: cropper)
+                    let hosting = UIHostingController(rootView: cropRoot)
                     hosting.modalPresentationStyle = .fullScreen
                     rootVC.present(hosting, animated: true)
                 }
@@ -96,6 +99,22 @@ struct ImagePicker: UIViewControllerRepresentable {
 
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
             picker.dismiss(animated: true)
+        }
+    }
+}
+
+private struct ImagePickerCropRoot: View {
+    let originalImage: UIImage
+    let usesProfileCrop: Bool
+    let onCrop: (UIImage) -> Void
+
+    var body: some View {
+        NavigationStack {
+            if usesProfileCrop {
+                ProfileCropView(originalImage: originalImage, onCrop: onCrop)
+            } else {
+                ImageCropperView(originalImage: originalImage, onCrop: onCrop)
+            }
         }
     }
 }

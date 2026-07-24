@@ -59,7 +59,6 @@ struct OutfitCalendarView: View {
                         )
                 }
               //  .padding(.top, 8)
-                .padding(.bottom, geo.safeAreaInsets.bottom)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     // Month/Year selector button
@@ -87,7 +86,7 @@ struct OutfitCalendarView: View {
                                 selectedDate = today                    // highlight today
                             }
                         }) {
-                            Image(systemName: "calendar")
+                            Image(systemName: "calendar.circle")
                         }
                     }
                     // create new event
@@ -163,6 +162,11 @@ struct OutfitCalendarView: View {
                 .navigationTitle("Select Month")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button("Cancel") {
+                            showingDatePicker = false
+                        }
+                    }
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button("Done") {
                             withAnimation(.spring()) {
@@ -201,11 +205,10 @@ struct OutfitCalendarView: View {
     
     // MARK: - Calendar Grid
     private func calendarGrid(for month: Date, geo: GeometryProxy) -> some View {
-        let weekdayHeaderHeight: CGFloat = 16
-        let verticalPadding: CGFloat = 16 + 16
+        let weekdayHeaderHeight: CGFloat = 25
         let rows = 6
-        let availableHeight = geo.size.height - weekdayHeaderHeight - verticalPadding - 0 // adjust for calendar day height
-        let cellHeight = (availableHeight / CGFloat(rows)).rounded()
+        let availableHeight = max(0, geo.size.height - weekdayHeaderHeight)
+        let cellHeight = availableHeight / CGFloat(rows)
         
         let days = daysInMonth(month)
         let columns = Array(repeating: GridItem(.flexible(),  spacing: 0), count: 7)

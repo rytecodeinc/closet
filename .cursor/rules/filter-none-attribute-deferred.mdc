@@ -1,0 +1,30 @@
+---
+description: Deferred — add “None” (not-set) options to item/outfit attribute filters
+globs: closet/Filter/**/*.swift,closet/**/BrandListView.swift,closet/**/LocationListView.swift,closet/**/ColorListView.swift,closet/**/SizeFilterListView.swift,closet/**/TagFilterListView.swift,closet/**/OutfitCategoryFilterListView.swift,closet/**/ItemGridView.swift
+alwaysApply: false
+---
+
+# Deferred: attribute filter “None” (not set)
+
+**Status:** Parked. Revisit later. Do not reintroduce unless the user asks.
+
+## Goal
+
+Like Category’s existing **Uncategorized** (`categoryNotSetFilterValue`), add **None** rows so users can filter items/outfits missing brand, size, color(s), location, or tags (and outfit category/tags).
+
+## What failed (do not repeat blindly)
+
+An earlier attempt added sentinels + UI “None” rows, then refactored brand/location to name strings. Fixes for nested `NavigationLink(destination:)` back-stack quirks (`NavigationStack` wrapper, `NavigationLink(value:)`, Button + `navigationDestination(item:)`) caused **UI freezes** (attribute tap, then Filter button).
+
+## Current baseline
+
+- Classic `NavigationLink(destination:)` in Item/Outfit filter UIs (do not change)
+- Category **Uncategorized** stays (`categoryNotSetFilterValue`)
+- Brand **None** shipped via sentinel (`brandNotSetFilterValue` / `selectedBrandName`) — same pattern as category; no nav changes
+- Still no None for size/color/location/tags (or outfit category/tags)
+
+## When revisiting other attributes
+
+- Copy Category/Brand sentinel pattern only
+- Do **not** change Filter navigation or ItemGridView presentation
+- Smoke-test: open Filter → attribute → back → Apply, repeatedly
