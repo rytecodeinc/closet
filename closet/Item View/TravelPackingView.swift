@@ -38,6 +38,7 @@ private enum PackMoveConfirmationTarget {
 struct TravelPackingView: View {
     var selectedWardrobe: Wardrobe
     var wardrobeType: String
+    @ObservedObject var tabBarHideState: TabBarHideState
     
     @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject private var authSession: AuthSession
@@ -180,6 +181,8 @@ struct TravelPackingView: View {
         .navigationTitle(isInSelectionMode ? "" : (selectedWardrobe.name ?? "Pack"))
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(isInSelectionMode)
+        .toolbar(tabBarHideState.shouldHideTabBar ? .hidden : .automatic, for: .tabBar)
+        .onAppear { tabBarHideState.shouldHideTabBar = true }
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarLeading) {
                 if isInSelectionMode {
@@ -248,7 +251,6 @@ struct TravelPackingView: View {
                 }
             }
         }
-        .toolbar(isInSelectionMode ? .hidden : .automatic, for: .tabBar)
         .alert("Add Storage Location", isPresented: $showAddStorageLocationAlert) {
             TextField("i.e. Carry-on luggage, Handbag", text: $newStorageLocationName)
             Button("Add") {

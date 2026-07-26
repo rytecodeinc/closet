@@ -1,0 +1,25 @@
+---
+description: Deferred — calendar event privacy (private / public / friends) for Redress permissions
+globs: closet/Outfit Views/Calendar Views/**/*.swift,closet/**/Event*.swift,closet/Services/**/*OutfitSuggestion*,closet/Services/**/*Redress*
+alwaysApply: false
+---
+
+# Deferred: calendar event privacy → Redress permission
+
+**Status:** Idea / parked. Do not implement unless the user asks.
+
+## Intent
+
+Add privacy controls on **calendar events** so the owner can set an event to one of:
+
+- **Private**
+- **Public**
+- **Friends**
+
+That setting will later determine **who may Redress the user for that event** (permission level tied to visibility).
+
+## Notes for later design
+
+- Decide where privacy lives (Event Core Data / Supabase row, default value, edit UI in create/detail).
+- Map each level to Redress eligibility (e.g. private = owner only; friends = accepted friends; public = broader).
+- Keep Redress / outfit-suggestion flows consistent with the chosen permission when this ships.

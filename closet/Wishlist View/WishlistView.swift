@@ -13,6 +13,8 @@ struct WishlistView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject private var authSession: AuthSession
     @StateObject var filterModel = ItemFilterModel()
+    @StateObject var outfitFilterModel = OutfitFilterModel()
+    @StateObject private var tabBarHideState = TabBarHideState()
     
     @FetchRequest(
         sortDescriptors: [NSSortDescriptor(keyPath: \Wardrobe.createdAt, ascending: true)],
@@ -33,18 +35,36 @@ struct WishlistView: View {
     @State private var showWishlistSheet = false
     @State private var newWishlistName: String = ""
     @State private var isCreatingNewWishlist = false
-    @State private var editingWardrobe: Wardrobe?
-    @State private var editingName: String = ""
-    @State private var showEditAlert = false
+    @State private var showRenameWardrobeAlert = false
+    @State private var renameTargetWardrobe: Wardrobe?
+    @State private var renameDraft: String = ""
     @State private var isItemGridInSelectionMode = false
     @State private var wardrobePendingDelete: Wardrobe?
     @State private var showDeleteWardrobeConfirmation = false
+    @State private var navigationPath = NavigationPath()
     
     var body: some View {
-       // NavigationView {
+        NavigationStack(path: $navigationPath) {
             mainContent()
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { navigationBarToolbar() }
+                .navigationDestination(for: ItemGridFilterRoute.self) { route in
+                    switch route {
+                    case .itemFilter:
+                        ItemFilterView(
+                            filterModel: filterModel,
+                            tabBarHideState: tabBarHideState,
+                            wardrobeType: "wishlist",
+                            selectedWardrobe: selectedWishlist
+                        )
+                    case .outfitFilter:
+                        OutfitFilterView(
+                            filterModel: outfitFilterModel,
+                            wardrobeType: "wishlist",
+                            selectedWardrobe: selectedWishlist
+                        )
+                    }
+                }
                 .onAppear {
                     if let uid = authSession.userId {
                         try? WardrobeBootstrap.ensureDefaultWardrobes(for: uid, in: viewContext)
@@ -54,17 +74,12 @@ struct WishlistView: View {
                 .alert("New Wishlist", isPresented: $isCreatingNewWishlist) {
                     createWishlistAlertButtons()
                 } message: {
-                    Text("Enter a name for your new wishlist (max \(WardrobeNaming.maxNameLength) characters)")
-                }
-                .alert("Edit Wardrobe", isPresented: $showEditAlert) {
-                    editWishlistAlertButtons()
-                } message: {
-                    Text("Enter a new name for this wardrobe (max \(WardrobeNaming.maxNameLength) characters)")
+                    Text("Enter a name for your new wishlist")
                 }
                 .sheet(isPresented: $showWishlistSheet) {
                     wishlistSelectionSheet()
                 }
-       // }
+        }
     }
 }
 
@@ -77,9 +92,19 @@ private extension WishlistView {
             if let selected = selectedWishlist {
                 ItemGridView(
                     filterModel: filterModel,
+                    outfitFilterModel: outfitFilterModel,
                     wardrobeType: "wishlist",
                     selectedWardrobe: selected,
-                    isInSelectionMode: $isItemGridInSelectionMode
+                    isInSelectionMode: $isItemGridInSelectionMode,
+                    onOpenItemFilter: {
+                        tabBarHideState.shouldHideTabBar = true
+                        navigationPath.append(ItemGridFilterRoute.itemFilter)
+                    },
+                    onOpenOutfitFilter: {
+                        tabBarHideState.shouldHideTabBar = true
+                        navigationPath.append(ItemGridFilterRoute.outfitFilter)
+                    },
+                    tabBarHideState: tabBarHideState
                 )
                 .id(selected.objectID)
             } else {
@@ -153,11 +178,6 @@ private extension WishlistView {
         Group {
             TextField("i.e. Summer Items, Gifts", text: $newWishlistName)
                 .textInputAutocapitalization(.words)
-                .onChange(of: newWishlistName) { _, new in
-                    if new.count > WardrobeNaming.maxNameLength {
-                        newWishlistName = String(new.prefix(WardrobeNaming.maxNameLength))
-                    }
-                }
             Button("Create") {
                 if let newWishlist = createNewWishlist(named: newWishlistName) {
                     selectedWishlist = newWishlist
@@ -168,79 +188,57 @@ private extension WishlistView {
         }
     }
     
-    func editWishlistAlertButtons() -> some View {
-        Group {
-            TextField("Wardrobe name", text: $editingName)
-                .textInputAutocapitalization(.words)
-                .onChange(of: editingName) { _, new in
-                    if new.count > WardrobeNaming.maxNameLength {
-                        editingName = String(new.prefix(WardrobeNaming.maxNameLength))
-                    }
-                }
-            Button("Save") {
-                if let wardrobe = editingWardrobe {
-                    updateWardrobeName(wardrobe, to: editingName)
-                }
-                editingWardrobe = nil
-                editingName = ""
-            }
-            Button("Cancel", role: .cancel) {
-                editingWardrobe = nil
-                editingName = ""
-            }
-        }
-    }
-    
     @ViewBuilder
     func wishlistSelectionSheet() -> some View {
         NavigationView {
             List {
                 ForEach(userWishlists, id: \.objectID) { wishlist in
-                    ZStack(alignment: .trailing) {
-                        Button {
-                            selectedWishlist = wishlist
-                            filterModel.selectedWardrobes.removeAll()
-                            showWishlistSheet = false
-                        } label: {
-                            HStack {
-                                Text(wishlist.name ?? "Untitled")
-                                
-                                if wishlist == selectedWishlist {
-                                    Image(systemName: "checkmark")
-                                        .foregroundColor(.blue)
-                                }
-                                
-                                if wishlist.isDefault == true {
-                                    Text("Default")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(
-                                            Capsule()
-                                                .fill(Color(UIColor.secondarySystemBackground))
-                                        )
-                                }
-                                
-                                Spacer()
+                    Button {
+                        if selectedWishlist?.objectID != wishlist.objectID {
+                            filterModel.clearAll()
+                            outfitFilterModel.clearAll()
+                            navigationPath = NavigationPath()
+                        }
+                        selectedWishlist = wishlist
+                        showWishlistSheet = false
+                    } label: {
+                        HStack {
+                            Text(wishlist.name ?? "Untitled")
+                                .foregroundColor(.primary)
+
+                            Spacer()
+
+                            if wishlist.isDefault == true {
+                                Text("Default")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(
+                                        Capsule()
+                                            .fill(Color(UIColor.secondarySystemBackground))
+                                    )
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                            if wishlist == selectedWishlist {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.blue)
+                            }
                         }
-                        .buttonStyle(.plain)
-                        
-                        Button {
-                            editingWardrobe = wishlist
-                            editingName = WardrobeNaming.normalizedUserName(wishlist.name ?? "")
-                            showEditAlert = true
-                        } label: {
-                            Image(systemName: "pencil")
-                                .foregroundColor(.blue)
-                                .padding(.horizontal, 8)
-                        }
-                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .buttonStyle(.plain)
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         if wishlist.isDefault != true {
+                            Button {
+                                renameTargetWardrobe = wishlist
+                                renameDraft = WardrobeNaming.normalizedUserName(wishlist.name ?? "")
+                                showRenameWardrobeAlert = true
+                            } label: {
+                                Label("Rename", systemImage: "pencil")
+                            }
+                            .tint(.blue)
+
                             Button(role: .destructive) {
                                 wardrobePendingDelete = wishlist
                                 showDeleteWardrobeConfirmation = true
@@ -271,6 +269,24 @@ private extension WishlistView {
             }
         }
         .presentationDetents([.medium, .large])
+        .alert("Rename Wishlist", isPresented: $showRenameWardrobeAlert) {
+            TextField("Wishlist name", text: $renameDraft)
+                .textInputAutocapitalization(.words)
+            Button("Save") {
+                if let wardrobe = renameTargetWardrobe {
+                    updateWardrobeName(wardrobe, to: renameDraft)
+                    selectedWishlist = wardrobe
+                }
+                renameTargetWardrobe = nil
+                renameDraft = ""
+            }
+            Button("Cancel", role: .cancel) {
+                renameTargetWardrobe = nil
+                renameDraft = ""
+            }
+        } message: {
+            Text("Enter a new name for this wishlist")
+        }
         .alert(
             wardrobeDeleteAlertTitle(pendingDelete: wardrobePendingDelete, fallbackTitle: "Delete Wishlist?"),
             isPresented: $showDeleteWardrobeConfirmation
@@ -303,6 +319,7 @@ private extension WishlistView {
         newWishlist.id = UUID()
         newWishlist.type = "wishlist"
         newWishlist.name = normalized
+        newWishlist.wardrobeVisibility = .public
         
         // Set userId for sync
         if let userId = authSession.userId?.uuidString {

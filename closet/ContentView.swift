@@ -22,6 +22,7 @@ struct ContentView: View {
     @EnvironmentObject var deepLinkRouter: DeepLinkRouter
     @EnvironmentObject var supabaseService: SupabaseService
     @EnvironmentObject var authSession: AuthSession
+    @EnvironmentObject var syncService: SyncService
     @EnvironmentObject var bulkItemImportCoordinator: BulkItemImportCoordinator
 
     @FetchRequest(
@@ -62,9 +63,7 @@ struct ContentView: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            NavigationStack {
-                ClosetView()
-            }
+            ClosetView()
             .tag(MainTab.closet)
             .tabItem {
                 Image(systemName: "hanger")
@@ -80,9 +79,7 @@ struct ContentView: View {
                 }
             }
             if appCapabilities.showsWishlistTab {
-                NavigationStack {
-                    WishlistView()
-                }
+                WishlistView()
                 .tag(MainTab.wishlist)
                 .tabItem {
                     Image(systemName: "heart")
@@ -97,17 +94,35 @@ struct ContentView: View {
                 Image(systemName: "calendar")
                 Text("Calendar")
             }
-            NavigationStack {
-                ProfileView()
-            }
+            ProfileView()
             .tag(MainTab.profile)
             .tabItem {
-                Image(systemName: "person")
-                Text("Profile")
+                if appCapabilities.tier == .testflight {
+                    Image(systemName: "info.circle")
+                    Text("Info")
+                } else {
+                    Image(systemName: "person")
+                    Text("Profile")
+                }
             }
+        }
+        // Reset any restored tab + navigation state when the signed-in account changes
+        // (e.g. sign out from Settings → sign back in without quitting).
+        .id(authSession.userId)
+        .onChange(of: authSession.userId) { _ in
+            selectedTab = .closet
+            deepLinkRouter.clearIntent()
+            deepLinkRouter.consumeOpenNotifications()
+            showDeepLinkItemAdd = false
+        }
+        .onChange(of: deepLinkRouter.shouldOpenNotifications) { _, open in
+            guard open else { return }
+            selectedTab = .profile
         }
         .task(id: authSession.userId) {
             guard let userId = authSession.userId else { return }
+            PushNotificationService.shared.requestAuthorizationAndRegisterIfNeeded()
+            await PushNotificationService.shared.syncStoredTokenIfNeeded()
             do {
                 CategoryOnboardingStore.markCompletedIfLegacyUserHasCategories(userId: userId, in: viewContext)
                 try WardrobeBootstrap.ensureDefaultWardrobes(for: userId, in: viewContext)
@@ -126,6 +141,17 @@ struct ContentView: View {
                 presentHowToOnboardingIfNeeded(userId: userId)
             } catch {
                 print("⚠️ WardrobeBootstrap / ReferenceDataBootstrap: \(error.localizedDescription)")
+            }
+
+            // Cold-start / returning session: wardrobe bootstrap alone is not enough for friends
+            // to see items — push unsynced Closet contents (and claim legacy nil-userId rows).
+            if appCapabilities.enablesCloudSync {
+                do {
+                    try await syncService.syncAllItems()
+                    print("✅ Sync completed after session bootstrap")
+                } catch {
+                    print("⚠️ Sync failed after session bootstrap: \(error.localizedDescription)")
+                }
             }
         }
         .fullScreenCover(isPresented: $showHowToOnboarding) {
@@ -176,6 +202,12 @@ struct ContentView: View {
         }
         .onAppear {
                 print("-- ContentView appeared")
+                if deepLinkRouter.shouldOpenNotifications {
+                    selectedTab = .profile
+                }
+                migrateOutfitCategoryStringsToEntities(context: viewContext)
+                ItemLifecycleDates.migrateLifecycleDates(context: viewContext)
+
                 // One-time migrations disabled — already completed for existing installs via UserDefaults flags.
                 // migrateItemImages(context: viewContext)
                 // migratePhotoTypes(context: viewContext)
@@ -285,5 +317,6 @@ struct ContentView: View {
         .environmentObject(DeepLinkRouter.shared)
         .environmentObject(SupabaseService.shared)
         .environmentObject(AuthSession())
+        .environmentObject(SyncService.shared)
         .environmentObject(BulkItemImportCoordinator())
 }

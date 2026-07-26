@@ -13,6 +13,8 @@ struct ClosetView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject private var authSession: AuthSession
     @StateObject var filterModel = ItemFilterModel()
+    @StateObject var outfitFilterModel = OutfitFilterModel()
+    @StateObject private var tabBarHideState = TabBarHideState()
     
     @FetchRequest(
         sortDescriptors: [NSSortDescriptor(keyPath: \Wardrobe.createdAt, ascending: true)],
@@ -33,18 +35,36 @@ struct ClosetView: View {
     @State private var showClosetSheet = false
     @State private var newClosetName: String = ""
     @State private var isCreatingNewCloset = false
-    @State private var editingWardrobe: Wardrobe?
-    @State private var editingName: String = ""
-    @State private var showEditAlert = false
+    @State private var showRenameWardrobeAlert = false
+    @State private var renameTargetWardrobe: Wardrobe?
+    @State private var renameDraft: String = ""
     @State private var isItemGridInSelectionMode = false
     @State private var wardrobePendingDelete: Wardrobe?
     @State private var showDeleteWardrobeConfirmation = false
+    @State private var navigationPath = NavigationPath()
     
     var body: some View {
-      //  NavigationView {
+        NavigationStack(path: $navigationPath) {
             mainContent()
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { navigationBarToolbar() }
+                .navigationDestination(for: ItemGridFilterRoute.self) { route in
+                    switch route {
+                    case .itemFilter:
+                        ItemFilterView(
+                            filterModel: filterModel,
+                            tabBarHideState: tabBarHideState,
+                            wardrobeType: "closet",
+                            selectedWardrobe: selectedWardrobe
+                        )
+                    case .outfitFilter:
+                        OutfitFilterView(
+                            filterModel: outfitFilterModel,
+                            wardrobeType: "closet",
+                            selectedWardrobe: selectedWardrobe
+                        )
+                    }
+                }
                 .onAppear {
                     if let uid = authSession.userId {
                         try? WardrobeBootstrap.ensureDefaultWardrobes(for: uid, in: viewContext)
@@ -54,17 +74,12 @@ struct ClosetView: View {
                 .alert("New Wardrobe", isPresented: $isCreatingNewCloset) {
                     createClosetAlertButtons()
                 } message: {
-                    Text("Enter a name for your new closet (max \(WardrobeNaming.maxNameLength) characters)")
-                }
-                .alert("Edit Wardrobe", isPresented: $showEditAlert) {
-                    editClosetAlertButtons()
-                } message: {
-                    Text("Enter a new name for this wardrobe (max \(WardrobeNaming.maxNameLength) characters)")
+                    Text("Enter a name for your new closet")
                 }
                 .sheet(isPresented: $showClosetSheet) {
                     closetSelectionSheet()
                 }
-       // }
+        }
     }
 }
 
@@ -77,9 +92,19 @@ private extension ClosetView {
             if let selected = selectedWardrobe {
                 ItemGridView(
                     filterModel: filterModel,
+                    outfitFilterModel: outfitFilterModel,
                     wardrobeType: "closet",
                     selectedWardrobe: selected,
-                    isInSelectionMode: $isItemGridInSelectionMode
+                    isInSelectionMode: $isItemGridInSelectionMode,
+                    onOpenItemFilter: {
+                        tabBarHideState.shouldHideTabBar = true
+                        navigationPath.append(ItemGridFilterRoute.itemFilter)
+                    },
+                    onOpenOutfitFilter: {
+                        tabBarHideState.shouldHideTabBar = true
+                        navigationPath.append(ItemGridFilterRoute.outfitFilter)
+                    },
+                    tabBarHideState: tabBarHideState
                 )
                 .id(selected.objectID)
             } else {
@@ -155,11 +180,6 @@ private extension ClosetView {
         Group {
             TextField("i.e. Vacation, Business Trip", text: $newClosetName)
                 .textInputAutocapitalization(.words)
-                .onChange(of: newClosetName) { _, new in
-                    if new.count > WardrobeNaming.maxNameLength {
-                        newClosetName = String(new.prefix(WardrobeNaming.maxNameLength))
-                    }
-                }
             Button("Create") {
                 if let newCloset = createNewCloset(named: newClosetName) {
                     selectedWardrobe = newCloset
@@ -170,83 +190,58 @@ private extension ClosetView {
         }
     }
     
-    func editClosetAlertButtons() -> some View {
-        Group {
-            TextField("Wardrobe name", text: $editingName)
-                .textInputAutocapitalization(.words)
-                .onChange(of: editingName) { _, new in
-                    if new.count > WardrobeNaming.maxNameLength {
-                        editingName = String(new.prefix(WardrobeNaming.maxNameLength))
-                    }
-                }
-            Button("Save") {
-                if let wardrobe = editingWardrobe {
-                    updateWardrobeName(wardrobe, to: editingName)
-                }
-                editingWardrobe = nil
-                editingName = ""
-            }
-            Button("Cancel", role: .cancel) {
-                editingWardrobe = nil
-                editingName = ""
-            }
-        }
-    }
-    
     @ViewBuilder
     func closetSelectionSheet() -> some View {
         NavigationView {
             List {
                 ForEach(userClosets, id: \.objectID) { closet in
-                    ZStack(alignment: .trailing) {
-                        Button {
-                            selectedWardrobe = closet
-                            filterModel.selectedWardrobes.removeAll()
-                            showClosetSheet = false
-                        } label: {
-                            HStack {
-                                Text(closet.name ?? "Untitled")
-                                
-                                if closet == selectedWardrobe {
-                                    Image(systemName: "checkmark")
-                                        .foregroundColor(.blue)
-                                }
-                                
-                                if closet.isDefault == true {
-                                    Text("Default")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(
-                                            Capsule()
-                                                .fill(Color(UIColor.secondarySystemBackground))
-                                        )
-                                }
-                                
-                                Spacer()
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                    Button {
+                        if selectedWardrobe?.objectID != closet.objectID {
+                            filterModel.clearAll()
+                            outfitFilterModel.clearAll()
+                            navigationPath = NavigationPath()
                         }
-                        .buttonStyle(.plain)
-                        
-                        Button {
-                            editingWardrobe = closet
-                            editingName = WardrobeNaming.normalizedUserName(closet.name ?? "")
-                            showClosetSheet = false
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                                showEditAlert = true
+                        selectedWardrobe = closet
+                        showClosetSheet = false
+                    } label: {
+                        HStack {
+                            Text(closet.name ?? "Untitled")
+                                .foregroundColor(.primary)
+
+                            Spacer()
+
+                            if closet.isDefault == true {
+                                Text("Default")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(
+                                        Capsule()
+                                            .fill(Color(UIColor.secondarySystemBackground))
+                                    )
                             }
-                        } label: {
-                            Image(systemName: "pencil")
-                                .foregroundColor(.blue)
-                                .padding(.horizontal, 8)
+
+                            if closet == selectedWardrobe {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.blue)
+                            }
                         }
-                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .buttonStyle(.plain)
                     // Prevent swipe-to-delete on the default closet
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         if closet.isDefault != true {
+                            Button {
+                                renameTargetWardrobe = closet
+                                renameDraft = WardrobeNaming.normalizedUserName(closet.name ?? "")
+                                showRenameWardrobeAlert = true
+                            } label: {
+                                Label("Rename", systemImage: "pencil")
+                            }
+                            .tint(.blue)
+
                             Button(role: .destructive) {
                                 wardrobePendingDelete = closet
                                 showDeleteWardrobeConfirmation = true
@@ -267,9 +262,9 @@ private extension ClosetView {
                     Button {
                         newClosetName = ""
                         showClosetSheet = false
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                       // DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                             isCreatingNewCloset = true
-                        }
+                       // }
                     } label: {
                         Image(systemName: "plus")
                     }
@@ -277,6 +272,24 @@ private extension ClosetView {
             }
         }
         .presentationDetents([.medium, .large])
+        .alert("Rename Wardrobe", isPresented: $showRenameWardrobeAlert) {
+            TextField("Wardrobe name", text: $renameDraft)
+                .textInputAutocapitalization(.words)
+            Button("Save") {
+                if let wardrobe = renameTargetWardrobe {
+                    updateWardrobeName(wardrobe, to: renameDraft)
+                    selectedWardrobe = wardrobe
+                }
+                renameTargetWardrobe = nil
+                renameDraft = ""
+            }
+            Button("Cancel", role: .cancel) {
+                renameTargetWardrobe = nil
+                renameDraft = ""
+            }
+        } message: {
+            Text("Enter a new name for this wardrobe")
+        }
         .alert(
             wardrobeDeleteAlertTitle(pendingDelete: wardrobePendingDelete, fallbackTitle: "Delete Closet?"),
             isPresented: $showDeleteWardrobeConfirmation
@@ -309,6 +322,7 @@ private extension ClosetView {
         newCloset.id = UUID()
         newCloset.type = "closet"
         newCloset.name = normalized
+        newCloset.wardrobeVisibility = .public
         
         // Set userId for sync
         if let userId = authSession.userId?.uuidString {

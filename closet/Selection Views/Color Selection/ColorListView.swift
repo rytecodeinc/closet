@@ -16,13 +16,28 @@ struct ColorListView: View {
     var userId: String? = nil
     /// When true (ItemFilterView), only colors on the user's items appear. When false (item add), the user's full color catalog is shown.
     var itemsOnly: Bool = false
+    /// When non-empty, only colors on items in all of these wardrobes (AND) appear.
+    var wardrobes: [Wardrobe] = []
+    /// `"closet"` or `"wishlist"` — empty-state copy when `itemsOnly` is true.
+    var wardrobeType: String = "closet"
 
     @State private var colors: [AppColor] = []
 
+    private var emptyColorsMessage: String {
+        guard itemsOnly else { return "Colors added to your closet will appear here." }
+        return wardrobeType == "wishlist"
+            ? "Colors added to your wishlist will appear here."
+            : "Colors added to your closet will appear here."
+    }
+
     var body: some View {
             List {
+                if itemsOnly {
+                    colorNotSetRow
+                }
+
                 if colors.isEmpty {
-                    Text("Colors added to your closet will appear here.")
+                    Text(emptyColorsMessage)
                         .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
@@ -47,6 +62,7 @@ struct ColorListView: View {
                         }
                         .contentShape(Rectangle())
                         .onTapGesture {
+                            selectedColorNames.remove(ItemFilterModel.colorNotSetFilterValue)
                             if selectedColorNames.contains(name) {
                                 selectedColorNames.remove(name)
                             } else {
@@ -61,10 +77,37 @@ struct ColorListView: View {
             .navigationBarTitleDisplayMode(.inline)
             .onAppear(perform: fetchColors)
     }
+
+    private var isColorNotSetSelected: Bool {
+        selectedColorNames.contains(ItemFilterModel.colorNotSetFilterValue)
+    }
+
+    private var colorNotSetRow: some View {
+        HStack {
+            Text("None")
+                .foregroundColor(.black)
+
+            Spacer()
+
+            if isColorNotSetSelected {
+                Image(systemName: "checkmark")
+                    .foregroundColor(.blue)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selectedColorNames = [ItemFilterModel.colorNotSetFilterValue]
+        }
+    }
     
     private func fetchColors() {
         do {
-            colors = try viewContext.fetchColorsForFilterList(userId: userId, itemsOnly: itemsOnly)
+            colors = try viewContext.fetchColorsForFilterList(
+                userId: userId,
+                itemsOnly: itemsOnly,
+                wardrobeType: itemsOnly ? wardrobeType : nil,
+                wardrobes: wardrobes
+            )
         } catch {
             print("❌ Failed to fetch colors: \(error.localizedDescription)")
             colors = []

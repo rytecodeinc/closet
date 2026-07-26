@@ -2,6 +2,7 @@ import SwiftUI
 
 struct OutfitsViewAllSheet: View {
     let outfits: [Outfit]
+    var onCreateOutfit: (() -> Void)? = nil
     let onSelect: (Outfit) -> Void
 
     private let columns: [GridItem] = [
@@ -14,7 +15,7 @@ struct OutfitsViewAllSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SelectionHeader(title: "Outfits")
+            outfitsSheetHeader
 
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 2) {
@@ -22,7 +23,7 @@ struct OutfitsViewAllSheet: View {
                         Button {
                             onSelect(outfit)
                         } label: {
-                            OutfitView(outfit: outfit)
+                            OutfitView(outfit: outfit, showsFavoriteOverlay: onCreateOutfit != nil)
                                 .frame(width: cellSize, height: cellSize)
                                 .clipped()
                         }
@@ -31,6 +32,30 @@ struct OutfitsViewAllSheet: View {
                 }
                 .padding(.horizontal, 2)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var outfitsSheetHeader: some View {
+        if let onCreateOutfit {
+            SelectionPanelHeader(
+                title: "Outfits",
+                actionPlacement: .barAboveTitle,
+                leading: { EmptyView() },
+                trailing: {
+                    Button(action: onCreateOutfit) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "plus")
+                            Text("Create Outfit")
+                        }
+                        .font(.subheadline)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Create outfit")
+                }
+            )
+        } else {
+            SelectionPanelHeader(title: "Outfits")
         }
     }
 }

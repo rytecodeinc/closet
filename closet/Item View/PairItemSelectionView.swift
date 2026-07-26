@@ -10,231 +10,492 @@ import CoreData
 
 struct PairItemSelectionView: View {
     @ObservedObject var item: Item
+    @Binding var pairSourceSegment: PairSourceSegment
+    var dismissesSheetOnSuccess: Bool = true
+    var onUnpairComplete: (() -> Void)? = nil
+    var onPairSuccess: (() -> Void)? = nil
+    var onShowPairedItems: (() -> Void)? = nil
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var authSession: AuthSession
-    
-    @State private var closetItems: [Item] = []
+
+    @StateObject private var filterModel = ItemFilterModel()
+    @StateObject private var tabBarHideState = TabBarHideState()
+    @State private var pairableItems: [Item] = []
     @State private var selectedWardrobe: Wardrobe?
-    @State private var showUnpairConfirmation = false
-    @State private var itemToUnpair: Item?
-    
+    @State private var showPairConfirmation = false
+    @State private var itemToPair: Item?
+    @State private var showFilter = false
+    @State private var showWardrobeSelection = false
+    @State private var isSearchActive = false
+    @FocusState private var isSearchFocused: Bool
+    @State private var searchDebounceTask: Task<Void, Never>?
+
+    enum PairSourceSegment: String, CaseIterable {
+        case closet = "Closet"
+        case wishlist = "Wishlist"
+    }
+
+    private static let searchDebounceNanos: UInt64 = 250_000_000
+
     private let gridColumns = [
         GridItem(.flexible(), spacing: 2),
         GridItem(.flexible(), spacing: 2),
         GridItem(.flexible(), spacing: 2)
     ]
-    
+
+    private var isWishlistItem: Bool {
+        (item.wardrobes as? Set<Wardrobe>)?.contains { $0.type?.lowercased() == "wishlist" } ?? false
+    }
+
+    private var targetWardrobeType: String {
+        if isWishlistItem {
+            return pairSourceSegment == .wishlist ? "wishlist" : "closet"
+        }
+        return "closet"
+    }
+
+    private var filterKey: String {
+        var key = ""
+        key += filterModel.selectedColors.sorted().joined(separator: ",")
+        key += filterModel.selectedSeasons.sorted().joined(separator: ",")
+        key += filterModel.selectedBrandName ?? ""
+        key += filterModel.selectedTags.map { $0.objectID.uriRepresentation().absoluteString }.sorted().joined(separator: ",")
+        key += filterModel.minPrice?.description ?? ""
+        key += filterModel.maxPrice?.description ?? ""
+        key += filterModel.selectedCategoryName ?? ""
+        key += filterModel.selectedSubcategoryName ?? ""
+        key += filterModel.selectedSizeValue ?? ""
+        key += filterModel.selectedLocation?.objectID.uriRepresentation().absoluteString ?? ""
+        key += filterModel.filterLocationNotSet ? "locationNotSet" : ""
+        key += filterModel.filterTagsNotSet ? "tagsNotSet" : ""
+        key += filterModel.selectedWardrobes.map { $0.objectID.uriRepresentation().absoluteString }.sorted().joined(separator: ",")
+        key += filterModel.sortOrder.sortAscending ? "sortAsc" : "sortDesc"
+        key += selectedWardrobe?.objectID.uriRepresentation().absoluteString ?? ""
+        return key
+    }
+
+    private var emptyStateTitle: String {
+        if hasActiveItemFilters {
+            return "No matching items"
+        }
+        if currentSegmentPairedCount > 0 && pairableItems.isEmpty {
+            return "No more items to pair"
+        }
+        if currentSegmentPairedCount == 0 {
+            return targetWardrobeType == "wishlist" ? "No wishlist pairs yet" : "No closet pairs yet"
+        }
+        return targetWardrobeType == "wishlist" ? "No wishlist items yet" : "No closet items yet"
+    }
+
+    private var emptyStateMessage: String {
+        if hasActiveItemFilters {
+            return "Try adjusting your filters or search."
+        }
+        if currentSegmentPairedCount > 0 && pairableItems.isEmpty {
+            return "View paired items to manage existing pairs."
+        }
+        if currentSegmentPairedCount == 0 {
+            return targetWardrobeType == "wishlist"
+                ? "This item doesn't have any wishlist pairs yet."
+                : "This item doesn't have any closet pairs yet."
+        }
+        return targetWardrobeType == "wishlist"
+            ? "Add items to your wishlist to pair them."
+            : "Add items to your closet to pair them."
+    }
+
+    private var hasActiveItemFilters: Bool {
+        if !filterModel.trimmedSearchQuery.isEmpty { return true }
+        return filterModel.selectedCategoryName != nil
+            || filterModel.selectedSubcategoryName != nil
+            || filterModel.selectedBrandName != nil
+            || filterModel.selectedSizeValue != nil
+            || !filterModel.selectedColors.isEmpty
+            || !filterModel.selectedSeasons.isEmpty
+            || filterModel.selectedLocation != nil
+            || filterModel.filterLocationNotSet
+            || filterModel.minPrice != nil
+            || filterModel.maxPrice != nil
+            || !filterModel.selectedTags.isEmpty
+            || filterModel.filterTagsNotSet
+            || filterModel.filterByWeight
+            || filterModel.favoritesOnly
+            || !filterModel.selectedWardrobes.isEmpty
+    }
+
+    private var currentSegmentPairedCount: Int {
+        guard let pairedItemsSet = item.pairedItems as? Set<Item> else { return 0 }
+        return pairedItemsSet.filter { paired in
+            paired.isSoftDeleted != true && pairedItemMatchesTargetWardrobe(paired)
+        }.count
+    }
+
+    private var visiblePairedItemCount: Int {
+        guard let pairedItemsSet = item.pairedItems as? Set<Item> else { return 0 }
+        return pairedItemsSet.filter { $0.isSoftDeleted != true }.count
+    }
+
+    private var pairedItemObjectIDs: Set<NSManagedObjectID> {
+        guard let pairedItemsSet = item.pairedItems as? Set<Item> else { return [] }
+        return Set(
+            pairedItemsSet
+                .filter { $0.isSoftDeleted != true }
+                .map(\.objectID)
+        )
+    }
+
+    private func pairedItemMatchesTargetWardrobe(_ pairedItem: Item) -> Bool {
+        let isWishlist = (pairedItem.wardrobes as? Set<Wardrobe>)?
+            .contains { $0.type?.lowercased() == "wishlist" } ?? false
+        return targetWardrobeType == "wishlist" ? isWishlist : !isWishlist
+    }
+
     var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                if closetItems.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "tshirt")
-                            .font(.system(size: 40))
-                            .foregroundColor(.secondary)
-                        Text("No closet items yet")
-                            .font(.headline)
-                            .foregroundColor(.secondary)
-                        Text("Add items to your closet to pair them.")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    .padding()
-                    Spacer()
-                } else {
-                    ScrollView {
-                        LazyVGrid(columns: gridColumns, spacing: 2) {
-                            ForEach(closetItems, id: \.objectID) { closetItem in
-                                // Don't show the current item
-                                if closetItem.objectID != item.objectID {
-                                    Button {
-                                        pairItem(closetItem)
-                                    } label: {
-                                        ItemView(item: closetItem)
-                                            .overlay(
-                                                // Show checkmark for already paired items
-                                                Group {
-                                                    if isAlreadyPaired(closetItem) {
-                                                        VStack {
-                                                            Spacer()
-                                                            HStack {
-                                                                Spacer()
-                                                                Image(systemName: "checkmark.circle.fill")
-                                                                    .foregroundColor(.blue)
-                                                                    .font(.system(size: 22))
-                                                                    .shadow(radius: 1)
-                                                                    .padding(8)
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            )
-                                    }
-                                    .buttonStyle(.plain)
+        Group {
+            if dismissesSheetOnSuccess {
+                NavigationStack {
+                    pairSelectionContent
+                }
+            } else {
+                pairSelectionContent
+            }
+        }
+        .onAppear {
+            resetFiltersForNewSession()
+            fetchPairableItems()
+        }
+        .onChange(of: pairSourceSegment) { _, _ in
+            selectedWardrobe = nil
+            fetchPairableItems()
+        }
+        .onChange(of: filterKey) { _, _ in
+            fetchPairableItems()
+        }
+        .onChange(of: filterModel.sortOrder) { _, _ in
+            fetchPairableItems()
+        }
+        .onChange(of: filterModel.searchQuery) { _, _ in
+            scheduleDebouncedFetch()
+        }
+        .onChange(of: selectedWardrobe) { _, _ in
+            fetchPairableItems()
+        }
+        .onChange(of: visiblePairedItemCount) { _, _ in
+            fetchPairableItems()
+        }
+        .modifier(PairItemSelectionPresentationModifier(appliesDetents: dismissesSheetOnSuccess))
+        .alert("Pair Item", isPresented: $showPairConfirmation) {
+            Button("Cancel", role: .cancel) {
+                itemToPair = nil
+            }
+            Button("Pair") {
+                if let itemToPair {
+                    confirmPair(with: itemToPair)
+                }
+            }
+        } message: {
+            if let itemToPair {
+                Text("Pair \"\(itemDisplayName(item))\" with \"\(itemDisplayName(itemToPair))\"?")
+            }
+        }
+    }
+
+    private var pairSelectionContent: some View {
+        VStack(spacing: 0) {
+            pairSelectionHeader
+            pairSelectionActionsBar
+
+            if pairableItems.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "tshirt")
+                        .font(.system(size: 40))
+                        .foregroundColor(.secondary)
+                    Text(emptyStateTitle)
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                    Text(emptyStateMessage)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding()
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: gridColumns, spacing: 2) {
+                        ForEach(pairableItems, id: \.objectID) { candidate in
+                            if candidate.objectID != item.objectID {
+                                Button {
+                                    itemToPair = candidate
+                                    showPairConfirmation = true
+                                } label: {
+                                    ItemView(item: candidate)
                                 }
+                                .buttonStyle(.plain)
                             }
                         }
-                        .padding(.horizontal, 2)
                     }
+                    .padding(.horizontal, 2)
                 }
             }
-            .navigationTitle("Pair Item")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-            }
-            .onAppear {
-                fetchClosetItems()
-            }
-            .alert("Unpair Item", isPresented: $showUnpairConfirmation) {
-                Button("Cancel", role: .cancel) {
-                    itemToUnpair = nil
-                }
-                Button("Unpair", role: .destructive) {
-                    if let item = itemToUnpair {
-                        unpairItem(item)
-                    }
-                }
-            } message: {
-                Text("Remove the pairing between this item and the selected item?")
-            }
+        }
+        .navigationDestination(isPresented: $showFilter) {
+            ItemFilterView(
+                filterModel: filterModel,
+                tabBarHideState: tabBarHideState,
+                wardrobeType: targetWardrobeType,
+                selectedWardrobe: selectedWardrobe
+            )
+        }
+        .navigationDestination(isPresented: $showWardrobeSelection) {
+            SingleWardrobeSelectionView(
+                selectedWardrobe: $selectedWardrobe,
+                wardrobeType: targetWardrobeType
+            )
         }
     }
-    
-    private func fetchClosetItems() {
-        guard let userId = authSession.userId?.uuidString, !userId.isEmpty else {
-            closetItems = []
-            selectedWardrobe = nil
-            return
-        }
 
-        let itemClosetWardrobes = (item.wardrobes as? Set<Wardrobe>)?
-            .filter {
-                ($0.type ?? "").lowercased() == "closet" &&
-                $0.userId == userId &&
-                $0.isSoftDeleted != true
-            } ?? []
+    private var pairSheetWardrobeTitle: String {
+        selectedWardrobe?.name ?? (targetWardrobeType == "wishlist" ? "Select Wishlist" : "Select Closet")
+    }
 
-        let wardrobe: Wardrobe?
-        if !itemClosetWardrobes.isEmpty {
-            wardrobe = WardrobeBootstrap.primaryWardrobe(in: itemClosetWardrobes) ?? itemClosetWardrobes.first
+    @ViewBuilder
+    private var pairSelectionHeader: some View {
+        if isWishlistItem {
+            pairSelectionPanel(showsSegmentPicker: true)
         } else {
-            wardrobe = try? WardrobeBootstrap.fetchPrimaryWardrobe(forType: "closet", userIdString: userId, in: viewContext)
+            pairSelectionPanel(showsSegmentPicker: false)
         }
+    }
 
-        selectedWardrobe = wardrobe
-        guard let wardrobe else {
-            closetItems = []
-            return
-        }
-
-        let request: NSFetchRequest<Item> = Item.fetchRequest()
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.createdAt, ascending: false)]
-
-        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
-            NSPredicate(format: "userId == %@", userId),
-            NSPredicate(format: "ANY wardrobes == %@", wardrobe),
-            NSPredicate(format: "isDraft != YES"),
-            NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil"),
-            NSPredicate(format: "SELF != %@", item)
-        ])
-
-        do {
-            let results = try viewContext.fetch(request)
-            let wardrobeID = wardrobe.objectID
-            closetItems = results.filter { candidate in
-                guard let wardrobes = candidate.wardrobes as? Set<Wardrobe> else { return false }
-                return wardrobes.contains { $0.objectID == wardrobeID }
+    @ViewBuilder
+    private func pairSelectionPanel(showsSegmentPicker: Bool) -> some View {
+        if onShowPairedItems != nil {
+            if showsSegmentPicker {
+                SelectionPanelHeader(
+                    title: pairSheetWardrobeTitle,
+                    onTitleTap: { showWardrobeSelection = true },
+                    actionPlacement: .barAboveTitle,
+                    leading: { EmptyView() },
+                    trailing: { pairSelectionHeaderTrailing },
+                    picker: { pairSourceSegmentPicker }
+                )
+            } else {
+                SelectionPanelHeader(
+                    title: pairSheetWardrobeTitle,
+                    onTitleTap: { showWardrobeSelection = true },
+                    actionPlacement: .barAboveTitle,
+                    leading: { EmptyView() },
+                    trailing: { pairSelectionHeaderTrailing }
+                )
             }
-        } catch {
-            print("❌ Failed to fetch closet items: \(error)")
-            closetItems = []
+        } else if showsSegmentPicker {
+            SelectionPanelHeader(
+                title: pairSheetWardrobeTitle,
+                onTitleTap: { showWardrobeSelection = true },
+                picker: { pairSourceSegmentPicker }
+            )
+        } else {
+            SelectionPanelHeader(
+                title: pairSheetWardrobeTitle,
+                onTitleTap: { showWardrobeSelection = true }
+            )
         }
     }
-    
-    private func isAlreadyPaired(_ closetItem: Item) -> Bool {
-        if let pairedItemsSet = item.pairedItems as? Set<Item> {
-            return pairedItemsSet.contains(closetItem)
+
+    private var pairSourceSegmentPicker: some View {
+        Picker("Item Type", selection: $pairSourceSegment) {
+            ForEach(PairSourceSegment.allCases, id: \.self) { segment in
+                Text(segment.rawValue).tag(segment)
+            }
         }
-        return false
+        .pickerStyle(.segmented)
     }
-    
-    private func pairItem(_ pairedItem: Item) {
-        // Check if already paired
-        if isAlreadyPaired(pairedItem) {
-            // Show confirmation alert to un-pair
-            itemToUnpair = pairedItem
-            showUnpairConfirmation = true
-            return
+
+    @ViewBuilder
+    private var pairSelectionHeaderTrailing: some View {
+        if let onShowPairedItems {
+            Button(action: onShowPairedItems) {
+                HStack(spacing: 4) {
+                    Image(systemName: "pencil")
+                    Text("View Pairs")
+                }
+                .font(.subheadline)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("View pairs")
         }
-        
-        // Add bidirectional pairing
-        // Since we're using a many-to-many relationship, we need to add both directions
-        
-        // Get current paired items as a mutable set
+    }
+
+    private var pairSelectionActionsBar: some View {
+        ItemFilterSortSearchBar(
+            sortOrder: $filterModel.sortOrder,
+            searchQuery: $filterModel.searchQuery,
+            isSearchActive: $isSearchActive,
+            isSearchFocused: $isSearchFocused,
+            onFilter: { showFilter = true },
+            onDismissSearch: { dismissSearch(clearQueries: true) },
+            activeFilterCount: filterModel.activeFilterCount,
+            backgroundColor: Color(UIColor.secondarySystemBackground)
+        )
+    }
+
+    private func scheduleDebouncedFetch() {
+        searchDebounceTask?.cancel()
+        searchDebounceTask = Task {
+            try? await Task.sleep(nanoseconds: Self.searchDebounceNanos)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                fetchPairableItems()
+            }
+        }
+    }
+
+    private func dismissSearch(clearQueries: Bool) {
+        searchDebounceTask?.cancel()
+        if clearQueries {
+            filterModel.searchQuery = ""
+            fetchPairableItems()
+        }
+        isSearchActive = false
+        isSearchFocused = false
+    }
+
+    private func resetFiltersForNewSession() {
+        searchDebounceTask?.cancel()
+        filterModel.clearAll()
+        isSearchActive = false
+        isSearchFocused = false
+    }
+
+    private func itemDisplayName(_ item: Item) -> String {
+        let trimmed = (item.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Untitled Item" : trimmed
+    }
+
+    private func confirmPair(with pairedItem: Item) {
         var currentPairedItems = item.pairedItems as? Set<Item> ?? []
-        
-        // Add the new paired item
         currentPairedItems.insert(pairedItem)
         item.pairedItems = currentPairedItems as NSSet
-        
-        // Also add this item to the paired item's set (bidirectional)
+
         var pairedItemSet = pairedItem.pairedItems as? Set<Item> ?? []
         pairedItemSet.insert(item)
         pairedItem.pairedItems = pairedItemSet as NSSet
-        
+
         do {
-            // Set updatedAt on both items since we're modifying them
             setUpdatedAt(item)
             setUpdatedAt(pairedItem)
-            
+
             try viewContext.save()
-            
-            // Trigger automatic sync for both items
+
             SyncService.shared.syncItemIfNeeded(item)
             SyncService.shared.syncItemIfNeeded(pairedItem)
-            
-            dismiss()
+
+            itemToPair = nil
+            onPairSuccess?()
+            if dismissesSheetOnSuccess {
+                dismiss()
+            } else {
+                fetchPairableItems()
+            }
         } catch {
             print("❌ Failed to save paired item: \(error)")
         }
     }
-    
-    private func unpairItem(_ itemToRemove: Item) {
-        // Remove bidirectional pairing
-        
-        // Remove from current item's paired items
-        var currentPairedItems = item.pairedItems as? Set<Item> ?? []
-        currentPairedItems.remove(itemToRemove)
-        item.pairedItems = currentPairedItems as NSSet
-        
-        // Remove from the other item's paired items
-        var otherItemPairedItems = itemToRemove.pairedItems as? Set<Item> ?? []
-        otherItemPairedItems.remove(item)
-        itemToRemove.pairedItems = otherItemPairedItems as NSSet
-        
-        do {
-            // Set updatedAt on both items since we're modifying them
-            setUpdatedAt(item)
-            setUpdatedAt(itemToRemove)
-            
-            try viewContext.save()
-            
-            // Trigger automatic sync for both items
-            SyncService.shared.syncItemIfNeeded(item)
-            SyncService.shared.syncItemIfNeeded(itemToRemove)
 
-            itemToUnpair = nil
-            dismiss()
+    private func fetchPairableItems() {
+        guard let userId = authSession.userId?.uuidString, !userId.isEmpty else {
+            pairableItems = []
+            selectedWardrobe = nil
+            return
+        }
+
+        let wardrobeType = targetWardrobeType
+
+        let wardrobe: Wardrobe?
+        if let selected = selectedWardrobe,
+           (selected.type ?? "").lowercased() == wardrobeType,
+           selected.userId == userId,
+           selected.isSoftDeleted != true {
+            wardrobe = selected
+        } else {
+            let matchingWardrobes = (item.wardrobes as? Set<Wardrobe>)?
+                .filter {
+                    ($0.type ?? "").lowercased() == wardrobeType &&
+                    $0.userId == userId &&
+                    $0.isSoftDeleted != true
+                } ?? []
+
+            if !matchingWardrobes.isEmpty {
+                wardrobe = WardrobeBootstrap.primaryWardrobe(in: matchingWardrobes) ?? matchingWardrobes.first
+            } else {
+                wardrobe = try? WardrobeBootstrap.fetchPrimaryWardrobe(
+                    forType: wardrobeType,
+                    userIdString: userId,
+                    in: viewContext
+                )
+            }
+            selectedWardrobe = wardrobe
+        }
+
+        guard let wardrobe else {
+            pairableItems = []
+            return
+        }
+
+        let request: NSFetchRequest<Item> = Item.fetchRequest()
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Item.createdAt, ascending: filterModel.sortOrder.sortAscending)]
+
+        var subpredicates: [NSPredicate] = [
+            NSPredicate(format: "userId == %@", userId),
+            ItemFilterModel.wardrobeMembershipPredicate(
+                viewingWardrobe: wardrobe,
+                wardrobeType: wardrobeType,
+                filterModel: filterModel
+            ),
+            NSPredicate(format: "isDraft != YES"),
+            NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil"),
+            NSPredicate(format: "SELF != %@", item)
+        ]
+
+        if let filter = makePredicate(for: filterModel, context: viewContext) {
+            subpredicates.append(filter)
+        }
+
+        if let searchPredicate = ItemFilterModel.itemSearchPredicate(query: filterModel.searchQuery) {
+            subpredicates.append(searchPredicate)
+        }
+
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: subpredicates)
+
+        do {
+            let results = try viewContext.fetch(request)
+            let wardrobeID = wardrobe.objectID
+            pairableItems = results.filter { candidate in
+                guard let wardrobes = candidate.wardrobes as? Set<Wardrobe> else { return false }
+                return wardrobes.contains { $0.objectID == wardrobeID }
+                    && !pairedItemObjectIDs.contains(candidate.objectID)
+            }
         } catch {
-            print("❌ Failed to un-pair item: \(error)")
+            print("❌ Failed to fetch pairable items: \(error)")
+            pairableItems = []
         }
     }
 }
 
+private struct PairItemSelectionPresentationModifier: ViewModifier {
+    let appliesDetents: Bool
+
+    func body(content: Content) -> some View {
+        Group {
+            if appliesDetents {
+                content
+                    .presentationDetents([.medium, .large])
+            } else {
+                content
+            }
+        }
+        .presentationDragIndicator(.visible)
+    }
+}
