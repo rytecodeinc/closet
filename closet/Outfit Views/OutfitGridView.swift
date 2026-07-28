@@ -144,10 +144,10 @@ struct OutfitGridView: View {
     }
     
     private func deleteOutfit(_ outfit: Outfit) {
-        // Soft delete the outfit (for sync)
         softDelete(outfit)
         do {
             try viewContext.save()
+            SyncService.shared.syncOutfitIfNeeded(outfit)
             fetchOutfits()
         } catch {
             print("Failed to delete outfit: \(error)")

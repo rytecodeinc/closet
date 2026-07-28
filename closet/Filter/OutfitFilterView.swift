@@ -11,69 +11,119 @@ import CoreData
 
 struct OutfitFilterView: View {
     @ObservedObject var filterModel: OutfitFilterModel
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject private var authSession: AuthSession
+
+    var wardrobeType: String = "closet"
+    /// When true (e.g. profile wardrobe preview), only filters for attributes visible in read-only outfit detail.
+    var attributesReadOnly: Bool = false
+    /// When true (other-user profile grid), only show filters backed by visible wardrobe RPC fields.
+    var remoteProfileMode: Bool = false
+    var selectedWardrobe: Wardrobe?
 
     private var currentUserId: String? {
         authSession.userId?.uuidString
     }
 
     var body: some View {
-        NavigationStack {
-            List {
-                // Sort row
+        List {
                 Picker("Sort", selection: $filterModel.sortOrder) {
                     ForEach(ItemSortOrder.allCases, id: \.self) { order in
                         Text(order.rawValue).tag(order)
                     }
                 }
                 .pickerStyle(.menu)
-                
-                // Favorites-only filter (matches ItemFilterView)
-                Toggle("Favorites", isOn: $filterModel.favoritesOnly)
-                
-                // Category filter
-                NavigationLink(destination: OutfitCategoryFilterListView(selectedCategory: $filterModel.selectedCategory, userId: currentUserId)) {
+
+                if !remoteProfileMode {
+                    Toggle("Favorites", isOn: $filterModel.favoritesOnly)
+                }
+
+                NavigationLink(value: OutfitFilterAttributeRoute.category) {
                     HStack {
-                        Text("Category")
+                        filterAttributeLabel(
+                            "Category",
+                            selectionCount: filterModel.selectedCategory == nil ? 0 : 1
+                        )
                         Spacer()
                         if let category = filterModel.selectedCategory {
-                            Text(category)
+                            Text(category.name ?? "")
                                 .foregroundColor(.gray)
                                 .lineLimit(1)
                         }
                     }
                 }
-                
-                // Tag filter (nil = show all tags, since outfits can use tags from items and outfits)
-                NavigationLink(destination: TagListView(selectedTags: $filterModel.selectedTags, wardrobeType: nil, userId: currentUserId)) {
-                    HStack {
-                        Text("Tags")
-                        Spacer()
-                        if !filterModel.selectedTags.isEmpty {
-                            Text(filterModel.selectedTags.compactMap { $0.name }.sorted().joined(separator: ", "))
-                                .foregroundColor(.gray)
-                                .lineLimit(1)
+
+                if !remoteProfileMode {
+                    NavigationLink(value: OutfitFilterAttributeRoute.tags) {
+                        HStack {
+                            filterAttributeLabel(
+                                "Tags",
+                                selectionCount: filterModel.filterTagsNotSet
+                                    ? 1
+                                    : filterModel.selectedTags.count
+                            )
+                            Spacer()
+                            if let tagsLabel = filterModel.selectedTagsDisplayLabel {
+                                Text(tagsLabel)
+                                    .foregroundColor(.gray)
+                                    .lineLimit(1)
+                            }
                         }
                     }
                 }
+
+                Section {
+                    FilterResetAllButton {
+                        filterModel.clearAll()
+                    }
+                }
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
             }
             .listStyle(.plain)
-            Button("Reset All") {
-                filterModel.clearAll()
-            }
-            .foregroundColor(Color.red)
             .navigationTitle("Filter")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Apply") {
-                        dismiss()
-                    }
+            .navigationDestination(for: OutfitFilterAttributeRoute.self) { route in
+                switch route {
+                case .category:
+                    OutfitCategoryFilterListView(
+                        selectedCategory: $filterModel.selectedCategory,
+                        userId: currentUserId,
+                        outfitFilterWardrobe: selectedWardrobe
+                    )
+                case .tags:
+                    TagFilterListView(
+                        selectedTags: $filterModel.selectedTags,
+                        filterNotSet: $filterModel.filterTagsNotSet,
+                        source: .outfits,
+                        wardrobeType: wardrobeType,
+                        userId: currentUserId,
+                        outfitFilterWardrobe: selectedWardrobe
+                    )
                 }
             }
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    OutfitFilterApplyButton()
+                }
+            }
+    }
+
+    private func filterAttributeLabel(_ title: String, selectionCount: Int) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+            FilterSelectionCountBadge(count: selectionCount)
         }
     }
 }
 
+/// Holds `dismiss` so `OutfitFilterView` (which owns navigation) does not — matches ItemFilter Apply pattern.
+private struct OutfitFilterApplyButton: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        Button("Apply") {
+            dismiss()
+        }
+    }
+}
