@@ -11,19 +11,26 @@ import SQLite3
 
 struct ItemView: View {
     @ObservedObject var item: Item
+    var usesFlexibleSizing: Bool = false
+    /// When false (e.g. profile read-only grid), hides the favorite heart overlay.
+    var showsFavoriteOverlay: Bool = true
+    /// Closet/Wishlist/Profile grids: only decode `thumbnailData` — never touch full `Photo.data` or legacy `item.image`.
+    var usesGridThumbnailOnly: Bool = false
     @State private var isActive: Bool = false
     @Environment(\.managedObjectContext) private var viewContext
 
     var displayImage: UIImage? {
-        // For grid views, prefer thumbnail for performance
         if let primaryPhoto = item.photos?.first(where: { ($0 as? Photo)?.isPrimary == true }) as? Photo {
-            // Use thumbnail if available, fallback to full image
             if let thumbnailData = primaryPhoto.thumbnailData, !thumbnailData.isEmpty {
                 return UIImage(data: thumbnailData)
-            } else if let fullData = primaryPhoto.data {
+            }
+            if usesGridThumbnailOnly {
+                return nil
+            }
+            if let fullData = primaryPhoto.data {
                 return UIImage(data: fullData)
             }
-        } else if let fallbackImage = item.image {
+        } else if !usesGridThumbnailOnly, let fallbackImage = item.image {
             return UIImage(data: fallbackImage)
         }
         return nil
@@ -32,52 +39,74 @@ struct ItemView: View {
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             if let itemImage = displayImage {
-                Image(uiImage: itemImage)
-                    .resizable()
-                    .aspectRatio(1, contentMode: .fill)
-                    .frame(minWidth: 120, minHeight: 120)
-                    .clipped()
-                  //  .border(.gray.opacity(0.3), width: 0.5)
-                  //  .background(Color(red: 247/255, green: 247/255, blue: 247/255))  
-                    .overlay(alignment: .bottomLeading) {
-                        if item.isFavorite {
-                            // Black gradient overlay fading from bottom-left corner
-                            RadialGradient(
-                                gradient: Gradient(colors: [
-                                    Color.black.opacity(0.85),
-                                    Color.black.opacity(0.65),
-                                    Color.black.opacity(0.55),
-                                    Color.gray.opacity(0.55),
-                                    Color.clear
-                                ]),
-                                center: UnitPoint(x: -0.2, y: 1.5),
-                                startRadius: 0,
-                                endRadius: 100
-                            )
-                        }
-                    }
-                    .overlay(alignment: .bottomLeading) {
-                        if item.isFavorite {
-                            // White heart icon on top of gradient
-                            Image(systemName: "heart.fill")
-                                .foregroundColor(.white)
-                                .font(.system(size: 12))
-                                .padding(.leading, 6)
-                                .padding(.bottom, 6)
-                        }
-                    }
-                   /* .background(LinearGradient(colors: [.white, .gray.opacity(0.5)], startPoint: .topLeading, endPoint: .bottomLeading))*/
+                itemImageView(
+                    Image(uiImage: itemImage)
+                        .resizable()
+                )
             } else {
-                Image(systemName: "photo")
-                    .resizable()
-                    .aspectRatio(1, contentMode: .fill)
-                    .frame(minWidth: 120, minHeight: 120)
-                    .clipped()
-                    .foregroundColor(.gray)
-                   /* .background(LinearGradient(colors: [.white, .gray.opacity(0.5)], startPoint: .topLeading, endPoint: .bottomLeading))*/
+                itemImageView(
+                    Image(systemName: "photo")
+                        .resizable()
+                        .foregroundColor(.gray)
+                )
             }
         }
         
+    }
+
+    @ViewBuilder
+    private func itemImageView<Content: View>(_ image: Content) -> some View {
+        let shaped = image
+            .aspectRatio(1, contentMode: .fill)
+            .clipped()
+
+        if usesFlexibleSizing {
+            shaped
+                .overlay(alignment: .bottomLeading) {
+                    favoriteGradientOverlay
+                }
+                .overlay(alignment: .bottomLeading) {
+                    favoriteHeartOverlay
+                }
+        } else {
+            shaped
+                .frame(minWidth: 120, minHeight: 120)
+                .overlay(alignment: .bottomLeading) {
+                    favoriteGradientOverlay
+                }
+                .overlay(alignment: .bottomLeading) {
+                    favoriteHeartOverlay
+                }
+        }
+    }
+
+    @ViewBuilder
+    private var favoriteGradientOverlay: some View {
+        if showsFavoriteOverlay, displayImage != nil, item.isFavorite {
+            RadialGradient(
+                gradient: Gradient(colors: [
+                    Color.black.opacity(0.85),
+                    Color.black.opacity(0.65),
+                    Color.black.opacity(0.55),
+                    Color.gray.opacity(0.55),
+                    Color.clear
+                ]),
+                center: UnitPoint(x: -0.2, y: 1.5),
+                startRadius: 0,
+                endRadius: 100
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var favoriteHeartOverlay: some View {
+        if showsFavoriteOverlay, displayImage != nil, item.isFavorite {
+            Image(systemName: "heart.fill")
+                .foregroundColor(.white)
+                .font(.system(size: 12))
+                .padding(.leading, 6)
+                .padding(.bottom, 6)
+        }
     }
 
     private func deleteItem() {
@@ -601,7 +630,7 @@ func resolveSizeConstraintConflicts(context: NSManagedObjectContext) {
                     // Transfer items to first
                     if let items = duplicate.items as? Set<Item> {
                         for item in items {
-                            item.size = first
+                            item.itemSize = first
                         }
                     }
                     context.delete(duplicate)
@@ -633,7 +662,7 @@ func resolveSizeConstraintConflicts(context: NSManagedObjectContext) {
                             for duplicate in sizesWithScale.dropFirst() {
                                 if let items = duplicate.items as? Set<Item> {
                                     for item in items {
-                                        item.size = first
+                                        item.itemSize = first
                                     }
                                 }
                                 context.delete(duplicate)
@@ -1063,6 +1092,41 @@ func migrateWardrobeIsDefaultBackfill(context: NSManagedObjectContext) {
         print("✅ Wardrobe isDefault backfill completed")
     } catch {
         print("❌ Wardrobe isDefault backfill failed: \(error)")
+    }
+}
+
+/// One-time: convert legacy outfit category strings to `OutfitCategory` entities.
+func migrateOutfitCategoryStringsToEntities(context: NSManagedObjectContext) {
+    let migrationKey = "hasMigratedOutfitCategoryStringsToEntities_v1"
+    if UserDefaults.standard.bool(forKey: migrationKey) {
+        return
+    }
+
+    let request = NSFetchRequest<Outfit>(entityName: "Outfit")
+    request.predicate = NSPredicate(
+        format: "legacyOutfitCategory != nil AND legacyOutfitCategory != '' AND category == nil"
+    )
+
+    do {
+        let outfits = try context.fetch(request)
+        var migrated = 0
+        for outfit in outfits {
+            guard let legacy = outfit.legacyOutfitCategory?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !legacy.isEmpty else { continue }
+            guard let uid = outfit.userId, !uid.isEmpty else { continue }
+            let category = try context.fetchOrCreateOutfitCategory(named: legacy, userId: uid)
+            outfit.category = category
+            outfit.legacyOutfitCategory = nil
+            setUpdatedAt(outfit)
+            migrated += 1
+        }
+        if context.hasChanges {
+            try context.save()
+        }
+        UserDefaults.standard.set(true, forKey: migrationKey)
+        print("✅ Migrated \(migrated) outfit category strings to OutfitCategory entities")
+    } catch {
+        print("❌ migrateOutfitCategoryStringsToEntities: \(error)")
     }
 }
 

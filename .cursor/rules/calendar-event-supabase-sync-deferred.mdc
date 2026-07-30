@@ -1,0 +1,32 @@
+---
+description: Deferred — sync calendar events to Supabase
+globs: closet/Outfit Views/Calendar Views/**/*.swift,closet/**/Event*.swift,closet/Services/SyncEngine*.swift,closet/Services/SyncService.swift,closet/Services/SupabaseService.swift,SUPABASE_RLS_POLICIES.sql
+alwaysApply: false
+---
+
+# Deferred: sync calendar events to Supabase
+
+**Status:** Parked. Revisit later. Do not implement unless the user asks.
+
+## Intent
+
+Wire **bidirectional (or push) sync** for calendar events so they are not device-local only — mirror the outfit/item sync pattern in `SyncEngine`.
+
+## Current baseline
+
+- Supabase has RLS for `events`, `event_items`, `event_outfits` (`SUPABASE_RLS_POLICIES.sql` / `RLS_SETUP.md`).
+- Core Data `Event` already has sync-shaped fields (`userId`, `syncedAt`, `isSoftDeleted`, `updatedAt`) and soft-delete paths comment “for sync.”
+- iOS does **not** sync events today: no `.from("events")` / `event_items` / `event_outfits` in `SyncEngine` / `SupabaseService`; calendar UI saves to Core Data only.
+
+## Out of scope for first pass (unless user says otherwise)
+
+- Google Calendar import/sync (may come later; do not block Redress-native event sync on it).
+- Event privacy → Redress permission (see `calendar-event-privacy-redress-deferred.mdc`).
+
+## When revisiting — confirm with user
+
+1. Live Supabase schema for `events` / `event_items` / `event_outfits` (repo has RLS, not full `CREATE TABLE`).
+2. Push-only vs full bidirectional (pull on login / restore on new device).
+3. Sync join tables + ordered items; behavior when linked item/outfit not yet synced.
+4. Soft-delete on server then tombstone purge (like items/outfits).
+5. Hook calendar saves + include in `syncAll*` / login pull; gate on `enablesCloudSync`.
