@@ -38,17 +38,9 @@ struct CreateEventView: View {
     @State private var isAllDay = false
     
     // Outfit/Item selection
-    @State private var navigateToOutfits = false
     @State private var navigateToItems = false
     @State private var tempEvent: Event?
     @State private var refreshToken = UUID() // Force view refresh when items change
-    
-    // Computed property to get selected items count
-    private var selectedItemsCount: Int {
-        guard let event = tempEvent,
-              let itemsOrderedSet = event.items as? NSOrderedSet else { return 0 }
-        return itemsOrderedSet.count
-    }
     
     // Computed property to get selected items array (preserves insertion order)
     private var selectedItems: [Item] {
@@ -56,22 +48,12 @@ struct CreateEventView: View {
               let itemsOrderedSet = event.items as? NSOrderedSet else { return [] }
         return itemsOrderedSet.array as? [Item] ?? []
     }
-    
-    // Computed property to get selected outfits count
-    private var selectedOutfitsCount: Int {
-        guard let event = tempEvent,
-              let outfitsSet = event.outfits as? Set<Outfit> else { return 0 }
-        return outfitsSet.count
-    }
-    
-    // Computed property to get selected outfits array
+
     private var selectedOutfits: [Outfit] {
         guard let event = tempEvent,
               let outfitsSet = event.outfits as? Set<Outfit> else { return [] }
-        return Array(outfitsSet)
+        return outfitsSet.sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
     }
-    
-    private let imageSize: CGFloat = 100
     
     init(eventToEdit: Event? = nil, initialDate: Date = Date()) {
         self.eventToEdit = eventToEdit
@@ -94,62 +76,14 @@ struct CreateEventView: View {
                         Image(systemName: "calendar")
                             .foregroundColor(.gray)
                             .frame(width: 22)
-                        TextField("Title", text: $eventName)
+                        TextField("Event Name", text: $eventName)
                             .font(.title3)
                             .fontWeight(.medium)
+                            .textInputAutocapitalization(.words)
                     }
                     .padding(.top, 4)
                     .padding(.horizontal)
-                  //  .overlay(Divider().offset(y: 18), alignment: .bottom)
-                    Divider()
-                    // MARK: - Location
-                    ZStack {
-                        NavigationLink(
-                            destination: LocationSearchView(searchManager: searchManager) { suggestion in
-                                selectSuggestion(suggestion)
-                            }
-                        ) {
-                            HStack(spacing: 12) {
-                                Image(systemName: "mappin.and.ellipse")
-                                    .foregroundColor(.gray)
-                                    .frame(width: 22)
-                                
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(selectedLocationTitle ?? "Location")
-                                        .foregroundColor(selectedLocationTitle == nil ? .secondary : .primary)
-                                    
-                                    if let subtitle = selectedLocationSubtitle {
-                                        Text(subtitle)
-                                            .font(.subheadline)
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
-                                Spacer()
-                                
-                                if selectedLocationTitle == nil {
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        
-                        // Clear button overlay (only when location is selected)
-                        if selectedLocationTitle != nil {
-                            HStack {
-                                Spacer()
-                                Button(action: clearLocation) {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .foregroundColor(.secondary)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-                    .padding(.horizontal)
-                    
+
                     Divider()
                     // MARK: - Date & Time
                     VStack(alignment: .leading, spacing: 12) {
@@ -217,6 +151,53 @@ struct CreateEventView: View {
                         UIDatePicker.appearance().minuteInterval = 1  // restore default
                     }
                     .padding(.horizontal)
+
+                    Divider()
+                    // MARK: - Location
+                    NavigationLink(
+                        destination: LocationSearchView(searchManager: searchManager) { suggestion in
+                            selectSuggestion(suggestion)
+                        }
+                    ) {
+                        HStack(alignment: .center, spacing: 12) {
+                            Image(systemName: "mappin.and.ellipse")
+                                .foregroundColor(.gray)
+                                .frame(width: 22)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(selectedLocationTitle ?? "Location")
+                                    .foregroundColor(selectedLocationTitle == nil ? .secondary : .primary)
+
+                                if let subtitle = selectedLocationSubtitle {
+                                    Text(subtitle)
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+
+                            Spacer()
+
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal)
+
+                    Divider()
+                    // MARK: - Items Selection
+                    EventItemsSelectionSection(items: selectedItems, outfits: selectedOutfits) {
+                        if tempEvent == nil {
+                            createTempEvent()
+                        } else {
+                            updateTempEvent()
+                        }
+                        navigateToItems = true
+                    }
+                    .id(refreshToken)
+                    .padding(.horizontal)
                     
                     Divider()
                     // MARK: - Notes/Description
@@ -242,196 +223,11 @@ struct CreateEventView: View {
                         }
                     }
                     .padding(.horizontal)
-                    Divider()
-                    
-                    // MARK: - Items Selection
-                    ZStack {
-                        Button(action: {
-                            if tempEvent == nil {
-                                createTempEvent()
-                            } else {
-                                updateTempEvent()
-                            }
-                            navigateToItems = true
-                        }) {
-                            HStack(alignment: .top, spacing: 12) {
-                                Image(systemName: "tshirt")
-                                    .foregroundColor(.gray)
-                                    .frame(width: 22)
-                                
-                                VStack(alignment: .leading, spacing: 8) {
-                                    if selectedItemsCount > 0 {
-                                        Text("\(selectedItemsCount) item\(selectedItemsCount == 1 ? "" : "s") selected")
-                                            .foregroundColor(.primary)
-                                    } else {
-                                        Text("Add items from your closet")
-                                            .foregroundColor(.secondary)
-                                    }
-                                    
-                                    // Selected Items Images
-                                    if selectedItemsCount > 0 {
-                                        ScrollView(.horizontal, showsIndicators: false) {
-                                            HStack(spacing: 8) {
-                                                ForEach(selectedItems, id: \.objectID) { item in
-                                                    if let primaryPhoto = (item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }),
-                                                       let data = primaryPhoto.data,
-                                                       let uiImage = UIImage(data: data) {
-                                                        Image(uiImage: uiImage)
-                                                            .resizable()
-                                                            .aspectRatio(1, contentMode: .fill)
-                                                            .frame(width: 100, height: 100)
-                                                            .clipShape(RoundedRectangle(cornerRadius: 4))
-                                                    } else if let imageData = item.image,
-                                                              let uiImage = UIImage(data: imageData) {
-                                                        Image(uiImage: uiImage)
-                                                            .resizable()
-                                                            .aspectRatio(1, contentMode: .fill)
-                                                            .frame(width: 100, height: 100)
-                                                            .clipShape(RoundedRectangle(cornerRadius: 4))
-                                                    } else {
-                                                        RoundedRectangle(cornerRadius: 4)
-                                                            .fill(Color(.systemGray5))
-                                                            .frame(width: 100, height: 100)
-                                                            .overlay(
-                                                                Image(systemName: "photo")
-                                                                    .foregroundColor(.secondary)
-                                                                    .font(.caption)
-                                                            )
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        .id(refreshToken) // Force refresh when token changes
-                                    }
-                                }
-                                Spacer()
-                                
-                                if selectedItemsCount == 0 {
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        
-                        // Clear button overlay (only when items are selected)
-                        if selectedItemsCount > 0, let event = tempEvent {
-                            HStack {
-                                Spacer()
-                                Button(action: {
-                                    // Clear all items
-                                    for item in selectedItems {
-                                        event.removeFromItems(item)
-                                    }
-                                    refreshToken = UUID() // Trigger refresh
-                                }) {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .foregroundColor(.secondary)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-                    .padding(.horizontal)
-                    
-                    Divider()
-                    
-                    // MARK: - Outfits Selection
-                    ZStack {
-                        Button(action: {
-                            if tempEvent == nil {
-                                createTempEvent()
-                            } else {
-                                updateTempEvent()
-                            }
-                            navigateToOutfits = true
-                        }) {
-                            HStack(alignment: .top, spacing: 12) {
-                                Image(systemName: "photo.artframe")
-                                    .foregroundColor(.gray)
-                                    .frame(width: 22)
-                                
-                                VStack(alignment: .leading, spacing: 8) {
-                                    if selectedOutfitsCount > 0 {
-                                        Text("\(selectedOutfitsCount) outfit\(selectedOutfitsCount == 1 ? "" : "s") selected")
-                                            .foregroundColor(.primary)
-                                    } else {
-                                        Text("Add outfits")
-                                            .foregroundColor(.secondary)
-                                    }
-                                    
-                                    // Selected Outfits Images
-                                    if selectedOutfitsCount > 0 {
-                                        ScrollView(.horizontal, showsIndicators: false) {
-                                            HStack(spacing: 8) {
-                                                ForEach(selectedOutfits, id: \.objectID) { outfit in
-                                                    if let imageData = outfit.image,
-                                                       let uiImage = UIImage(data: imageData) {
-                                                        Image(uiImage: uiImage)
-                                                            .resizable()
-                                                            .aspectRatio(1, contentMode: .fill)
-                                                            .frame(width: 100, height: 100)
-                                                            .clipShape(RoundedRectangle(cornerRadius: 4))
-                                                    } else {
-                                                        RoundedRectangle(cornerRadius: 4)
-                                                            .fill(Color(.systemGray5))
-                                                            .frame(width: 100, height: 100)
-                                                            .overlay(
-                                                                Image(systemName: "photo")
-                                                                    .foregroundColor(.secondary)
-                                                                    .font(.caption)
-                                                            )
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        .id(refreshToken) // Force refresh when token changes
-                                    }
-                                }
-                                Spacer()
-                                
-                                if selectedOutfitsCount == 0 {
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        
-                        // Clear button overlay (only when outfits are selected)
-                        if selectedOutfitsCount > 0, let event = tempEvent {
-                            HStack {
-                                Spacer()
-                                Button(action: {
-                                    // Clear all outfits
-                                    for outfit in selectedOutfits {
-                                        event.removeFromOutfits(outfit)
-                                    }
-                                    refreshToken = UUID() // Trigger refresh
-                                }) {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .foregroundColor(.secondary)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-                    .padding(.horizontal)
                 }
             }
             .background(Color(.systemBackground))
             .navigationTitle(eventToEdit == nil ? "New Event" : "Edit Event")
             .navigationBarTitleDisplayMode(.inline)
-            .navigationDestination(isPresented: $navigateToOutfits) {
-                if let event = tempEvent {
-                    EventOutfitSelectionView(event: event)
-                        .environment(\.managedObjectContext, viewContext)
-                }
-            }
             .navigationDestination(isPresented: $navigateToItems) {
                 if let event = tempEvent {
                     EventIndividualItemSelection(event: event)
@@ -439,24 +235,8 @@ struct CreateEventView: View {
                 }
             }
             .onChange(of: navigateToItems) { isNavigating in
-                // When returning from item selection (isNavigating becomes false)
                 if !isNavigating {
-                    // Refresh view to show updated items
                     refreshToken = UUID()
-                    // Also refresh the managed object context to ensure we have latest data
-                    if let event = tempEvent {
-                        viewContext.refresh(event, mergeChanges: true)
-                    } else if let event = eventToEdit {
-                        viewContext.refresh(event, mergeChanges: true)
-                    }
-                }
-            }
-            .onChange(of: navigateToOutfits) { isNavigating in
-                // When returning from outfit selection (isNavigating becomes false)
-                if !isNavigating {
-                    // Refresh view to show updated outfits
-                    refreshToken = UUID()
-                    // Also refresh the managed object context to ensure we have latest data
                     if let event = tempEvent {
                         viewContext.refresh(event, mergeChanges: true)
                     } else if let event = eventToEdit {
@@ -491,13 +271,27 @@ struct CreateEventView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save", action: saveEvent)
-                        .disabled(eventName.isEmpty || (eventLocation.isEmpty == false && selectedPlacemark == nil))
+                        .disabled(!canSaveEvent)
                 }
             }
         }
     }
     
     // MARK: - Validation
+    /// Title plus a valid date range (timed or all-day) are required to save.
+    private var canSaveEvent: Bool {
+        let hasTitle = !eventName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasValidDateTime: Bool
+        if isAllDay {
+            hasValidDateTime = Calendar.current.startOfDay(for: endDate)
+                >= Calendar.current.startOfDay(for: startDate)
+        } else {
+            hasValidDateTime = endDate > startDate
+        }
+        let locationOK = eventLocation.isEmpty || selectedPlacemark != nil
+        return hasTitle && hasValidDateTime && locationOK
+    }
+
     private var minEndDate: Date {
         if isAllDay {
             // For all-day events, minimum is the start of the start date
@@ -543,13 +337,6 @@ struct CreateEventView: View {
             }
 
         }
-    }
-    
-    private func clearLocation() {
-        selectedPlacemark = nil
-        selectedLocationTitle = nil
-        selectedLocationSubtitle = nil
-        eventLocation = ""
     }
     
     // MARK: - Load Event for Editing
@@ -643,27 +430,29 @@ struct CreateEventView: View {
     
     // MARK: - Save
     private func saveEvent() {
-        guard selectedPlacemark != nil || eventLocation.isEmpty else { return }
-        
+        guard canSaveEvent else { return }
+
         // Ensure temp event exists and is updated
         if tempEvent == nil {
             createTempEvent()
         } else {
             updateTempEvent()
         }
-        
+
         guard let event = tempEvent else { return }
-        
+
+        event.name = eventName.trimmingCharacters(in: .whitespacesAndNewlines)
+
         syncEventUserIdFromLinkedEntities(event)
         if (event.userId == nil || (event.userId ?? "").isEmpty), let uid = calendarAccountUserId {
             event.userId = uid
         }
-        
+
         // Set updatedAt if editing existing event
         if tempEvent?.id != nil {
             setUpdatedAt(event)
         }
-        
+
         do {
             try viewContext.save()
             dismiss()

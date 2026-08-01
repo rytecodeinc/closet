@@ -47,7 +47,7 @@ struct EventDrawerView: View {
         let endOfDay = Calendar.current.date(byAdding: .day, value: 1, to: startOfDay)!
 
         let request: NSFetchRequest<Event> = Event.fetchRequest()
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Event.createdAt, ascending: false)]
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Event.startDate, ascending: true)]
 
         // Use startDate instead of date, exclude soft-deleted events, and scope to account
         let datePredicate = NSPredicate(format: "startDate >= %@ AND startDate < %@", startOfDay as NSDate, endOfDay as NSDate)
@@ -68,34 +68,43 @@ struct EventDrawerView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                Button(action: { showingCreateEvent = true }) {
-                    HStack {
-                        Image(systemName: "plus")
-                        Text("New Event").font(.body)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding()
-                
-                Divider()
-                
-                HStack {
-                    Button(action: { navigateDate(-1) }) {
-                        Image(systemName: "chevron.left").foregroundColor(.primary)
-                    }
-                    Spacer()
+                ZStack {
                     Text(dateFormatter.string(from: selectedDate))
                         .font(.body)
-                     //   .fontWeight(.semibold)
-                    Spacer()
-                    Button(action: { navigateDate(1) }) {
-                        Image(systemName: "chevron.right").foregroundColor(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+
+                    HStack(spacing: 0) {
+                        HStack(spacing: 4) {
+                            Button(action: { navigateDate(-1) }) {
+                                Image(systemName: "chevron.left")
+                                    .foregroundColor(.primary)
+                                    .frame(width: 28, height: 44)
+                            }
+                            Button(action: { navigateDate(1) }) {
+                                Image(systemName: "chevron.right")
+                                    .foregroundColor(.primary)
+                                    .frame(width: 28, height: 44)
+                            }
+                        }
+                        .padding(.leading)
+
+                        Spacer(minLength: 0)
+
+                        Button(action: { showingCreateEvent = true }) {
+                            Image(systemName: "plus")
+                                .font(.body)
+                                .foregroundColor(.blue)
+                                .frame(width: 44, height: 44)
+                        }
+                        .accessibilityLabel("Add event")
                     }
                 }
-                .padding(20)
-                
+                .padding(.top, 10)
+                .padding(.bottom, 10)
+
                 Divider()
-                
+
                 // Events list section
                 if events.isEmpty {
                     // Empty state - outside of List to avoid dividers
@@ -106,7 +115,7 @@ struct EventDrawerView: View {
                         Text("No events scheduled")
                             .font(.headline)
                             .foregroundColor(.secondary)
-                        Text("Tap 'New Event' to add an event")
+                        Text("Tap '+' to add an event")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -182,100 +191,164 @@ struct EventDrawerView: View {
 struct EventRowView: View {
     let event: Event
 
-    private let timeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.timeStyle = .short
-        return f
-    }()
-    
-    // Helper function to format time, hiding :00 when minutes are zero (e.g., "3:00 PM" -> "3 PM")
-    private func formatTime(_ date: Date) -> String {
-        let formatted = timeFormatter.string(from: date)
-        // Remove ":00" if present (handles both "3:00 PM" and "15:00" formats)
-        return formatted.replacingOccurrences(of: ":00", with: "")
+    private var isAllDay: Bool {
+        guard let start = event.startDate, let end = event.endDate else { return false }
+        let calendar = Calendar.current
+        let startComponents = calendar.dateComponents([.hour, .minute], from: start)
+        let endComponents = calendar.dateComponents([.hour, .minute], from: end)
+        return (startComponents.hour == 0 && startComponents.minute == 0) &&
+               (endComponents.hour == 0 && endComponents.minute == 0)
     }
 
-    private let imageSize: CGFloat = 120
+    private var eventTimeDisplay: String {
+        guard let start = event.startDate else { return "" }
+        if isAllDay { return "All day" }
+        guard let end = event.endDate else { return "" }
+        let endText = compactEndTimeLabel(from: end)
+        if let duration = durationLabel(from: start, to: end) {
+            return "\(endText) (\(duration))"
+        }
+        return endText
+    }
+
+    /// Compact start time in the leading column (e.g. "6PM").
+    private var compactStartTimeLabel: String? {
+        guard let start = event.startDate, !isAllDay else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "ha"
+        return formatter.string(from: start).uppercased()
+    }
+
+    private func compactEndTimeLabel(from date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "h:mma"
+        return formatter.string(from: date).uppercased()
+    }
+
+    private func durationLabel(from start: Date, to end: Date) -> String? {
+        let totalMinutes = Int(end.timeIntervalSince(start) / 60)
+        guard totalMinutes > 0 else { return nil }
+        let hours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+        if hours > 0, minutes > 0 {
+            return "\(hours) hr \(minutes) min"
+        }
+        if hours > 0 {
+            return hours == 1 ? "1 hr" : "\(hours) hr"
+        }
+        return "\(minutes) min"
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            // time column
-            Text(formatTime(event.startDate ?? Date()))
-             //   .font(.caption)
-             //   .fontWeight(.medium)
-                .foregroundColor(.secondary)
-             //   .frame(width: 50)
-
-            // main content (title + horizontally scrollable media)
-            VStack(alignment: .leading, spacing: 8) {
-                // title + location
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(event.name ?? "Untitled Event")
+            Group {
+                if let compactStartTimeLabel {
+                    Text(compactStartTimeLabel)
                         .font(.headline)
                         .foregroundColor(.primary)
-/*
-                    if let location = event.location, !location.isEmpty {
-                        HStack(spacing: 0) {
-                          //  Text(" at ")
-                            Text(location)
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                        }
-                        
-                    }*/
-                }
-
-                // horizontally scrollable images area
-                if hasImages {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        LazyHStack(spacing: 8) {
-                            // Outfits first
-                            if let outfitsSet = event.outfits as? Set<Outfit>, !outfitsSet.isEmpty {
-                                ForEach(Array(outfitsSet), id: \.objectID) { outfit in
-                                    if let imageData = outfit.image,
-                                       let uiImage = UIImage(data: imageData) {
-                                        Image(uiImage: uiImage)
-                                            .resizable()
-                                            .aspectRatio(1, contentMode: .fill)
-                                            .frame(width: imageSize, height: imageSize)
-                                            .clipShape(RoundedRectangle(cornerRadius: 4))
-                                    }
-                                }
-                            }
-
-                            // Then individual items
-                            if let itemsOrderedSet = event.items as? NSOrderedSet, itemsOrderedSet.count > 0 {
-                                ForEach(itemsOrderedSet.array as? [Item] ?? [], id: \.objectID) { item in
-                                    if let primaryPhoto = (item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }),
-                                       let data = primaryPhoto.data,
-                                       let uiImage = UIImage(data: data) {
-                                        Image(uiImage: uiImage)
-                                            .resizable()
-                                            .aspectRatio(1, contentMode: .fill)
-                                            .frame(width: imageSize, height: imageSize)
-                                            .clipShape(RoundedRectangle(cornerRadius: 4))
-                                            .background(Color.white)
-                                    }
-                                }
-                            }
-                        }
-                        .padding(.vertical, 2)
-                    }
-                    .frame(height: imageSize)
+                } else {
+                    Text(" ")
+                        .font(.headline)
+                        .hidden()
                 }
             }
+            .padding(.top, 5)
+            .fixedSize()
 
-            Spacer()
+            VStack(alignment: .leading, spacing: 5) {
+                Text(event.name ?? "Untitled Event")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 5)
+
+                HStack(alignment: .center, spacing: 6) {
+                    Image(systemName: "clock")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                        .frame(width: 14, alignment: .center)
+
+                    Text(eventTimeDisplay)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if let locationDisplay = eventLocationDisplay {
+                    HStack(alignment: .center, spacing: 6) {
+                        Image(systemName: "mappin.and.ellipse")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                            .frame(width: 14, alignment: .center)
+
+                        Text(locationDisplay)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+
+                if let uiImage = firstThumbnailImage {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .aspectRatio(1, contentMode: .fill)
+                        .frame(maxWidth: .infinity)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.vertical, 8)
-      //  .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var hasImages: Bool {
-        let hasOutfits = (event.outfits as? Set<Outfit>)?.isEmpty == false
-        let hasItems = (event.items as? NSOrderedSet)?.count ?? 0 > 0
-        return hasOutfits || hasItems
+    /// Location title when set; otherwise the street line from `fullAddress`.
+    private var eventLocationDisplay: String? {
+        if let title = event.location?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !title.isEmpty {
+            return title
+        }
+
+        guard let fullAddress = event.fullAddress?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !fullAddress.isEmpty else {
+            return nil
+        }
+
+        if let street = fullAddress.split(separator: ",", maxSplits: 1, omittingEmptySubsequences: true).first {
+            let trimmed = street.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return String(trimmed)
+            }
+        }
+
+        return fullAddress
+    }
+
+    private var firstThumbnailImage: UIImage? {
+        if let outfitsSet = event.outfits as? Set<Outfit> {
+            for outfit in outfitsSet {
+                if let imageData = outfit.image,
+                   let uiImage = UIImage(data: imageData) {
+                    return uiImage
+                }
+            }
+        }
+
+        if let itemsOrderedSet = event.items as? NSOrderedSet {
+            for item in itemsOrderedSet.array as? [Item] ?? [] {
+                if let primaryPhoto = (item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }),
+                   let data = primaryPhoto.data,
+                   let uiImage = UIImage(data: data) {
+                    return uiImage
+                }
+            }
+        }
+
+        return nil
     }
 }
 
