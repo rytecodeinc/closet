@@ -20,6 +20,7 @@ struct ItemAddView: View {
     @ObservedObject private var queueCoordinator: ImageQueueCoordinator
     
     @State private var attributesSheet: AttributesSectionView.Sheet?
+    @State private var isAttributesExpanded = true
 
     // Image handling
     @State private var isImagePickerPresented = false
@@ -34,6 +35,7 @@ struct ItemAddView: View {
     @State private var showAddMultipleDialog: Bool = false
     @State private var showMultiImagePicker: Bool = false
     @State private var multiPickedImages: [UIImage] = []
+    @State private var showBulkCameraImport = false
 
     // KEY FIX: Drafts is now a sheet, not a navigation push
     @State private var showingDraftsSheet = false
@@ -125,8 +127,26 @@ struct ItemAddView: View {
             
             // ATTRIBUTES Section
             Section {
-                AttributesSectionView(item: vm.draftItem, activeSheet: $attributesSheet)
-                    .listRowInsets(EdgeInsets(top: 5, leading: 20, bottom: 5, trailing: 20))
+                if isAttributesExpanded {
+                    AttributesSectionView(item: vm.draftItem, activeSheet: $attributesSheet)
+                        .transition(.opacity.combined(with: .slide))
+                        .listRowInsets(EdgeInsets(top: 5, leading: 20, bottom: 5, trailing: 20))
+                }
+            } header: {
+                HStack {
+                    Text("ATTRIBUTES")
+                        .fontWeight(.semibold)
+                    Spacer()
+                    Image(systemName: isAttributesExpanded ? "minus" : "plus")
+                        .foregroundColor(.gray)
+                        .font(.caption)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation {
+                        isAttributesExpanded.toggle()
+                    }
+                }
             }
         }
         // Attribute sheets
@@ -208,20 +228,40 @@ struct ItemAddView: View {
         // Make the whole subtree use the child context
         .environment(\.managedObjectContext, vm.childContext)
         .sheet(isPresented: $isImagePickerPresented) {
-            ImagePicker(
-                image: $selectedUIImage,
-                sourceType: $imagePickerSource,
-                allowsEditing: true
-            ) { image in
-                if let newImage = image, let imageType = pendingImageType {
-                    switch imageType {
-                    case .front: replaceFrontImage(with: newImage)
-                    case .back:  replaceBackImage(with: newImage)
-                    case .worn:  replaceWornImage(with: newImage)
+            if imagePickerSource == .photoLibrary {
+                SingleItemLibraryPickAndCropSheet(
+                    onCropped: { newImage in
+                        if let imageType = pendingImageType {
+                            switch imageType {
+                            case .front: replaceFrontImage(with: newImage)
+                            case .back:  replaceBackImage(with: newImage)
+                            case .worn:  replaceWornImage(with: newImage)
+                            }
+                            pendingImageType = nil
+                        }
+                        isImagePickerPresented = false
+                    },
+                    onLibraryCancel: {
+                        pendingImageType = nil
+                        isImagePickerPresented = false
                     }
-                    pendingImageType = nil
+                )
+            } else {
+                ImagePicker(
+                    image: $selectedUIImage,
+                    sourceType: $imagePickerSource,
+                    allowsEditing: true
+                ) { image in
+                    if let newImage = image, let imageType = pendingImageType {
+                        switch imageType {
+                        case .front: replaceFrontImage(with: newImage)
+                        case .back:  replaceBackImage(with: newImage)
+                        case .worn:  replaceWornImage(with: newImage)
+                        }
+                        pendingImageType = nil
+                    }
+                    isImagePickerPresented = false
                 }
-                isImagePickerPresented = false
             }
         }
         .sheet(isPresented: $showMultiImagePicker) {
@@ -232,6 +272,17 @@ struct ItemAddView: View {
                 guard !picked.isEmpty else { return }
                 beginBulkLibraryImport(with: picked)
             }
+        }
+        .fullScreenCover(isPresented: $showBulkCameraImport) {
+            BulkCameraImportFlowView(
+                onAdd: { images in
+                    showBulkCameraImport = false
+                    beginBulkLibraryImport(with: images)
+                },
+                onCancel: {
+                    showBulkCameraImport = false
+                }
+            )
         }
         .alert("Add Item?", isPresented: $showMissingWarning) {
             Button("Proceed", role: .none) { persistAndDismiss() }
@@ -308,51 +359,32 @@ struct ItemAddView: View {
     }
     
     private func itemWornPickerRow() -> some View {
-        HStack(spacing: 24) {
-            Button {
-                showAddMultipleDialog = true
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "photo.stack")
-                        .imageScale(.large)
-                    Text("Add Multiple")
-                        .font(.subheadline)
-                }
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.blue)
-
-            Spacer(minLength: 12)
-
-            Picker("", selection: Binding<SocialEngagementToolbarSegment>(
-                get: { heroCarouselPage == 0 ? .tshirt : .person },
+        SocialEngagementActionsRow(
+            segmentSelection: Binding(
+                get: { heroCarouselPage == 0 ? .tshirt : .worn },
                 set: { segment in
                     withAnimation {
                         heroCarouselPage = (segment == .tshirt) ? 0 : 1
                         selectedImageType = (segment == .tshirt) ? .front : .worn
                     }
                 }
-            )) {
-                ForEach(SocialEngagementToolbarSegment.allCases, id: \.self) { segment in
-                    Image(systemName: segment.systemImage)
-                        .tag(segment)
-                        .accessibilityLabel(segment.accessibilityLabel)
+            ),
+            favoriteSelection: vm.draftItem.isFavorite,
+            showsLikeButton: true,
+            showsShareButton: false,
+            showsMoveToClosetButton: false,
+            onLike: {
+                withAnimation {
+                    toggleDraftFavorite()
                 }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: 140)
-        }
-        .foregroundStyle(.primary)
-        .padding(.horizontal, 14)
-        .background(Color(.systemBackground))
+        )
+        .id(vm.photoRefreshToken)
         .confirmationDialog("Add Multiple Images", isPresented: $showAddMultipleDialog, titleVisibility: .visible) {
             if appCapabilities.enablesAddMultipleCamera,
                UIImagePickerController.isSourceTypeAvailable(.camera) {
                 Button("From Camera") {
-                    pendingImageType = selectedImageType
-                    imagePickerSource = .camera
-                    isImagePickerPresented = true
+                    showBulkCameraImport = true
                 }
             }
             Button("From Library") {
@@ -360,6 +392,12 @@ struct ItemAddView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+    }
+
+    private func toggleDraftFavorite() {
+        vm.draftItem.isFavorite.toggle()
+        setUpdatedAt(vm.draftItem)
+        vm.photoRefreshToken = UUID()
     }
     
     private var screenWidth: CGFloat { UIScreen.main.bounds.width }
@@ -403,26 +441,71 @@ struct ItemAddView: View {
         }
     }
 
+    @ViewBuilder
     private func heroImagePlaceholder(for type: ImageType) -> some View {
-        Rectangle()
-            .fill(Color.gray.opacity(0.2))
+        if type == .front, getImage(for: .worn) == nil {
+            ZStack(alignment: .bottomLeading) {
+                heroSingleTapPlaceholder(for: .front)
+                addMultipleButton
+                    .padding(.leading, 14)
+                    .padding(.bottom, 14)
+            }
             .frame(width: screenWidth, height: screenWidth)
-            .overlay {
-                VStack(spacing: 10) {
-                    Image(systemName: heroPlaceholderSystemImage(for: type))
-                        .foregroundStyle(.secondary)
-                        .font(.system(size: 40))
-                    Text(heroPlaceholderMessage(for: type))
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 24)
+        } else {
+            heroSingleTapPlaceholder(for: type)
+        }
+    }
+
+    private var addMultipleButton: some View {
+        Button {
+            showAddMultipleDialog = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "photo.stack")
+                    .imageScale(.large)
+                Text("Add Multiple")
+                    .font(.subheadline)
+            }
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.blue)
+        .accessibilityLabel("Auto-add multiple items from camera or library")
+    }
+
+    private func heroSingleTapPlaceholder(for type: ImageType) -> some View {
+        Button {
+            presentImagePicker(for: type)
+        } label: {
+            Rectangle()
+                .fill(Color.gray.opacity(0.2))
+                .overlay {
+                    VStack(spacing: 10) {
+                        Image(systemName: heroPlaceholderSystemImage(for: type))
+                            .foregroundStyle(.secondary)
+                            .font(.system(size: 40))
+                        Text(heroPlaceholderMessage(for: type))
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                    }
                 }
-            }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                presentImagePicker(for: type)
-            }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .frame(width: screenWidth, height: screenWidth)
+        .accessibilityLabel(heroPlaceholderAccessibilityLabel(for: type))
+    }
+
+    private func heroPlaceholderAccessibilityLabel(for type: ImageType) -> String {
+        switch type {
+        case .front:
+            return "Add a photo of the front of the item"
+        case .worn:
+            return "Add a photo of you wearing this item"
+        case .back:
+            return "Add a photo of the back of the item"
+        }
     }
 
     private func heroPlaceholderSystemImage(for type: ImageType) -> String {
@@ -890,18 +973,44 @@ struct ItemAddView: View {
 
     private func hasItemChanges() -> Bool {
         let item = vm.draftItem
+
+        // Photos (front, back, worn)
         if getImage(for: .front) != nil { return true }
+        if getImage(for: .back) != nil { return true }
+        if getImage(for: .worn) != nil { return true }
+
+        // AttributesSectionView fields
+        if hasNonEmptyTrimmedText(item.name) { return true }
+        if vm.wardrobesDifferFromBaseline() { return true }
         if item.category != nil { return true }
+        if item.subcategory != nil { return true }
+        if hasNonEmptyTrimmedText(item.brand?.name) { return true }
+        if item.itemSize != nil { return true }
         if let colors = item.colors as? Set<AppColor>, !colors.isEmpty { return true }
         if let seasons = item.seasons as? Set<Season>, !seasons.isEmpty { return true }
-        if item.brand != nil { return true }
-        if item.price != nil { return true }
+        if hasNonEmptyTrimmedText(item.location?.name) { return true }
+        if item.price?.amount != nil { return true }
+        if appCapabilities.showsWeatherAttribute, hasWeatherAttribute(on: item) { return true }
+        if appCapabilities.showsWeightAttribute, hasWeightAttribute(on: item) { return true }
         if let links = item.links as? Set<Link>, !links.isEmpty { return true }
-        if item.location != nil { return true }
         if let tags = item.tags as? Set<Tag>, !tags.isEmpty { return true }
-        if item.size != nil { return true }
-        if !(item.notes?.isEmpty ?? true) { return true }
+        if hasNonEmptyTrimmedText(item.notes) { return true }
+
         return false
+    }
+
+    private func hasNonEmptyTrimmedText(_ value: String?) -> Bool {
+        !(value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
+
+    private func hasWeatherAttribute(on item: Item) -> Bool {
+        item.primitiveValue(forKey: "minTemperature") != nil
+            && item.primitiveValue(forKey: "maxTemperature") != nil
+    }
+
+    private func hasWeightAttribute(on item: Item) -> Bool {
+        guard let weightKg = item.primitiveValue(forKey: "weight") as? Double else { return false }
+        return weightKg > 0 && weightKg.isFinite && !weightKg.isNaN
     }
     
     private func saveDraft() {
@@ -977,6 +1086,8 @@ final class ItemAddViewModel: ObservableObject {
     let initialImage: UIImage?
     /// Captured on the main actor when the view model is created; used where `selectedWardrobe.userId` may be nil.
     private let authUserId: String?
+    /// Wardrobes assigned at init / draft load; used to detect user edits in SetWardrobeView.
+    private(set) var baselineWardrobeObjectIDs: Set<NSManagedObjectID> = []
 
     /// User's primary wardrobe for `type` (`isDefault` when set). Used to prepend the default closet/wishlist when adding from a secondary wardrobe of the same type.
     private static func fetchPrimaryWardrobe(forType type: String, userId: String, in context: NSManagedObjectContext) -> Wardrobe? {
@@ -993,6 +1104,15 @@ final class ItemAddViewModel: ObservableObject {
     private func stampUserId(on item: Item) {
         Self.stampUserId(authUserId, on: item)
     }
+
+    private func captureWardrobeBaseline(for item: Item) {
+        baselineWardrobeObjectIDs = Set((item.wardrobes as? Set<Wardrobe>)?.map(\.objectID) ?? [])
+    }
+
+    func wardrobesDifferFromBaseline() -> Bool {
+        let current = Set((draftItem.wardrobes as? Set<Wardrobe>)?.map(\.objectID) ?? [])
+        return current != baselineWardrobeObjectIDs
+    }
     
     init(parentContext: NSManagedObjectContext, selectedWardrobe: Wardrobe?, initialURL: URL? = nil, initialImage: UIImage? = nil, authUserId: String? = nil) {
         self.initialURL = initialURL
@@ -1008,9 +1128,7 @@ final class ItemAddViewModel: ObservableObject {
         
         let item = Item(context: ctx)
         item.id = UUID()
-        let now = Date()
-        item.timestamp = now
-        item.createdAt = now
+        item.timestamp = Date()
         
         if let wardrobeObjectID = selectedWardrobe?.objectID {
             do {
@@ -1033,6 +1151,7 @@ final class ItemAddViewModel: ObservableObject {
         
         Self.stampUserId(authUserId, on: item)
         self.draftItem = item
+        captureWardrobeBaseline(for: item)
     }
 
     /// Loads an existing draft item into the child context so edits are sandboxed until save.
@@ -1055,13 +1174,12 @@ final class ItemAddViewModel: ObservableObject {
             // Fallback: create a blank item (shouldn't happen in practice)
             let item = Item(context: ctx)
             item.id = UUID()
-            let now = Date()
-            item.timestamp = now
-            item.createdAt = now
+            item.timestamp = Date()
             Self.stampUserId(authUserId, on: item)
             self.draftItem = item
             print("⚠️ Could not load existing draft into child context — creating blank item")
         }
+        captureWardrobeBaseline(for: draftItem)
     }
     
     // MARK: - Load Existing Draft
@@ -1080,6 +1198,7 @@ final class ItemAddViewModel: ObservableObject {
         } else {
             print("⚠️ Could not load draft into child context")
         }
+        captureWardrobeBaseline(for: draftItem)
         photoRefreshToken = UUID()
     }
 
@@ -1113,7 +1232,8 @@ final class ItemAddViewModel: ObservableObject {
         // Mutations first — setting isDraft = false on a loaded draft makes childContext.hasChanges
         // true even when the user made no other edits, so the guard below won't prematurely bail out.
         draftItem.isDraft = false
-        if draftItem.createdAt == nil { draftItem.createdAt = Date() }
+        let savedAt = Date()
+        ItemLifecycleDates.applyOnFirstFinalSave(for: draftItem, at: savedAt)
         setUpdatedAt(draftItem)
         if draftItem.userId == nil || draftItem.userId?.isEmpty == true {
             draftItem.userId = userId.uuidString
@@ -1203,9 +1323,7 @@ final class ItemAddViewModel: ObservableObject {
         print("🔄 Resetting for new item...")
         let item = Item(context: childContext)
         item.id = UUID()
-        let now = Date()
-        item.timestamp = now
-        item.createdAt = now
+        item.timestamp = Date()
         
         if let wardrobe = selectedWardrobe {
             do {
@@ -1259,7 +1377,7 @@ final class ItemAddViewModel: ObservableObject {
                 for conflictedObject in conflictingObjects.dropFirst() {
                     if let sizeToMerge = conflictedObject as? Size {
                         if let items = sizeToMerge.items as? Set<Item> {
-                            for item in items { item.size = firstSize }
+                            for item in items { item.itemSize = firstSize }
                         }
                         context.delete(sizeToMerge)
                     }
@@ -1392,6 +1510,7 @@ final class ItemAddViewModel: ObservableObject {
             let newCategory = Category(context: childContext)
             newCategory.id = UUID()
             newCategory.name = name
+            newCategory.isVisible = true
             draftItem.category = newCategory
         }
     }

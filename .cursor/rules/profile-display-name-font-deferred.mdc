@@ -1,0 +1,20 @@
+---
+description: Deferred — revisit profile display name / header typography (branding)
+globs: closet/Profile View/ProfileView.swift,closet/Profile View/ProfileStyleTagsRow.swift
+alwaysApply: false
+---
+
+# Deferred: profile header typography
+
+**Status:** Parked. Revisit later for branding consistency. Do not change unless the user asks.
+
+## Current baseline
+
+- **Own profile** header text uses **serif** (`design: .serif`) for display name, bio, location, action-tile captions, style tags, and wardrobe selector label.
+- **Other-user profile** display name uses **default system** `.title2.weight(.semibold)`; action buttons use system fonts.
+- Style tags (`ProfileStyleTagsRow`) already use serif caption (shared component; mainly shown on own profile placeholders today).
+
+## When revisiting
+
+- Decide one branded type system for own vs other-user headers (serif everywhere, system everywhere, or mixed by role).
+- Align wardrobe bar, bio, tags, and action labels with that decision.

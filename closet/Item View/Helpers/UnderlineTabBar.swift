@@ -24,8 +24,8 @@ struct UnderlineTabBar: View {
                         }
                     }) {
                         Text(tabLabel)
-                            .font(.subheadline)
-                            .foregroundColor(selectedTab == baseName ? .accentColor : .secondary)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(selectedTab == baseName ? .primary : .secondary)
                             .contentShape(Rectangle())
                             .padding(.bottom, 6)
                     }
@@ -33,13 +33,13 @@ struct UnderlineTabBar: View {
                     // underline
                     if selectedTab == baseName {
                         Capsule()
-                            .fill(Color.accentColor)
+                            .fill(Color.primary)
                             .matchedGeometryEffect(id: "underline", in: underlineNamespace)
                             .frame(height: 2)
                             .transition(.opacity)
                     } else {
                         Capsule()
-                            .fill(Color.gray.opacity(0.2))
+                            .fill(Color.clear)
                             .frame(height: 2)
                     }
                 }

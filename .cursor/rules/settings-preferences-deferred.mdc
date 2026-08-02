@@ -1,0 +1,132 @@
+---
+description: Deferred — expand Preferences (Attribute, Display, Profile & Sharing, Units)
+globs: closet/Selection Views/Settings/**/*.swift,closet/Profile View/**/*.swift,closet/Services/AppEnvironment.swift
+alwaysApply: false
+---
+
+# Deferred: Settings Preferences expansion
+
+**Status:** Parked. Revisit later. Do not implement the full Preferences IA unless the user asks.
+
+## Principle
+
+**Preferences = personalize surface and catalog.** Users can hide, show, order, and extend optional attributes. They cannot redefine that an item has a category, that colors attach via item↔color, or that wardrobes are the sharing boundary.
+
+## Current baseline (started)
+
+- Settings → Attribute Preferences (`AttributePreferencesView`) with Colors, Seasons, Categories (+ indented subcategory toggles).
+- Draft toggles + toolbar **Save**; Back with unsaved edits → discard alert.
+- `isVisible` on Color, Season, Category, Subcategory; pickers filter visible catalog rows.
+- Developer tools live under Settings → Developer → Developer Settings (separate from Preferences).
+
+## When revisiting — ship under Settings → **Preferences**
+
+Suggested layout:
+
+```
+Preferences
+  • Attribute Preferences
+  • Display Preferences
+  • Profile & Sharing
+  • Units
+```
+
+Add a **Preferences** section in `SettingsView` and move Attribute Preferences under it when expanding.
+
+---
+
+### 1. Attribute Preferences *(partially done)*
+
+**Done:** Colors, Seasons, Categories (+ subcategory visibility cascade when parent hidden).
+
+**Still to add (from earlier table):**
+
+| Include | Why |
+|---|---|
+| Categories you use (show/hide *your* list in pickers) | Partially done via `isVisible`; confirm UX copy/footer |
+| Optional attributes on/off for *your* add flows | e.g. weather, weight, price, links, location, notes — fewer fields when adding |
+| Default units / preferred size scales | Prefer Alpha vs Numeric where both exist |
+
+| Keep out / elsewhere | Why |
+|---|---|
+| Creating custom colors/seasons/tags | In-flow on item edit (or light “Manage catalog” later) |
+| Rewiring category → subcategory → size | Core model; extend lists, not the graph |
+| Changing which attribute *types* exist on Item | Product capability (`AppCapabilities`), not user preference |
+
+**Footer idea:** “Hide attributes you don’t use. Your items keep any values already set.”
+
+---
+
+### 2. Display Preferences
+
+**How *you* see the app on this device (mostly local).** Add when there are 2+ real toggles.
+
+| Include | Why |
+|---|---|
+| Grid density / columns | Personal viewing |
+| Sort defaults (newest, name, brand…) | Personal viewing |
+| Default closet vs wishlist landing | Personal |
+| Calendar week start / default view | Personal |
+| Show/hide empty attribute rows on *your* item detail | Clutter control |
+| Compact vs full attribute labels | Personal |
+
+| Keep out | Why |
+|---|---|
+| What *others* see on your profile | Profile & Sharing, not Display |
+| Feature flags (Fitting tab, sync) | Product tier / `AppCapabilities` |
+
+---
+
+### 3. Profile & Sharing Preferences *(separate from Display)*
+
+**What of *your* wardrobe/social surface is visible to others.**
+
+| Include | Why |
+|---|---|
+| Default wardrobe visibility (public / friends / private) | Already have per-wardrobe visibility |
+| Which wardrobes appear on profile | Sharing boundary already modeled |
+| Profile fields shown to others | Username always; optional: style tags, follower counts, bio |
+| Show likes / social row on your public items | Engagement surface |
+| Who can suggest outfits / Redress you | Social preference if added |
+
+| Keep out | Why |
+|---|---|
+| Edit avatar / username / style tags *content* | **Edit Profile**; Settings can link, don’t duplicate the editor |
+| Friend request management | Notifications / social inbox |
+
+---
+
+### 4. Units & measurements *(small)*
+
+| Include | Notes |
+|---|---|
+| Weight unit (kg / lbs) | Already `@AppStorage`; move **value** toward profile/body, **unit** here |
+| Currency for price display | If prices are localized later |
+| Measurement system for sizes | Display preference only |
+
+Can live under Preferences as its own row, or nested under Attribute Preferences if it stays tiny.
+
+---
+
+## Stay true to Redress (do not expose as preferences)
+
+- Removing the category concept or making items category-free by setting
+- Remapping how sizes belong to categories
+- Turning off wardrobes, sync semantics, or item–outfit–event relationships
+- Renaming system attribute *types* (Color vs Season)—only hide instances
+
+**OK if framed carefully:** “Manage my categories” = add/hide *their* rows; “Show price on profile item cards” = display/sharing, not changing that price is an item attribute.
+
+## Out of Preferences (other Settings sections)
+
+- **Account** — email, sign out, delete
+- **Notifications** — push prefs (later)
+- **Support / Legal** — feedback, privacy, terms
+- **Developer** — already gated under Developer Settings
+
+## Practical first cut (when un-parking)
+
+1. Add Preferences section; keep Attribute Preferences as first child.
+2. Profile & Sharing when wardrobe/profile visibility UX is ready.
+3. Units — weight unit only.
+4. Display Preferences only once ≥2 real toggles exist.

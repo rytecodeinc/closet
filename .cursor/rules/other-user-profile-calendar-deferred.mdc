@@ -1,0 +1,44 @@
+---
+description: Deferred — other-user profile WARDROBE/CALENDAR tabs + event cards (event redress)
+globs: closet/Profile View/ProfileView.swift,closet/Item View/Helpers/UnderlineTabBar.swift
+alwaysApply: false
+---
+
+# Deferred: other-user profile Wardrobe / Calendar + event cards
+
+**Status:** Parked until **event redressing** is wired. Do not re-enable in shipping UI unless the user asks.
+
+## Why parked
+
+Other-user profile had a **WARDROBE / CALENDAR** `UnderlineTabBar` above the wardrobe row, plus placeholder **event cards** on the calendar tab. That surface depends on shared/visible events and event-level Redress — not ready yet.
+
+Related parked work: `calendar-event-privacy-redress-deferred.mdc` (event privacy → who may Redress).
+
+## What was built (restore later)
+
+### Tab row
+- `UnderlineTabBar` with `["WARDROBE", "CALENDAR"]` above `remoteProfileWardrobeBar` / empty wardrobe chrome.
+- State: `otherUserContentTab` (default `"WARDROBE"`); reset on `viewedProfile?.userId` change.
+- CALENDAR branch swapped grid for calendar placeholder content.
+
+### Event cards (`OtherUserPlaceholderEvent` / `OtherUserPlaceholderEventCard` in `ProfileView.swift`)
+- 3-column `LazyVGrid`, **2pt** spacing.
+- Card: `systemGray` header (white text) — day ALL CAPS, bold numeric date, caption time.
+- Square hanger placeholder for chosen items/outfit.
+- Map pin + location under the square.
+- Rounded continuous corners + separator stroke.
+
+Placeholder sample events: Friday 14 / Saturday 15 / Sunday 16 with Downtown, City Park, Harbor.
+
+## Current baseline
+
+- Tab row and calendar content path **commented out / removed from the live other-user profile tree**.
+- Wardrobe-only other-user profile (sticky prefix = wardrobe bar only).
+- Card types may remain in `ProfileView.swift` as a design stub — wire them back when un-parking.
+
+## When revisiting
+
+1. Uncomment / restore `otherUserSectionTabBar` in sticky prefix + empty wardrobe content.
+2. Restore CALENDAR content branch and real data (visible events for viewer), not only placeholders.
+3. Align with event privacy + Redress permission once those ship.
+4. Decide own-profile vs other-user parity for calendar on profile.

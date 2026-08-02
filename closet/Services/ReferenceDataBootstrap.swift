@@ -39,6 +39,7 @@ enum ReferenceDataBootstrap {
     /// Colors, seasons, sizes, default brand/location — safe anytime; does **not** insert categories.
     static func ensureUniversalDefaults(for userId: UUID, in context: NSManagedObjectContext) throws {
         let uid = userId.uuidString
+        try consolidateDuplicateColorsAndSeasons(uid: uid, in: context)
         _ = try mergeMissingColors(uid: uid, in: context)
         _ = try mergeMissingSeasons(uid: uid, in: context)
         _ = try mergeMissingSizes(uid: uid, in: context)
@@ -47,6 +48,19 @@ enum ReferenceDataBootstrap {
         if context.hasChanges {
             try context.save()
         }
+    }
+
+    /// Merges same-name color/season duplicates for this user (and claims legacy unscoped rows). Safe to call from settings.
+    static func consolidateDuplicateColorsAndSeasons(for userId: UUID, in context: NSManagedObjectContext) throws {
+        try consolidateDuplicateColorsAndSeasons(uid: userId.uuidString, in: context)
+        if context.hasChanges {
+            try context.save()
+        }
+    }
+
+    private static func consolidateDuplicateColorsAndSeasons(uid: String, in context: NSManagedObjectContext) throws {
+        try consolidateDuplicateColors(uid: uid, in: context)
+        try consolidateDuplicateSeasons(uid: uid, in: context)
     }
 
     /// Inserts only the chosen top-level categories and their default subcategories (onboarding completion).
@@ -82,6 +96,7 @@ enum ReferenceDataBootstrap {
         let uid = userId.uuidString
         var result = MergeResult()
 
+        try consolidateDuplicateColorsAndSeasons(uid: uid, in: context)
         result.colorsInserted = try mergeMissingColors(uid: uid, in: context)
         result.seasonsInserted = try mergeMissingSeasons(uid: uid, in: context)
         let catSub = try mergeCategoriesAndSubcategories(
@@ -132,10 +147,109 @@ enum ReferenceDataBootstrap {
 
     // MARK: - Insert helpers
 
+    /// Collapses same-name color rows for this user (and legacy unscoped rows) into one keeper,
+    /// reassigning item links so visibility toggles and pickers stay unique.
+    private static func consolidateDuplicateColors(uid: String, in context: NSManagedObjectContext) throws {
+        let request: NSFetchRequest<AppColor> = AppColor.fetchRequest()
+        request.predicate = NSPredicate(format: "userId == %@ OR userId == nil OR userId == ''", uid)
+        let rows = try context.fetch(request)
+
+        var groups: [String: [AppColor]] = [:]
+        for color in rows {
+            let key = (color.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !key.isEmpty else { continue }
+            groups[key, default: []].append(color)
+        }
+
+        for (_, group) in groups {
+            let keeper = preferredColorKeeper(in: group, uid: uid)
+            let trimmedName = (keeper.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            keeper.name = trimmedName
+            keeper.userId = uid
+            if keeper.id == nil { keeper.id = UUID() }
+
+            for dup in group where dup.objectID != keeper.objectID {
+                if !keeper.isVisible || !dup.isVisible {
+                    keeper.isVisible = false
+                }
+                if let items = dup.items as? Set<Item> {
+                    for item in items {
+                        item.removeFromColors(dup)
+                        item.addToColors(keeper)
+                    }
+                }
+                context.delete(dup)
+            }
+        }
+    }
+
+    private static func preferredColorKeeper(in group: [AppColor], uid: String) -> AppColor {
+        group.max { a, b in
+            colorKeeperScore(a, uid: uid) < colorKeeperScore(b, uid: uid)
+        } ?? group[0]
+    }
+
+    private static func colorKeeperScore(_ color: AppColor, uid: String) -> Int {
+        var score = 0
+        if color.userId == uid { score += 100 }
+        if color.id != nil { score += 10 }
+        score += (color.items as? Set<Item>)?.count ?? 0
+        return score
+    }
+
+    /// Collapses same-name season rows for this user (and legacy unscoped rows) into one keeper.
+    private static func consolidateDuplicateSeasons(uid: String, in context: NSManagedObjectContext) throws {
+        let request: NSFetchRequest<Season> = Season.fetchRequest()
+        request.predicate = NSPredicate(format: "userId == %@ OR userId == nil OR userId == ''", uid)
+        let rows = try context.fetch(request)
+
+        var groups: [String: [Season]] = [:]
+        for season in rows {
+            let key = (season.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !key.isEmpty else { continue }
+            groups[key, default: []].append(season)
+        }
+
+        for (_, group) in groups {
+            let keeper = preferredSeasonKeeper(in: group, uid: uid)
+            let trimmedName = (keeper.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            keeper.name = trimmedName
+            keeper.userId = uid
+            if keeper.id == nil { keeper.id = UUID() }
+
+            for dup in group where dup.objectID != keeper.objectID {
+                if !keeper.isVisible || !dup.isVisible {
+                    keeper.isVisible = false
+                }
+                if let items = dup.item as? Set<Item> {
+                    for item in items {
+                        item.removeFromSeasons(dup)
+                        item.addToSeasons(keeper)
+                    }
+                }
+                context.delete(dup)
+            }
+        }
+    }
+
+    private static func preferredSeasonKeeper(in group: [Season], uid: String) -> Season {
+        group.max { a, b in
+            seasonKeeperScore(a, uid: uid) < seasonKeeperScore(b, uid: uid)
+        } ?? group[0]
+    }
+
+    private static func seasonKeeperScore(_ season: Season, uid: String) -> Int {
+        var score = 0
+        if season.userId == uid { score += 100 }
+        if season.id != nil { score += 10 }
+        score += (season.item as? Set<Item>)?.count ?? 0
+        return score
+    }
+
     private static func mergeMissingColors(uid: String, in context: NSManagedObjectContext) throws -> Int {
         var n = 0
         for name in defaultColorNames {
-            guard !colorExists(name: name, userId: uid, in: context) else { continue }
+            if claimOrFindColor(name: name, userId: uid, in: context) != nil { continue }
             let color = AppColor(context: context)
             color.id = UUID()
             color.name = name
@@ -146,17 +260,31 @@ enum ReferenceDataBootstrap {
         return n
     }
 
-    private static func colorExists(name: String, userId uid: String, in context: NSManagedObjectContext) -> Bool {
-        let r: NSFetchRequest<AppColor> = AppColor.fetchRequest()
-        r.fetchLimit = 1
-        r.predicate = NSPredicate(format: "name ==[c] %@ AND userId == %@", name, uid)
-        return (try? context.count(for: r)) ?? 0 > 0
+    /// Returns an existing user-owned or claimed legacy (nil userId) color for `name`, if any.
+    @discardableResult
+    private static func claimOrFindColor(name: String, userId uid: String, in context: NSManagedObjectContext) -> AppColor? {
+        let owned: NSFetchRequest<AppColor> = AppColor.fetchRequest()
+        owned.fetchLimit = 1
+        owned.predicate = NSPredicate(format: "name ==[c] %@ AND userId == %@", name, uid)
+        if let match = try? context.fetch(owned).first {
+            return match
+        }
+
+        let legacy: NSFetchRequest<AppColor> = AppColor.fetchRequest()
+        legacy.fetchLimit = 1
+        legacy.predicate = NSPredicate(format: "name ==[c] %@ AND (userId == nil OR userId == '')", name)
+        if let orphan = try? context.fetch(legacy).first {
+            orphan.userId = uid
+            if orphan.id == nil { orphan.id = UUID() }
+            return orphan
+        }
+        return nil
     }
 
     private static func mergeMissingSeasons(uid: String, in context: NSManagedObjectContext) throws -> Int {
         var n = 0
         for name in defaultSeasonNames {
-            guard !seasonExists(name: name, userId: uid, in: context) else { continue }
+            if claimOrFindSeason(name: name, userId: uid, in: context) != nil { continue }
             let season = Season(context: context)
             season.name = name
             season.id = UUID()
@@ -167,11 +295,24 @@ enum ReferenceDataBootstrap {
         return n
     }
 
-    private static func seasonExists(name: String, userId uid: String, in context: NSManagedObjectContext) -> Bool {
-        let r: NSFetchRequest<Season> = Season.fetchRequest()
-        r.fetchLimit = 1
-        r.predicate = NSPredicate(format: "name ==[c] %@ AND userId == %@", name, uid)
-        return (try? context.count(for: r)) ?? 0 > 0
+    @discardableResult
+    private static func claimOrFindSeason(name: String, userId uid: String, in context: NSManagedObjectContext) -> Season? {
+        let owned: NSFetchRequest<Season> = Season.fetchRequest()
+        owned.fetchLimit = 1
+        owned.predicate = NSPredicate(format: "name ==[c] %@ AND userId == %@", name, uid)
+        if let match = try? context.fetch(owned).first {
+            return match
+        }
+
+        let legacy: NSFetchRequest<Season> = Season.fetchRequest()
+        legacy.fetchLimit = 1
+        legacy.predicate = NSPredicate(format: "name ==[c] %@ AND (userId == nil OR userId == '')", name)
+        if let orphan = try? context.fetch(legacy).first {
+            orphan.userId = uid
+            if orphan.id == nil { orphan.id = UUID() }
+            return orphan
+        }
+        return nil
     }
 
     /// Creates missing categories (from `categoryNames` only) and their subcategories; reuses existing rows by name.
@@ -188,12 +329,16 @@ enum ReferenceDataBootstrap {
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
             if let existing = try fetchUserCategory(named: trimmed, userId: uid, in: context) {
+                if existing.updatedAt == nil, !existing.isVisible {
+                    existing.isVisible = true
+                }
                 byName[trimmed.lowercased()] = existing
             } else {
                 let category = Category(context: context)
                 category.name = trimmed
                 category.id = UUID()
                 category.userId = uid
+                category.isVisible = true
                 byName[trimmed.lowercased()] = category
                 categoriesInserted += 1
             }
@@ -208,13 +353,19 @@ enum ReferenceDataBootstrap {
             }
             for (idx, rawName) in names.enumerated() {
                 let subName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard existingSubcategory(named: subName, in: category, userId: uid, context: context) == nil else { continue }
+                if let existing = existingSubcategory(named: subName, in: category, userId: uid, context: context) {
+                    if existing.updatedAt == nil, !existing.isVisible {
+                        existing.isVisible = true
+                    }
+                    continue
+                }
                 let sub = Subcategory(context: context)
                 sub.id = UUID()
                 sub.name = subName
                 sub.sortOrder = Int16(idx)
                 sub.category = category
                 sub.userId = uid
+                sub.isVisible = true
                 subcategoriesInserted += 1
             }
         }

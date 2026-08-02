@@ -156,7 +156,7 @@ struct DataSeeder {
             let category = Category(context: context)
             category.name = name
             category.id = UUID()
-          //  category.isVisible = true
+            category.isVisible = true
         }
         try context.save()
     }
@@ -243,6 +243,7 @@ struct DataSeeder {
                 let sub = Subcategory(context: context)
                 sub.id = UUID()
                 sub.name = name
+                sub.isVisible = true
                 sub.sortOrder = Int16(idx)
                 sub.category = category
             }
@@ -298,7 +299,7 @@ struct DataSeeder {
     
     /// Migrates existing sizes to unique (value, scale) combinations
     /// - Removes duplicates by keeping one size per (value, scale) pair
-    /// - Updates all Item.size references to point to kept sizes
+    /// - Updates all Item.itemSize references to point to kept sizes
     /// - Sets category to nil on all sizes (sizes are now independent)
     // Disabled — preloadDefaultSizes call commented out.
     /*
@@ -349,7 +350,7 @@ struct DataSeeder {
                 // Update all items that reference this size to reference the kept size instead
                 if let items = size.items as? Set<Item> {
                     for item in items {
-                        item.size = keptSize
+                        item.itemSize = keptSize
                     }
                 }
                 sizesToDelete.append(size)
