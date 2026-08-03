@@ -1,0 +1,174 @@
+---
+description: Deferred template — own-profile header (bio/tags/location/socials/Sizes) before simplify
+globs: closet/Profile View/ProfileView.swift,closet/Profile View/ProfileStyleTagsRow.swift,closet/Profile View/EditProfileView.swift
+alwaysApply: false
+---
+
+# Deferred template: own-profile header (full layout)
+
+**Status:** Full-layout snapshot kept as restore source. **Live own-profile header was simplified** (placeholders removed). Do **not delete** this rule. Restore when **public sizes**, **bio**, **style tags**, **location**, and **social links** are implemented for real.
+
+**Captured from:** `ownProfileHeaderSection` in `ProfileView.swift` immediately before the simplify pass.
+
+Related: `profile-display-name-font-deferred.mdc` (serif own-header typography). Style-tag model/sync may still exist while UI is deferred (`ProfileStyleTag` / Edit Profile TODOs).
+
+---
+
+## Current shipping baseline (after simplify)
+
+Live `ownProfileHeaderSection` is minimal:
+
+- Centered avatar (tap → photo dialog; no pencil badge)
+- Serif display name
+- Full-width **Friends** + **Edit Profile** outlined `HStack` buttons (clear fill, `primary.opacity(0.08)` stroke, 8pt continuous corner). Friends gated by `enablesFriendsAndSharing`; Edit Profile always shown.
+
+Removed from live UI (restore from sections below): flanking Add Friend / Redress / Sizes, bio, style tags, location, social icons, avatar pencil → Edit Profile.
+
+---
+
+## Why this exists
+
+Before shipping, the own-profile header included **placeholder** bio / tags / location / socials and unwired **Sizes** / **Add Friend** / **Redress** tiles. Those were removed from live UI; this rule remains the layout + spacing source of truth to rebuild once those fields are real.
+
+---
+
+## Layout (top → bottom)
+
+Entry: `ownProfileHeaderSection` → used from `profileHeaderSection` when **not** viewing another user.
+
+```
+VStack(alignment: .center, spacing: 0)
+├── ownProfileAvatarWithFlankingActions
+│   HStack(alignment: .center, spacing: 14)  // profileHeaderFlankingActionSpacing
+│   ├── ownProfileLeftFlankingActions   // maxWidth∞, trailing
+│   ├── ownProfileAvatarWithPencilBadge // 104×104
+│   └── ownProfileRightFlankingActions  // maxWidth∞, leading
+├── display name
+├── bio (placeholder)
+├── ProfileStyleTagsRow (placeholder labels)
+└── ownProfileLocationSocialRow
+```
+
+**Section chrome**
+
+- `.frame(maxWidth: .infinity)`
+- `.padding(.horizontal)` (system default)
+- `.padding(.top, profileHeaderTopPadding)` = **8**
+- `.padding(.bottom, profileHeaderBottomPadding)` = **4 + wardrobeBarEdgePadding (16)** → **20**
+- `.id(refreshToken)` (avatar / profile refresh)
+
+---
+
+## Constants (ProfileView)
+
+| Constant | Value |
+|---|---|
+| `profileHeaderAvatarSize` | 104 |
+| `profileHeaderTopPadding` | 8 |
+| `profileHeaderBottomPadding` | 4 + 16 = 20 |
+| `profileHeaderActionCircleSize` | 44 |
+| `profileHeaderPencilBadgeSize` | 26 |
+| `profileHeaderNameTopPadding` | 8 |
+| `profileHeaderActionIconSize` | 20 |
+| `profileHeaderFlankingActionSpacing` | 14 |
+| `profileHeaderFlankingActionStackSpacing` | 8 |
+| `profileHeaderPlaceholderBio` | `"Style is how I express who I am – effortlessly, authentically, and always evolving"` |
+| `profileHeaderPlaceholderLocation` | `"Los Angeles, California"` |
+| `profileHeaderPlaceholderStyleTags` | `["Vintage", "Romantic", "Minimalist"]` |
+
+---
+
+## Avatar + pencil (`ownProfileAvatarWithPencilBadge`)
+
+- Avatar: `avatarImageContent(size: 104)` + shadow `black 0.22`, radius 6, y 3.
+- **Full-avatar tap** → `isProfilePhotoActionDialogPresented` (“Profile Photo”): Take Photo (stub), Choose from Library → upload, Remove → `removeProfileAvatar`, Cancel. Disabled while `isAvatarUploading`.
+- **Pencil badge** (bottomTrailing, offset +2,+2): white circle 26, SF `pencil` 12 semibold → `isEditProfilePresented` / `EditProfileView`. a11y: “Edit profile”.
+- Clear hit target over full avatar; pencil is a separate `Button` on top of the ZStack.
+
+---
+
+## Flanking actions
+
+Shared tile helper: `profileHeaderActionTile` — circle 44 + caption2 **serif** title, VStack spacing **6**. Default fill `secondarySystemGroupedBackground` + stroke `primary 0.08`; Redress uses cayenne gradient, white icon, no border.
+
+**Left** (`ownProfileLeftFlankingActions`) — VStack spacing 8; comment notes placeholders / hide on own profile later:
+
+1. **Add Friend** — `person.badge.plus` (not wired)
+2. **Redress** — `Redress.SFSymbol` template, cayenne gradient circle (not wired)
+
+**Right** (`ownProfileRightFlankingActions`) — VStack spacing 8:
+
+1. **Sizes** — `ruler` (placeholder; wire when sizes are public)
+2. **Friends** — `person.2` → sets `tabBarHideState.shouldHideTabBar = true`, `isFriendsPresented = true` (**wired**)
+
+---
+
+## Display name
+
+- `Text(displayNameForHeader)`
+- Font: `.system(.title2, design: .serif).weight(.semibold)`
+- Centered, maxWidth∞, `.padding(.top, 8)`
+
+---
+
+## Bio (placeholder)
+
+- `Text(profileHeaderPlaceholderBio)`
+- Font: `.system(.subheadline, design: .serif)`, `.secondary`
+- Centered; `.padding(.horizontal, 12)`, `.padding(.top, 10)`
+
+---
+
+## Style tags (placeholder)
+
+- `ProfileStyleTagsRow(labels: profileHeaderPlaceholderStyleTags)` + `.padding(.top, 16)`
+- Component: `closet/Profile View/ProfileStyleTagsRow.swift` — centered flow layout, pastel capsules, labels shown as `#lowercase`
+- Chip H/V spacing 8; padding chip 14×7; caption serif
+
+---
+
+## Location + socials (`ownProfileLocationSocialRow`)
+
+- `.padding(.top, 18)` on the row from the header VStack
+- `HStack` spacing 12; inner location `HStack` spacing 6; socials `HStack` spacing 10
+- Location: `mappin.and.ellipse` + placeholder string, subheadline serif, lineLimit 1
+- `Spacer(minLength: 8)`
+- Social placeholders via `profileHeaderSocialPlaceholder` — filled `primary` circle **28×28**, inverted label:
+  - Facebook: letter `"f"` (serif bold 13)
+  - Instagram: SF `camera`
+  - Twitter: SF `bird`
+- Static a11y traits; not tappable yet
+- Row: maxWidth∞, `.padding(.horizontal, 4)`
+
+---
+
+## Key symbols to search
+
+- `ownProfileHeaderSection`
+- `ownProfileAvatarWithFlankingActions`
+- `ownProfileLeftFlankingActions` / `ownProfileRightFlankingActions`
+- `ownProfileAvatarWithPencilBadge`
+- `ownProfileLocationSocialRow`
+- `profileHeaderActionTile` / `profileHeaderSocialPlaceholder`
+- `profileHeaderPlaceholderBio` / `Location` / `StyleTags`
+
+---
+
+## Related files
+
+- `closet/Profile View/ProfileView.swift` — header UI + constants
+- `closet/Profile View/ProfileStyleTagsRow.swift` — chip row
+- `closet/Profile View/ProfileStyleTag.swift` — model (may outlive placeholder UI)
+- `closet/Profile View/EditProfileView.swift` — pencil destination; style-tags TODO commented
+
+---
+
+## When revisiting (restore + wire)
+
+1. If the live header was simplified, restore structure/spacing from this rule (and git history of the symbols above if needed).
+2. Replace placeholders with real **bio**, **style tags**, **location**, **social links**; hide empty rows when unset.
+3. Wire **Sizes** to the public sizes surface; drop or relocate **Add Friend** / **Redress** on own profile if still placeholders.
+4. Keep avatar tap → photo dialog and pencil → Edit Profile unless product changes.
+5. Align Edit Profile so users can edit the same fields shown here.
+6. Revisit typography with `profile-display-name-font-deferred.mdc`.
+7. Delete or mark this rule done once the full header ships with real data.

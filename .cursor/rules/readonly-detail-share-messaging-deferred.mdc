@@ -1,0 +1,25 @@
+---
+description: Deferred — share button on read-only item/outfit detail until social messaging
+globs: closet/Profile View/ReadOnlyItemDetailView.swift,closet/Outfit Views/ReadOnlyOutfitDetailView.swift,closet/Shared/SocialEngagementActionsRow.swift
+alwaysApply: false
+---
+
+# Deferred: read-only detail Share → social messaging
+
+**Status:** Parked until **in-app social messaging / share-to-friend** is wired. Do not re-enable in shipping UI unless the user asks.
+
+## Why parked
+
+`ReadOnlyItemDetailView` and `ReadOnlyOutfitDetailView` showed a share control via `SocialEngagementActionsRow` gated on `appCapabilities.enablesFriendsAndSharing`, but `onShare` was a no-op. Real share depends on messaging (send item/outfit to a friend), not system share sheet alone.
+
+Own-content `ItemDetailView` / `OutfitDetailView` share flows are separate and may already use friends sheets — leave those alone unless asked.
+
+## Current baseline
+
+Both read-only detail views pass `showsShareButton: false` (with a code comment pointing here).
+
+## When revisiting
+
+1. Wire `onShare` to the social messaging / share-to-friend flow for the remote item or outfit.
+2. Re-enable with something like `showsShareButton: appCapabilities.enablesFriendsAndSharing` (or a dedicated messaging capability if one is added).
+3. Remove the deferred comments / this rule once shipping.
