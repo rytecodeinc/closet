@@ -248,10 +248,12 @@ struct EventRowView: View {
                     Text(compactStartTimeLabel)
                         .font(.headline)
                         .foregroundColor(.primary)
+                        .padding(.horizontal, 2)
                 } else {
                     Text(" ")
                         .font(.headline)
                         .hidden()
+                        .padding(.horizontal, 2)
                 }
             }
             .padding(.top, 5)

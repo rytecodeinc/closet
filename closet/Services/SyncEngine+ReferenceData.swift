@@ -11,6 +11,10 @@ import UIKit
 
 extension SyncEngine {
     func syncAllReferenceData(userId: UUID) async throws {
+        // Collapse local duplicate brands (same user + name) before push so we don't
+        // hit brands_user_id_name_key with two different local UUIDs.
+        try await dedupeLocalBrands(userId: userId)
+
         // Sync brands - only if changed
         let brandRequest: NSFetchRequest<Brand> = Brand.fetchRequest()
         brandRequest.predicate = NSPredicate(format: "userId == %@ AND (syncedAt == nil OR updatedAt > syncedAt)", userId.uuidString)
@@ -159,5 +163,44 @@ extension SyncEngine {
         }
         
         print("✅ Synced all reference data (only changed entities)")
+    }
+
+    /// Keeps one Brand per (userId, case-insensitive name); reassigns items from duplicates and deletes them.
+    private func dedupeLocalBrands(userId: UUID) async throws {
+        try await performOnSyncContext { ctx in
+            let request: NSFetchRequest<Brand> = Brand.fetchRequest()
+            request.predicate = NSPredicate(format: "userId == %@", userId.uuidString)
+            request.sortDescriptors = [
+                NSSortDescriptor(keyPath: \Brand.syncedAt, ascending: false),
+                NSSortDescriptor(keyPath: \Brand.updatedAt, ascending: false),
+            ]
+            let brands = try ctx.fetch(request)
+            var keeperByName: [String: Brand] = [:]
+            var didChange = false
+
+            for brand in brands {
+                let key = (brand.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                guard !key.isEmpty else { continue }
+
+                if let keeper = keeperByName[key] {
+                    if let items = brand.items as? Set<Item> {
+                        for item in items {
+                            item.brand = keeper
+                            setUpdatedAt(item)
+                        }
+                    }
+                    ctx.delete(brand)
+                    didChange = true
+                } else {
+                    // Prefer a brand that already synced when names collide after sort.
+                    keeperByName[key] = brand
+                }
+            }
+
+            if didChange {
+                try ctx.save()
+                print("ℹ️ Deduped local brands for user \(userId.uuidString.prefix(8))…")
+            }
+        }
     }
 }

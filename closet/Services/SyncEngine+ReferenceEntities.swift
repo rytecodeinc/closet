@@ -116,22 +116,42 @@ extension SyncEngine {
         }
     }
     
-    /// Syncs a brand to Supabase
+    /// Syncs a brand to Supabase.
+    /// Upserts by `id`. If another row already owns `(user_id, name)`, adopts that remote id locally
+    /// so bootstrap / duplicate local brands do not fail session sync.
     func syncBrand(objectID: NSManagedObjectID, userId: UUID) async throws {
         let brandData = try await performOnSyncContext { ctx -> SyncBrandData? in
             guard let brand = try ctx.existingObject(with: objectID) as? Brand,
                   let brandId = brand.id else { return nil }
+            let name = (brand.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { return nil }
             return SyncBrandData(
                 id: brandId.uuidString,
                 userId: userId.uuidString,
-                name: brand.name ?? "",
+                name: name,
                 isVisible: brand.isVisible
             )
         }
         guard let brandData else { return }
-        try await (await getSupabase()).supabaseClient.from("brands")
-            .upsert(brandData, onConflict: "id")
-            .execute()
+
+        do {
+            try await (await getSupabase()).supabaseClient.from("brands")
+                .upsert(brandData, onConflict: "id")
+                .execute()
+        } catch {
+            guard isUniqueConstraintViolation(error, constraintHint: "brands_user_id_name") else {
+                throw error
+            }
+            print("ℹ️ Brand upsert hit user_id+name conflict for \"\(brandData.name)\"; adopting remote id")
+            try await adoptRemoteBrandIdentity(
+                localObjectID: objectID,
+                userId: userId,
+                name: brandData.name,
+                isVisible: brandData.isVisible
+            )
+            return
+        }
+
         try await performOnSyncContext { ctx in
             guard let brand = try ctx.existingObject(with: objectID) as? Brand else { return }
             brand.syncedAt = Date()
@@ -141,6 +161,93 @@ extension SyncEngine {
 
     func syncBrand(_ brand: Brand, userId: UUID) async throws {
         try await syncBrand(objectID: brand.objectID, userId: userId)
+    }
+
+    /// When Supabase already has `(user_id, name)`, point the local brand at that row's id,
+    /// merge any other local duplicates with the same name, then upsert + mark synced.
+    private func adoptRemoteBrandIdentity(
+        localObjectID: NSManagedObjectID,
+        userId: UUID,
+        name: String,
+        isVisible: Bool
+    ) async throws {
+        struct RemoteBrandRow: Decodable {
+            let id: String
+            let name: String
+            let isVisible: Bool?
+
+            enum CodingKeys: String, CodingKey {
+                case id
+                case name
+                case isVisible = "is_visible"
+            }
+        }
+
+        let response = try await (await getSupabase()).supabaseClient.from("brands")
+            .select("id, name, is_visible")
+            .eq("user_id", value: userId.uuidString)
+            .eq("name", value: name)
+            .limit(1)
+            .execute()
+
+        let rows = try JSONDecoder().decode([RemoteBrandRow].self, from: response.data)
+        guard let remote = rows.first, let remoteUUID = UUID(uuidString: remote.id) else {
+            throw NSError(
+                domain: "SyncEngine",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Brand name conflict for \"\(name)\" but no remote row found"]
+            )
+        }
+
+        let resolvedVisible = remote.isVisible ?? isVisible
+        let resolvedData = SyncBrandData(
+            id: remote.id,
+            userId: userId.uuidString,
+            name: name,
+            isVisible: resolvedVisible
+        )
+        try await (await getSupabase()).supabaseClient.from("brands")
+            .upsert(resolvedData, onConflict: "id")
+            .execute()
+
+        try await performOnSyncContext { ctx in
+            guard let local = try ctx.existingObject(with: localObjectID) as? Brand else { return }
+
+            let dupRequest: NSFetchRequest<Brand> = Brand.fetchRequest()
+            dupRequest.predicate = NSPredicate(
+                format: "userId == %@ AND name ==[c] %@ AND SELF != %@",
+                userId.uuidString,
+                name,
+                local
+            )
+            let duplicates = try ctx.fetch(dupRequest)
+            for dup in duplicates {
+                if let items = dup.items as? Set<Item> {
+                    for item in items {
+                        item.brand = local
+                        setUpdatedAt(item)
+                    }
+                }
+                ctx.delete(dup)
+            }
+
+            local.id = remoteUUID
+            local.name = name
+            local.isVisible = resolvedVisible
+            local.userId = userId.uuidString
+            local.syncedAt = Date()
+            setUpdatedAt(local)
+            try ctx.save()
+        }
+
+        print("✅ Adopted remote brand id \(remote.id.prefix(8))… for \"\(name)\"")
+    }
+
+    private func isUniqueConstraintViolation(_ error: Error, constraintHint: String) -> Bool {
+        let message = error.localizedDescription.lowercased()
+        return message.contains("duplicate key")
+            || message.contains(constraintHint.lowercased())
+            || message.contains("unique constraint")
     }
     
     /// Syncs a category to Supabase

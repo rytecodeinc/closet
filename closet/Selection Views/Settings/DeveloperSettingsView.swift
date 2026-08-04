@@ -29,7 +29,14 @@ struct DeveloperSettingsView: View {
     @State private var isPurgingStalePrimaries = false
     @State private var stalePrimaryAlertTitle = ""
     @State private var stalePrimaryAlertMessage = ""
-    @State private var showStalePrimaryAlert = false
+    @State private var showStalePrimaryResultAlert = false
+    @State private var showStalePrimaryConfirmAlert = false
+    @State private var pendingStalePrimaryPlan: StalePrimaryPhotoRepair.Plan?
+
+    @State private var isRecompressingWorn = false
+    @State private var wornRecompressAlertTitle = ""
+    @State private var wornRecompressAlertMessage = ""
+    @State private var showWornRecompressAlert = false
 
     @State private var showHowToOnboardingPreview = false
 
@@ -123,7 +130,7 @@ struct DeveloperSettingsView: View {
 
             Section {
                 Button {
-                    purgeStalePrimaryPhotos()
+                    scanStalePrimaryPhotos()
                 } label: {
                     HStack {
                         if isPurgingStalePrimaries {
@@ -136,7 +143,25 @@ struct DeveloperSettingsView: View {
                 }
                 .disabled(isPurgingStalePrimaries || authSession.userId == nil)
             } footer: {
-                Text("Removes leftover primary / duplicate front photos from an older replace-front bug (Core Data, then Supabase + R2). Keeps one canonical front per item. Safe to run more than once.")
+                Text("Scans for leftover primary / duplicate front photos from an older replace-front bug in Core Data and Supabase + R2, then asks for confirmation before deleting. Safe to run more than once.")
+            }
+
+            Section {
+                Button {
+                    recompressWornPhotos()
+                } label: {
+                    HStack {
+                        if isRecompressingWorn {
+                            ProgressView()
+                                .padding(.trailing, 4)
+                        }
+                        Text("Recompress worn photos")
+                            .foregroundColor(.primary)
+                    }
+                }
+                .disabled(isRecompressingWorn || authSession.userId == nil)
+            } footer: {
+                Text("Re-encodes item worn and outfit worn images over 400 KB with the Add Item worn pipeline (opaque JPEG, long edge ≤ 2048, ~0.8 quality, ~1 MB max). Skips front/back cutouts. Marks dirty and syncs. Safe to run more than once.")
             }
         }
         .navigationTitle("Developer Settings")
@@ -156,10 +181,25 @@ struct DeveloperSettingsView: View {
         } message: {
             Text(photoStorageAlertMessage)
         }
-        .alert(stalePrimaryAlertTitle, isPresented: $showStalePrimaryAlert) {
+        .alert("Delete stale photos?", isPresented: $showStalePrimaryConfirmAlert) {
+            Button("Cancel", role: .cancel) {
+                pendingStalePrimaryPlan = nil
+            }
+            Button("Delete", role: .destructive) {
+                confirmStalePrimaryPhotoDeletion()
+            }
+        } message: {
+            Text(pendingStalePrimaryPlan?.confirmationMessage ?? "")
+        }
+        .alert(stalePrimaryAlertTitle, isPresented: $showStalePrimaryResultAlert) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(stalePrimaryAlertMessage)
+        }
+        .alert(wornRecompressAlertTitle, isPresented: $showWornRecompressAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(wornRecompressAlertMessage)
         }
         .fullScreenCover(isPresented: $showHowToOnboardingPreview) {
             HowToOnboardingView(marksCompleteOnFinish: false) {
@@ -168,28 +208,90 @@ struct DeveloperSettingsView: View {
         }
     }
 
-    private func purgeStalePrimaryPhotos() {
+    private func recompressWornPhotos() {
+        guard let userId = authSession.userId else {
+            wornRecompressAlertTitle = "Not signed in"
+            wornRecompressAlertMessage = "Sign in to run this repair."
+            showWornRecompressAlert = true
+            return
+        }
+        isRecompressingWorn = true
+        Task { @MainActor in
+            defer { isRecompressingWorn = false }
+            do {
+                let result = try await WornImageCompression.recompressExisting(
+                    for: userId,
+                    in: viewContext
+                )
+                wornRecompressAlertTitle = "Worn recompress complete"
+                wornRecompressAlertMessage = result.summaryMessage
+                showWornRecompressAlert = true
+            } catch {
+                wornRecompressAlertTitle = "Worn recompress failed"
+                wornRecompressAlertMessage = error.localizedDescription
+                showWornRecompressAlert = true
+            }
+        }
+    }
+
+    private func scanStalePrimaryPhotos() {
         guard let userId = authSession.userId else {
             stalePrimaryAlertTitle = "Not signed in"
             stalePrimaryAlertMessage = "Sign in to run this repair."
-            showStalePrimaryAlert = true
+            showStalePrimaryResultAlert = true
             return
         }
+        isPurgingStalePrimaries = true
+        pendingStalePrimaryPlan = nil
+        Task { @MainActor in
+            defer { isPurgingStalePrimaries = false }
+            do {
+                let plan = try await StalePrimaryPhotoRepair.scanStalePrimaryPhotos(
+                    for: userId,
+                    in: viewContext
+                )
+                if plan.isEmpty {
+                    stalePrimaryAlertTitle = "Repair complete"
+                    stalePrimaryAlertMessage = plan.confirmationMessage
+                    showStalePrimaryResultAlert = true
+                } else {
+                    pendingStalePrimaryPlan = plan
+                    showStalePrimaryConfirmAlert = true
+                }
+            } catch {
+                stalePrimaryAlertTitle = "Scan failed"
+                stalePrimaryAlertMessage = error.localizedDescription
+                showStalePrimaryResultAlert = true
+            }
+        }
+    }
+
+    private func confirmStalePrimaryPhotoDeletion() {
+        guard let userId = authSession.userId else {
+            pendingStalePrimaryPlan = nil
+            stalePrimaryAlertTitle = "Not signed in"
+            stalePrimaryAlertMessage = "Sign in to run this repair."
+            showStalePrimaryResultAlert = true
+            return
+        }
+        guard let plan = pendingStalePrimaryPlan else { return }
+        pendingStalePrimaryPlan = nil
         isPurgingStalePrimaries = true
         Task { @MainActor in
             defer { isPurgingStalePrimaries = false }
             do {
-                let result = try await StalePrimaryPhotoRepair.purgeStalePrimaryPhotos(
+                let result = try await StalePrimaryPhotoRepair.applyStalePrimaryPhotoPlan(
+                    plan,
                     for: userId,
                     in: viewContext
                 )
                 stalePrimaryAlertTitle = "Repair complete"
                 stalePrimaryAlertMessage = result.summaryMessage
-                showStalePrimaryAlert = true
+                showStalePrimaryResultAlert = true
             } catch {
                 stalePrimaryAlertTitle = "Repair failed"
                 stalePrimaryAlertMessage = error.localizedDescription
-                showStalePrimaryAlert = true
+                showStalePrimaryResultAlert = true
             }
         }
     }
