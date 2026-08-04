@@ -11,55 +11,129 @@ import UIKit
 import CoreData
 import Combine
 
+private enum ItemAddNavigation: Hashable {
+    case direct
+    case queued
+}
+
+private enum PackingNavigation: Hashable {
+    case packing
+}
+
+private struct OutfitAddNavigation: Hashable {
+    let sessionID: UUID
+}
+
+/// Own-profile read-only item tap → same destination as other-user profile grid.
+private struct ProfileReadOnlyItemDestination: Hashable {
+    let ownerUserId: UUID
+    let wardrobeId: UUID
+    let item: VisibleWardrobeItem
+    let wardrobeType: String
+}
+
+/// Own-profile read-only outfit tap → same destination as other-user profile grid.
+private struct ProfileReadOnlyOutfitDestination: Hashable {
+    let ownerUserId: UUID
+    let wardrobeId: UUID
+    let outfit: VisibleWardrobeOutfit
+    let wardrobeType: String
+}
+
 struct ItemGridView: View {
     @ObservedObject var filterModel: ItemFilterModel
+    @ObservedObject var outfitFilterModel: OutfitFilterModel
     var wardrobeType: String
     var selectedWardrobe: Wardrobe
+    var isReadOnly: Bool = false
+    /// When true (Profile), shows a Redress toggle on the Outfits action bar to filter accepted Redress outfits.
+    var showsProfilePendingRedressSuggestions: Bool = false
+    /// Profile avatar/stats header that scrolls away above the sticky chrome.
+    private let profileCollapsingHeader: AnyView
+    /// Profile rows pinned with the picker (e.g. wardrobe bar).
+    private let profileStickyPrefix: AnyView
+    /// When set (Profile), parent owns filter-bar visibility.
+    private let externalTabActionsBarVisible: Binding<Bool>?
     
     // Binding to communicate selection state to parent
     @Binding var isInSelectionMode: Bool
+    /// ProfileView sets this so its tab-bar visibility stays in sync with pushed detail screens.
+    @Binding var isDetailNavigationActive: Bool
+    /// Parent owns `NavigationPath` + Filter destinations — grid only requests a push (avoids AttributeGraph cycle).
+    var onOpenItemFilter: () -> Void
+    var onOpenOutfitFilter: () -> Void
+    /// Tab-bar hide flag shared with `ItemFilterView` (destination is on the parent stack).
+    @ObservedObject var tabBarHideState: TabBarHideState
+
+    init(
+        filterModel: ItemFilterModel,
+        outfitFilterModel: OutfitFilterModel,
+        wardrobeType: String,
+        selectedWardrobe: Wardrobe,
+        isReadOnly: Bool = false,
+        showsProfilePendingRedressSuggestions: Bool = false,
+        isInSelectionMode: Binding<Bool>,
+        isDetailNavigationActive: Binding<Bool> = .constant(false),
+        isTabActionsBarVisible: Binding<Bool>? = nil,
+        onOpenItemFilter: @escaping () -> Void,
+        onOpenOutfitFilter: @escaping () -> Void,
+        tabBarHideState: TabBarHideState,
+        @ViewBuilder profileCollapsingHeader: () -> some View = { EmptyView() },
+        @ViewBuilder profileStickyPrefix: () -> some View = { EmptyView() }
+    ) {
+        self.filterModel = filterModel
+        self.outfitFilterModel = outfitFilterModel
+        self.wardrobeType = wardrobeType
+        self.selectedWardrobe = selectedWardrobe
+        self.isReadOnly = isReadOnly
+        self.showsProfilePendingRedressSuggestions = showsProfilePendingRedressSuggestions
+        self._isInSelectionMode = isInSelectionMode
+        self._isDetailNavigationActive = isDetailNavigationActive
+        self.onOpenItemFilter = onOpenItemFilter
+        self.onOpenOutfitFilter = onOpenOutfitFilter
+        self._tabBarHideState = ObservedObject(wrappedValue: tabBarHideState)
+        self.externalTabActionsBarVisible = isTabActionsBarVisible
+        self.profileCollapsingHeader = AnyView(profileCollapsingHeader())
+        self.profileStickyPrefix = AnyView(profileStickyPrefix())
+        self._internalTabActionsBarVisible = State(
+            initialValue: isTabActionsBarVisible?.wrappedValue ?? true
+        )
+    }
     
-    // Binding to show filter views
-    @State private var showItemFilter = false
-    @State private var showOutfitFilter = false
+    @State private var packingNavigation: PackingNavigation?
 
     @EnvironmentObject var supabaseService: SupabaseService
     @EnvironmentObject var authSession: AuthSession
-    @EnvironmentObject private var syncService: SyncService
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.appCapabilities) private var appCapabilities
     @State private var closetItems: [Item] = []
     @State private var hasCompletedInitialItemsFetch = false
     @State private var hasCompletedInitialOutfitsFetch = false
+    @State private var hasCompletedInitialRedressFetch = false
+    @State private var isLoadingRedressSuggestions = false
     @State private var isImagePickerPresented = false
     @State private var pickedImage: UIImage? = nil
     @State private var imagePickerSource: UIImagePickerController.SourceType = .photoLibrary
-    @State private var path = NavigationPath()
     @State private var selectedTab: String = "Items"
     
     @State private var outfits: [Outfit] = []
-    @StateObject private var outfitFilterModel = OutfitFilterModel()
+    @State private var pendingRedressOutfitIds: Set<UUID> = []
+    @State private var profilePendingSuggestions: [VisibleOutfitSuggestion] = []
+    @State private var isRedressFilterActive = false
+    @State private var selectedPendingRedress: PendingRedressNavigationDestination?
     
     // Selection mode state
-    @State private var selectedItemForNavigation: Item?
+    @State private var selectedItemURIForNavigation: String?
     @State private var selectedItems: Set<Item> = []
-    @State private var selectedOutfitForNavigation: Outfit?
+    @State private var selectedOutfitURIForNavigation: String?
+    /// Profile read-only: same detail screens as other-user `RemoteProfileWardrobeGridView`.
+    @State private var profileReadOnlyItemDestination: ProfileReadOnlyItemDestination?
+    @State private var profileReadOnlyOutfitDestination: ProfileReadOnlyOutfitDestination?
     @State private var selectedOutfits: Set<Outfit> = []
     @State private var showWardrobeSelectionSheet = false
     @State private var showWardrobeSelectionConfirmAlert = false
     @State private var pendingWardrobeSelectionTarget: Wardrobe?
     @State private var pendingWardrobeSelectionWillRemove = false
-    @State private var showSharedUsersSheet = false
-    @State private var sharedUsersSearchText = ""
-    @State private var sharedUserResults: [PublicUserProfile] = []
-    @State private var isSearchingSharedUsers = false
-    @State private var sharedUsersError: String?
-    @State private var pendingFriendRequestUserIds: Set<UUID> = []
-    @State private var friendUserIds: Set<UUID> = []
-    @State private var connectedFriends: [PublicUserProfile] = []
-    @State private var isLoadingConnectedFriends = false
-    @State private var showUnfriendAlert = false
-    @State private var unfriendTargetUserId: UUID?
     @State private var showDeleteConfirmation = false
     @State private var showOutfitDeleteConfirmation = false
     @State private var showTagSelectionSheet = false
@@ -74,12 +148,17 @@ struct ItemGridView: View {
     @State private var showTagSelectionConfirmAlert = false
     @State private var pendingTagSelectionTarget: Tag?
     @State private var pendingTagSelectionWillRemove = false
+    @State private var showOutfitCategorySelectionSheet = false
+    @State private var showOutfitCategorySelectionConfirmAlert = false
+    @State private var wardrobeVisibilityRevision = 0
+    @State private var pendingOutfitCategoryTarget: OutfitCategory?
+    @State private var pendingOutfitCategoryWillRemove = false
     @State private var showColorSelectionConfirmAlert = false
     @State private var pendingColorSelectionTarget: AppColor?
     @State private var pendingColorSelectionWillRemove = false
     @State private var showFavoriteSelectionConfirmAlert = false
     @State private var pendingFavoriteSelectionWillUnfavorite = false
-    /// Bumps when favorites change so the bottom bar heart reflects Core Data without relying on `selectedItems` identity.
+    /// Bumps when favorites change so the bottom bar heart reflects Core Data without relying on selection set identity.
     @State private var favoriteToolbarTick = 0
     @State private var showAddFromClosetSheet = false
     
@@ -87,10 +166,41 @@ struct ItemGridView: View {
     @StateObject private var queueCoordinator = ImageQueueCoordinator()
     @State private var showMultiImagePicker = false
     @State private var showCropperForQueue = false
-    @State private var shouldNavigateToItemAdd = false
-    @State private var shouldNavigateToItemAddDirect = false
+    @State private var itemAddNavigation: ItemAddNavigation?
+    @State private var outfitAddNavigation: OutfitAddNavigation?
     @State private var queuedImages: [UIImage] = []
     @State private var showCropperCancelConfirmation = false
+
+    private static let tabActionsBarHeight: CGFloat = 44
+    private static let searchDebounceNanos: UInt64 = 250_000_000
+    /// Coalesce Core Data save storms (sync merges, bulk edits) into one grid reload.
+    private static let contextSaveDebounceNanos: UInt64 = 400_000_000
+
+    @Environment(\.scenePhase) private var scenePhase
+
+    @State private var internalTabActionsBarVisible = true
+    @State private var isActionBarSearchActive = false
+    @FocusState private var isActionBarSearchFocused: Bool
+    @State private var itemSearchDebounceTask: Task<Void, Never>?
+    @State private var outfitSearchDebounceTask: Task<Void, Never>?
+    @State private var contextSaveDebounceTask: Task<Void, Never>?
+    @State private var itemFetchTask: Task<Void, Never>?
+    @State private var outfitRefreshTask: Task<Void, Never>?
+    @State private var itemFetchGeneration = 0
+    @State private var outfitRefreshGeneration = 0
+    @State private var needsItemFetchRetry = false
+    @State private var needsOutfitFetchRetry = false
+
+    private var isTabActionsBarVisible: Bool {
+        get { externalTabActionsBarVisible?.wrappedValue ?? internalTabActionsBarVisible }
+        nonmutating set {
+            if let externalTabActionsBarVisible {
+                externalTabActionsBarVisible.wrappedValue = newValue
+            } else {
+                internalTabActionsBarVisible = newValue
+            }
+        }
+    }
 
     let gridColumns = [
         GridItem(.flexible(), spacing: 2),
@@ -103,7 +213,7 @@ struct ItemGridView: View {
         var key = ""
         key += filterModel.selectedColors.sorted().joined(separator: ",")
         key += filterModel.selectedSeasons.sorted().joined(separator: ",")
-        key += filterModel.selectedBrand?.objectID.uriRepresentation().absoluteString ?? ""
+        key += filterModel.selectedBrandName ?? ""
         key += filterModel.selectedTags.map { $0.objectID.uriRepresentation().absoluteString }.sorted().joined(separator: ",")
         key += filterModel.minPrice?.description ?? ""
         key += filterModel.maxPrice?.description ?? ""
@@ -111,6 +221,8 @@ struct ItemGridView: View {
         key += filterModel.selectedSubcategoryName ?? ""
         key += filterModel.selectedSizeValue ?? ""
         key += filterModel.selectedLocation?.objectID.uriRepresentation().absoluteString ?? ""
+        key += filterModel.filterLocationNotSet ? "locationNotSet" : ""
+        key += filterModel.filterTagsNotSet ? "tagsNotSet" : ""
         key += filterModel.favoritesOnly ? "favoritesOnly" : "allItems"
         if filterModel.filterByWeight {
             // Include user weight in key so it refreshes when user updates their weight
@@ -120,405 +232,801 @@ struct ItemGridView: View {
         }
         key += filterModel.sortOrder.sortAscending ? "sortAsc" : "sortDesc"
         key += filterModel.selectedWardrobes.map { $0.objectID.uriRepresentation().absoluteString }.sorted().joined(separator: ",")
+        key += filterModel.trimmedSearchQuery
         return key
     }
     
     // Computed property to track outfit filter changes
     private var outfitFilterKey: String {
         var key = ""
-        key += outfitFilterModel.selectedCategory ?? ""
+        key += outfitFilterModel.selectedCategory?.name ?? ""
         key += outfitFilterModel.selectedTags.map { $0.objectID.uriRepresentation().absoluteString }.sorted().joined(separator: ",")
+        key += outfitFilterModel.filterTagsNotSet ? "tagsNotSet" : ""
         key += outfitFilterModel.favoritesOnly ? "favoritesOnly" : "allOutfits"
         key += outfitFilterModel.sortOrder.sortAscending ? "sortAsc" : "sortDesc"
+        key += outfitFilterModel.trimmedSearchQuery
         return key
     }
 
     private var isItemsTabLoading: Bool {
         guard authSession.userId != nil else { return true }
         if !hasCompletedInitialItemsFetch { return true }
-        if appCapabilities.enablesCloudSync, syncService.isSyncing, closetItems.isEmpty { return true }
         return false
+    }
+
+    private var displayedOutfitCount: Int {
+        if isRedressFilterActive {
+            return displayedPendingRedressSuggestions.count + outfits.count
+        }
+        return outfits.count
     }
 
     private var isOutfitsTabLoading: Bool {
         guard authSession.userId != nil else { return true }
         if !hasCompletedInitialOutfitsFetch { return true }
-        if appCapabilities.enablesCloudSync, syncService.isSyncing, outfits.isEmpty { return true }
         return false
     }
 
+    private var isRedressLoading: Bool {
+        guard showsProfilePendingRedressSuggestions else { return false }
+        if isLoadingRedressSuggestions { return true }
+        if !hasCompletedInitialRedressFetch { return true }
+        return false
+    }
+
+    private var showsTabActionsBar: Bool {
+        if isInSelectionMode { return false }
+        // Closet / Wishlist / Profile: keep Filter/Sort/Search visible (no hide-on-scroll).
+        return true
+    }
+
+    private var shouldHideTabBar: Bool {
+        isInSelectionMode
+            || isShowingDetailNavigation
+            || itemAddNavigation != nil
+            || outfitAddNavigation != nil
+    }
+
+    private var isShowingDetailNavigation: Bool {
+        selectedItemURIForNavigation != nil
+            || selectedOutfitURIForNavigation != nil
+            || profileReadOnlyItemDestination != nil
+            || profileReadOnlyOutfitDestination != nil
+            || selectedPendingRedress != nil
+    }
+
+    /// Skip expensive grid refetches while a pushed screen is open (avoids navigation re-render loops).
+    private var isPushNavigationActive: Bool {
+        isShowingDetailNavigation
+            || itemAddNavigation != nil
+            || outfitAddNavigation != nil
+            || packingNavigation != nil
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("", selection: $selectedTab) {
-                Text("Items (\(closetItems.count))")
-                    .tag("Items")
-                Text("Outfits (\(outfits.count))")
-                    .tag("Outfits")
+        itemGridWithAlerts
+            .overlay(alignment: .top) {
+                if showDeletionToast {
+                    Text(deletionToastMessage)
+                        .font(.subheadline)
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(.black.opacity(0.8))
+                        .clipShape(Capsule())
+                        .padding(.top, 10)
+                        .padding(.horizontal, 16)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(Color(.systemBackground))
-            .disabled(isInSelectionMode)
-            
-         /*   if !isControlsHidden {
-                ControlsBar
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .transition(
-                        .asymmetric(
-                            insertion: .push(from: .top),
-                            removal: .push(from: .bottom)
-                        )
+            .navigationDestination(item: $selectedItemURIForNavigation) { uriString in
+                Group {
+                    if let item = managedItem(forURI: uriString) {
+                        ItemDetailView(item: item, isReadOnly: false)
+                            .onAppear { selectedItemURIForNavigation = nil }
+                    } else {
+                        EmptyView()
+                            .onAppear { selectedItemURIForNavigation = nil }
+                    }
+                }
+            }
+            .navigationDestination(item: $selectedOutfitURIForNavigation) { uriString in
+                Group {
+                    if let outfit = managedOutfit(forURI: uriString) {
+                        OutfitDetailView(outfit: outfit, isReadOnly: false)
+                            .onAppear { selectedOutfitURIForNavigation = nil }
+                    } else {
+                        EmptyView()
+                            .onAppear { selectedOutfitURIForNavigation = nil }
+                    }
+                }
+            }
+            .navigationDestination(item: $profileReadOnlyItemDestination) { destination in
+                // Keep binding set while pushed (do not nil onAppear) — clearing orphans item
+                // and corrupts Profile → Item → Outfit → Back. Same as Friends → profile.
+                ReadOnlyItemDetailView(
+                    ownerUserId: destination.ownerUserId,
+                    wardrobeId: destination.wardrobeId,
+                    itemSummary: destination.item,
+                    wardrobeType: destination.wardrobeType,
+                    ownerProfile: ownProfileForReadOnlyDetail(userId: destination.ownerUserId),
+                    tabBarHideState: tabBarHideState
+                )
+            }
+            .navigationDestination(item: $profileReadOnlyOutfitDestination) { destination in
+                ReadOnlyOutfitDetailView(
+                    ownerUserId: destination.ownerUserId,
+                    wardrobeId: destination.wardrobeId,
+                    outfitSummary: destination.outfit,
+                    wardrobeType: destination.wardrobeType,
+                    ownerProfile: ownProfileForReadOnlyDetail(userId: destination.ownerUserId),
+                    tabBarHideState: tabBarHideState
+                )
+            }
+            .navigationDestination(item: $selectedPendingRedress) { destination in
+                PendingOutfitDetailView(
+                    recipientUserId: destination.recipientUserId,
+                    wardrobeId: destination.wardrobeId,
+                    suggestionSummary: destination.suggestionSummary,
+                    viewerRole: destination.viewerRole,
+                    onSuggestionResolved: {
+                        scheduleOutfitsRefresh(forceRedressRefresh: true)
+                    }
+                )
+            }
+            .onChange(of: isShowingDetailNavigation) { _, isActive in
+                isDetailNavigationActive = isActive
+            }
+            .navigationDestination(item: $itemAddNavigation) { mode in
+                switch mode {
+                case .direct:
+                    ItemAddView(
+                        parentContext: viewContext,
+                        selectedWardrobe: selectedWardrobe,
+                        sessionAccountId: authSession.userId?.uuidString
                     )
-            }*/
-            
+                    .onAppear { itemAddNavigation = nil }
+                case .queued:
+                    ItemAddView(
+                        parentContext: viewContext,
+                        selectedWardrobe: selectedWardrobe,
+                        queueCoordinator: queueCoordinator,
+                        sessionAccountId: authSession.userId?.uuidString
+                    )
+                    .onAppear { itemAddNavigation = nil }
+                    .onDisappear {
+                        handleItemAddViewDismiss()
+                    }
+                }
+            }
+            .navigationDestination(item: $outfitAddNavigation) { navigation in
+                OutfitAddView(
+                    wardrobeType: wardrobeType,
+                    initialWardrobe: selectedWardrobe,
+                    lockWardrobeSource: selectedWardrobe.isDefault != true,
+                    sessionID: navigation.sessionID
+                )
+                .id(navigation.sessionID)
+                .onAppear { outfitAddNavigation = nil }
+            }
+            .navigationDestination(item: $packingNavigation) { _ in
+                TravelPackingView(
+                    selectedWardrobe: selectedWardrobe,
+                    wardrobeType: wardrobeType,
+                    tabBarHideState: tabBarHideState
+                )
+                .onAppear { packingNavigation = nil }
+            }
+    }
+
+    private var usesProfileUnifiedScroll: Bool {
+        showsProfilePendingRedressSuggestions
+    }
+
+    private var itemGridMainContent: some View {
+        Group {
+            if usesProfileUnifiedScroll {
+                profileUnifiedScrollContent
+            } else {
+                closetWishlistMainContent
+            }
+        }
+    }
+
+    /// Closet / Wishlist: fixed chrome + page TabView with per-tab ScrollViews.
+    private var closetWishlistMainContent: some View {
+        VStack(spacing: 0) {
+            profileOrStandardTabPickerRow
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
+                .background(Color(.systemBackground))
+                .disabled(isInSelectionMode)
+
+            if showsTabActionsBar {
+                tabActionsBar
+            }
+
             TabView(selection: $selectedTab) {
                 itemsTab.tag("Items")
                 outfitsTab.tag("Outfits")
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-            
         }
-        .navigationBarTitleDisplayMode(.inline)
-        // Exit selection mode when switching tabs
-        .onChange(of: selectedTab) { oldValue, newValue in
-            if oldValue != newValue && isInSelectionMode {
-                // User switched tabs while in selection mode - cancel it
-                isInSelectionMode = false
-                selectedItems.removeAll()
-                selectedOutfits.removeAll()
-            }
-        }
-        .onAppear {
-            fetchItems()
-            fetchOutfits()
-        }
-        .onChange(of: authSession.userId) { _, newUserId in
-            guard newUserId != nil else { return }
-            hasCompletedInitialItemsFetch = false
-            hasCompletedInitialOutfitsFetch = false
-            fetchItems()
-            fetchOutfits()
-        }
-        .onChange(of: filterKey) {
-            fetchItems()
-        }
-        .onChange(of: filterModel.filterByWeight) {
-            fetchItems()
-        }
-        .onChange(of: outfitFilterKey) {
-            fetchOutfits()
-        }
-        .onChange(of: selectedWardrobe.objectID) {
-            fetchItems()
-            fetchOutfits()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .NSManagedObjectContextDidSave)) { notification in
-            // Refresh items AND outfits when context saves (added/deleted/updated elsewhere)
-            if let context = notification.object as? NSManagedObjectContext,
-               context === viewContext || context.parent === viewContext {
-                fetchItems()
-                fetchOutfits()
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("Closet.ItemDeletionToast"))) { notification in
-            if let message = notification.userInfo?["message"] as? String {
-                showToast(message)
-            }
-        }
-        .toolbar {
-            ToolbarItemGroup(placement: .navigationBarLeading) {
-                leadingToolbarContent()
-            }
-            ToolbarItem(placement: .navigationBarTrailing) {
-                trailingToolbarContent()
-            }
-            if isInSelectionMode {
-                ToolbarItemGroup(placement: .bottomBar) {
-                    if selectedTab == "Items" {
-                        Button {
-                            showTagSelectionSheet = true
-                        } label: {
-                            VStack {
-                                Image(systemName: "tag")
-                                Text("Tag")
-                                    .font(.caption)
-                            }
-                        }
-                        .disabled(selectedItems.isEmpty)
-                        
-                        Button {
-                            showCategorySelectionSheet = true
-                        } label: {
-                            VStack {
-                                Image(systemName: "tshirt")
-                                Text("Category")
-                                    .font(.caption)
-                            }
-                        }
-                        .disabled(selectedItems.isEmpty)
+    }
 
-                        Button {
-                            showColorSelectionSheet = true
-                        } label: {
-                            VStack {
-                                Image(systemName: "paintpalette")
-                                Text("Color")
-                                    .font(.caption)
-                            }
-                        }
-                        .disabled(selectedItems.isEmpty)
-                        
-                        Button {
-                            pendingFavoriteSelectionWillUnfavorite = selectedItemsAllFavorited
-                            showFavoriteSelectionConfirmAlert = true
-                        } label: {
-                            VStack {
-                                Image(systemName: selectedItemsFavoriteToolbarIcon)
-                                Text("Favorite")
-                                    .font(.caption)
-                            }
-                        }
-                        .disabled(selectedItems.isEmpty)
-                    }
-                    
-                    Spacer()
-                    
-                    Button {
-                        if selectedTab == "Items" {
-                            showDeleteConfirmation = true
-                        } else {
-                            showOutfitDeleteConfirmation = true
-                        }
-                    } label: {
-                        VStack {
-                            Image(systemName: "trash")
-                                .foregroundColor(selectionDeleteColor)
-                            Text("Delete")
-                                .font(.caption)
-                                .foregroundColor(selectionDeleteColor)
-                        }
-                    }
-                    .disabled(isSelectionDeleteDisabled)
-                }
+    /// Profile: UIKit nested scroll — collapsing header, sticky chrome, paged tabs with
+    /// independent UIScrollViews (Instagram-style coordination).
+    private var profileUnifiedScrollContent: some View {
+        ProfileNestedScrollContainer(
+            selectedTab: $selectedTab,
+            header: profileCollapsingHeader,
+            sticky: profileStickyChrome,
+            itemsPage: itemsTab,
+            outfitsPage: outfitsTab,
+            onRefresh: {
+                await refreshProfileItemsAndOutfits()
             }
-            ToolbarItem(placement: .principal) {
-                if selectedTab == "Items" && isInSelectionMode {
-                    Button {
-                        showWardrobeSelectionSheet = true
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text("\(selectedItems.count) Selected")
-                                .font(.headline)
-                            Image(systemName: "plus.rectangle.on.folder")
-                                .font(.caption)
-                        }
-                    }
-                } else if selectedTab == "Outfits" && isInSelectionMode {
-                    Text("\(selectedOutfits.count) Selected")
-                        .font(.headline)
-                }
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Pull-to-refresh: sync from cloud (when enabled), then reload local items/outfits (+ Redress).
+    private func refreshProfileItemsAndOutfits() async {
+        if appCapabilities.enablesCloudSync {
+            try? await SyncService.shared.syncAllItems()
+        }
+        await MainActor.run {
+            viewContext.refreshAllObjects()
+            scheduleItemsFetch()
+            scheduleOutfitsRefresh(forceRedressRefresh: true)
+        }
+        // Wait for scheduled reloads (outfits includes pending Redress) to finish.
+        await itemFetchTask?.value
+        await outfitRefreshTask?.value
+    }
+
+    @ViewBuilder
+    private var profileStickyChrome: some View {
+        VStack(spacing: 0) {
+            profileStickyPrefix
+
+            profileOrStandardTabPickerRow
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
+                .background(Color(.systemBackground))
+                .disabled(isInSelectionMode)
+
+            if showsTabActionsBar {
+                tabActionsBar
             }
         }
-        .toolbar(isInSelectionMode ? .hidden : .automatic, for: .tabBar)
-        .sheet(isPresented: $isImagePickerPresented) {
-            ImagePicker(
-                image: $pickedImage,
-                sourceType: $imagePickerSource,
-                allowsEditing: true
-            ) { image in
-                if let image = image {
-                    createNewItem(with: image, in: selectedWardrobe)
-                }
-                isImagePickerPresented = false
-            }
+        .background(Color(.systemBackground))
+    }
+
+    @ViewBuilder
+    private var profileOrStandardTabPickerRow: some View {
+        profileOrStandardTabPicker
+    }
+
+    /// Profile and Closet/Wishlist: text Items / Outfits (with counts).
+    @ViewBuilder
+    private var profileOrStandardTabPicker: some View {
+        Picker("", selection: $selectedTab) {
+            Text("Items (\(closetItems.count))")
+                .tag("Items")
+            Text("Outfits (\(displayedOutfitCount))")
+                .tag("Outfits")
         }
-        .sheet(isPresented: $showMultiImagePicker) {
-            MultiImagePicker(selectedImages: $queuedImages) {
-                showMultiImagePicker = false
-                
-                if !queuedImages.isEmpty {
-                    // Load images into queue coordinator
-                    queueCoordinator.loadQueue(queuedImages)
-                    
-                    // Small delay to ensure picker sheet is dismissed
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        // Show cropper for the first image
-                        showCropperForQueue = true
-                    }
-                }
-            }
-        }
-        .fullScreenCover(isPresented: $showCropperForQueue) {
-            if let imageToCrop = queueCoordinator.currentImage {
-                NavigationView {
-                    ImageCropperView(
-                        originalImage: imageToCrop,
-                        onCrop: { croppedImage in
-                            // Store the cropped image in coordinator
-                            queueCoordinator.storeCroppedImage(croppedImage)
-                            
-                            // Dismiss cropper
-                            showCropperForQueue = false
-                            
-                            // Small delay then show ItemAddView
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                shouldNavigateToItemAdd = true
+        .pickerStyle(.segmented)
+        .labelsHidden()
+    }
+
+    private var itemGridWithObservers: some View {
+        Group {
+            if showsProfilePendingRedressSuggestions {
+                // Profile owns the nav toolbar + tab bar. Any `.toolbar` here (even
+                // tabBar-only) competes with ProfileView and can wipe gear/edit/users.
+                if isInSelectionMode {
+                    itemGridObservedContent
+                        .toolbar {
+                            ToolbarItem(placement: .principal) {
+                                selectionModePrincipalToolbar
                             }
-                        },
-                        isEditing: false,
-                        onCancel: {
-                            if queueCoordinator.isQueueActive {
-                                showCropperCancelConfirmation = true
-                            } else {
-                                showCropperForQueue = false
-                            }
+                            selectionModeBottomToolbar
                         }
-                    )
+                } else {
+                    itemGridObservedContent
+                }
+            } else {
+                itemGridObservedContent
+                    .toolbar {
+                        ToolbarItemGroup(placement: .navigationBarLeading) {
+                            leadingToolbarContent()
+                        }
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            trailingToolbarContent()
+                        }
+                        if isInSelectionMode {
+                            ToolbarItem(placement: .principal) {
+                                selectionModePrincipalToolbar
+                            }
+                            selectionModeBottomToolbar
+                        }
+                    }
+                    .toolbar(tabBarHideState.shouldHideTabBar ? .hidden : .automatic, for: .tabBar)
+            }
+        }
+    }
+
+    /// Lifecycle observers without navigation toolbar (Profile supplies nav bar items on `ProfileView`).
+    private var itemGridObservedContent: some View {
+        Group {
+            if showsProfilePendingRedressSuggestions {
+                itemGridMainContent
+            } else {
+                itemGridMainContent
                     .navigationBarTitleDisplayMode(.inline)
+            }
+        }
+            .onChange(of: shouldHideTabBar) { _, hide in
+                tabBarHideState.shouldHideTabBar = hide
+            }
+            .onAppear {
+                tabBarHideState.shouldHideTabBar = shouldHideTabBar
+            }
+            .onChange(of: selectedTab) { oldValue, newValue in
+                if oldValue != newValue && isInSelectionMode {
+                    isInSelectionMode = false
+                    selectedItems.removeAll()
+                    selectedOutfits.removeAll()
                 }
-                .alert("Discard this item?", isPresented: $showCropperCancelConfirmation) {
-                    Button("Discard", role: .destructive) {
-                        handleCropperCancel()
+                if oldValue != newValue {
+                    isTabActionsBarVisible = true
+                    if newValue != "Outfits", isRedressFilterActive {
+                        isRedressFilterActive = false
+                        scheduleOutfitsRefresh()
                     }
-                    Button("Keep", role: .cancel) {}
-                } message: {
-                    if queueCoordinator.hasMore {
-                        Text("This image will be skipped and you'll move to the next image in the queue.")
+                    if isActionBarSearchActive {
+                        isActionBarSearchFocused = true
+                    }
+                }
+            }
+            .onChange(of: showsTabActionsBar) { _, shows in
+                if !shows {
+                    dismissActionBarSearch(clearQueries: false)
+                }
+            }
+            .onChange(of: isInSelectionMode) { _, enteringSelection in
+                if enteringSelection {
+                    dismissActionBarSearch(clearQueries: false)
+                } else {
+                    isTabActionsBarVisible = true
+                }
+            }
+            .onChange(of: isActionBarSearchActive) { _, active in
+                if active {
+                    isTabActionsBarVisible = true
+                }
+            }
+            .onChange(of: filterModel.searchQuery) { _, _ in
+                scheduleDebouncedItemFetch()
+            }
+            .onChange(of: outfitFilterModel.searchQuery) { _, _ in
+                scheduleDebouncedOutfitFetch()
+            }
+            .onAppear {
+                scheduleItemsFetch()
+                scheduleOutfitsRefresh()
+            }
+            .onChange(of: authSession.userId) { _, newUserId in
+                guard newUserId != nil else { return }
+                hasCompletedInitialItemsFetch = false
+                hasCompletedInitialOutfitsFetch = false
+                hasCompletedInitialRedressFetch = false
+                scheduleItemsFetch()
+                scheduleOutfitsRefresh()
+            }
+            .onChange(of: filterKey) {
+                scheduleItemsFetch()
+            }
+            .onChange(of: filterModel.filterByWeight) {
+                scheduleItemsFetch()
+            }
+            .onChange(of: outfitFilterKey) {
+                scheduleOutfitsRefresh()
+            }
+            .onChange(of: selectedWardrobe.objectID) {
+                dismissActionBarSearch(clearQueries: false)
+                filterModel.clearAll()
+                outfitFilterModel.clearAll()
+                hasCompletedInitialRedressFetch = false
+                profilePendingSuggestions = []
+                pendingRedressOutfitIds = []
+                isRedressFilterActive = false
+                scheduleItemsFetch()
+                scheduleOutfitsRefresh()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active else { return }
+                if needsItemFetchRetry {
+                    scheduleItemsFetch()
+                }
+                if needsOutfitFetchRetry {
+                    scheduleOutfitsRefresh()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .NSManagedObjectContextDidSave)) { notification in
+                guard !isPushNavigationActive else { return }
+                if let context = notification.object as? NSManagedObjectContext,
+                   context === viewContext || context.parent === viewContext {
+                    scheduleDebouncedContextSaveRefresh()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("Closet.ItemDeletionToast"))) { notification in
+                if let message = notification.userInfo?["message"] as? String {
+                    showToast(message)
+                }
+            }
+    }
+
+    @ToolbarContentBuilder
+    private var selectionModeBottomToolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .bottomBar) {
+            if selectedTab == "Items" {
+                Button {
+                    showTagSelectionSheet = true
+                } label: {
+                    VStack {
+                        Image(systemName: "tag")
+                        Text("Tag")
+                            .font(.caption)
+                    }
+                }
+                .disabled(selectedItems.isEmpty)
+
+                Button {
+                    showCategorySelectionSheet = true
+                } label: {
+                    VStack {
+                        Image(systemName: "tshirt")
+                        Text("Category")
+                            .font(.caption)
+                    }
+                }
+                .disabled(selectedItems.isEmpty)
+
+                Button {
+                    showColorSelectionSheet = true
+                } label: {
+                    VStack {
+                        Image(systemName: "paintpalette")
+                        Text("Color")
+                            .font(.caption)
+                    }
+                }
+                .disabled(selectedItems.isEmpty)
+
+                Button {
+                    pendingFavoriteSelectionWillUnfavorite = selectedItemsAllFavorited
+                    showFavoriteSelectionConfirmAlert = true
+                } label: {
+                    VStack {
+                        Image(systemName: selectedItemsFavoriteToolbarIcon)
+                        Text("Favorite")
+                            .font(.caption)
+                    }
+                }
+                .disabled(selectedItems.isEmpty)
+            } else if selectedTab == "Outfits" {
+                Button {
+                    showTagSelectionSheet = true
+                } label: {
+                    VStack {
+                        Image(systemName: "tag")
+                        Text("Tag")
+                            .font(.caption)
+                    }
+                }
+                .disabled(selectedOutfits.isEmpty)
+
+                Button {
+                    showOutfitCategorySelectionSheet = true
+                } label: {
+                    VStack {
+                        Image(systemName: "tshirt")
+                        Text("Category")
+                            .font(.caption)
+                    }
+                }
+                .disabled(selectedOutfits.isEmpty)
+
+                Button {
+                    pendingFavoriteSelectionWillUnfavorite = selectedOutfitsAllFavorited
+                    showFavoriteSelectionConfirmAlert = true
+                } label: {
+                    VStack {
+                        Image(systemName: selectedOutfitsFavoriteToolbarIcon)
+                        Text("Favorite")
+                            .font(.caption)
+                    }
+                }
+                .disabled(selectedOutfits.isEmpty)
+            }
+
+            Spacer()
+
+            Button {
+                if selectedTab == "Items" {
+                    showDeleteConfirmation = true
+                } else {
+                    showOutfitDeleteConfirmation = true
+                }
+            } label: {
+                VStack {
+                    Image(systemName: "trash")
+                        .foregroundColor(selectionDeleteColor)
+                    Text("Delete")
+                        .font(.caption)
+                        .foregroundColor(selectionDeleteColor)
+                }
+            }
+            .disabled(isSelectionDeleteDisabled)
+        }
+    }
+
+    @ViewBuilder
+    private var selectionModePrincipalToolbar: some View {
+        if selectedTab == "Items" && isInSelectionMode {
+            Button {
+                showWardrobeSelectionSheet = true
+            } label: {
+                HStack(spacing: 4) {
+                    Text("\(selectedItems.count) Selected")
+                        .font(.headline)
+                    Image(systemName: "plus.rectangle.on.folder")
+                        .font(.caption)
+                }
+            }
+        } else if selectedTab == "Outfits" && isInSelectionMode {
+            Text("\(selectedOutfits.count) Selected")
+                .font(.headline)
+        }
+    }
+
+    private var itemGridWithSheets: some View {
+        itemGridWithObservers
+            .sheet(isPresented: $isImagePickerPresented) {
+                ImagePicker(
+                    image: $pickedImage,
+                    sourceType: $imagePickerSource,
+                    allowsEditing: true
+                ) { image in
+                    if let image = image {
+                        createNewItem(with: image, in: selectedWardrobe)
+                    }
+                    isImagePickerPresented = false
+                }
+            }
+            .sheet(isPresented: $showMultiImagePicker) {
+                MultiImagePicker(selectedImages: $queuedImages) {
+                    showMultiImagePicker = false
+
+                    if !queuedImages.isEmpty {
+                        queueCoordinator.loadQueue(queuedImages)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            showCropperForQueue = true
+                        }
+                    }
+                }
+            }
+            .fullScreenCover(isPresented: $showCropperForQueue) {
+                if let imageToCrop = queueCoordinator.currentImage {
+                    NavigationView {
+                        ImageCropperView(
+                            originalImage: imageToCrop,
+                            onCrop: { croppedImage in
+                                queueCoordinator.storeCroppedImage(croppedImage)
+                                showCropperForQueue = false
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                    itemAddNavigation = .queued
+                                }
+                            },
+                            isEditing: false,
+                            onCancel: {
+                                if queueCoordinator.isQueueActive {
+                                    showCropperCancelConfirmation = true
+                                } else {
+                                    showCropperForQueue = false
+                                }
+                            }
+                        )
+                        .navigationBarTitleDisplayMode(.inline)
+                    }
+                    .alert("Discard this item?", isPresented: $showCropperCancelConfirmation) {
+                        Button("Discard", role: .destructive) {
+                            handleCropperCancel()
+                        }
+                        Button("Keep", role: .cancel) {}
+                    } message: {
+                        if queueCoordinator.hasMore {
+                            Text("This image will be skipped and you'll move to the next image in the queue.")
+                        } else {
+                            Text("This image will be discarded.")
+                        }
+                    }
+                }
+            }
+            .sheet(isPresented: $showWardrobeSelectionSheet) {
+                wardrobeSelectionSheet()
+            }
+            .sheet(isPresented: $showTagSelectionSheet) {
+                tagSelectionSheet()
+            }
+            .sheet(isPresented: $showOutfitCategorySelectionSheet) {
+                outfitCategorySelectionSheet()
+            }
+            .sheet(isPresented: $showColorSelectionSheet) {
+                colorSelectionSheet()
+            }
+            .sheet(isPresented: $showAddFromClosetSheet) {
+                AddItemsFromDefaultWardrobeView(
+                    wardrobe: selectedWardrobe,
+                    onCompleted: { addedCount in
+                        let dest = selectedWardrobe.name ?? "this wardrobe"
+                        let sourceLabel = (selectedWardrobe.type ?? "closet").lowercased() == "wishlist" ? "wishlist" : "closet"
+                        showToast("Added \(addedCount) item\(addedCount == 1 ? "" : "s") from your \(sourceLabel) to \"\(dest)\".")
+                    }
+                )
+            }
+            .sheet(isPresented: $showCategorySelectionSheet) {
+                categorySelectionSheet()
+            }
+    }
+
+    private var itemGridWithAlerts: some View {
+        itemGridWithSheets
+            .alert(pendingFavoriteSelectionWillUnfavorite ? "Remove from Favorites?" : "Add to Favorites?", isPresented: $showFavoriteSelectionConfirmAlert) {
+                Button(pendingFavoriteSelectionWillUnfavorite ? "Remove" : "Add", role: pendingFavoriteSelectionWillUnfavorite ? .destructive : nil) {
+                    let favorite = !pendingFavoriteSelectionWillUnfavorite
+                    let message: String?
+                    if selectedTab == "Items" {
+                        message = applyFavoriteToSelectedItems(favorite: favorite)
                     } else {
-                        Text("This image will be discarded.")
+                        message = applyFavoriteToSelectedOutfits(favorite: favorite)
                     }
+                    if let message {
+                        completeBulkSelectionAction(toast: message)
+                    }
+                    pendingFavoriteSelectionWillUnfavorite = false
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingFavoriteSelectionWillUnfavorite = false
+                }
+            } message: {
+                if selectedTab == "Items" {
+                    let count = selectedItems.count
+                    let itemPhrase = "\(count) selected item\(count == 1 ? "" : "s")"
+                    Text(pendingFavoriteSelectionWillUnfavorite
+                         ? "Remove \(itemPhrase) from favorites?"
+                         : "Add \(itemPhrase) to favorites?")
+                } else {
+                    let count = selectedOutfits.count
+                    let outfitPhrase = "\(count) outfit\(count == 1 ? "" : "s")"
+                    Text(pendingFavoriteSelectionWillUnfavorite
+                         ? "Remove \(outfitPhrase) from favorites?"
+                         : "Add \(outfitPhrase) to favorites?")
                 }
             }
-        }
-        
-        .sheet(isPresented: $showWardrobeSelectionSheet) {
-            wardrobeSelectionSheet()
-        }
-        .sheet(isPresented: $showSharedUsersSheet) {
-            sharedUsersSheet()
-        }
-        .sheet(isPresented: $showTagSelectionSheet) {
-            tagSelectionSheet()
-        }
-        .sheet(isPresented: $showColorSelectionSheet) {
-            colorSelectionSheet()
-        }
-        .sheet(isPresented: $showAddFromClosetSheet) {
-            AddItemsFromDefaultWardrobeView(
-                wardrobe: selectedWardrobe,
-                onCompleted: { addedCount in
-                    let dest = selectedWardrobe.name ?? "this wardrobe"
-                    let sourceLabel = (selectedWardrobe.type ?? "closet").lowercased() == "wishlist" ? "wishlist" : "closet"
-                    showToast("Added \(addedCount) item\(addedCount == 1 ? "" : "s") from your \(sourceLabel) to \"\(dest)\".")
+            .alert("Delete Items", isPresented: $showDeleteConfirmation) {
+                Button("Delete", role: .destructive) {
+                    deleteSelectedItems()
                 }
-            )
-        }
-        .sheet(isPresented: $showCategorySelectionSheet) {
-            categorySelectionSheet()
-        }
-        .alert(pendingFavoriteSelectionWillUnfavorite ? "Remove from Favorites?" : "Add to Favorites?", isPresented: $showFavoriteSelectionConfirmAlert) {
-            Button(pendingFavoriteSelectionWillUnfavorite ? "Remove" : "Add", role: pendingFavoriteSelectionWillUnfavorite ? .destructive : nil) {
-                let favorite = !pendingFavoriteSelectionWillUnfavorite
-                if let message = applyFavoriteToSelectedItems(favorite: favorite) {
-                    completeBulkSelectionAction(toast: message)
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Are you sure you want to delete \(selectedItems.count) item\(selectedItems.count == 1 ? "" : "s")? This action cannot be undone.")
+            }
+            .alert("Delete Outfits", isPresented: $showOutfitDeleteConfirmation) {
+                Button("Delete", role: .destructive) {
+                    deleteSelectedOutfits()
                 }
-                pendingFavoriteSelectionWillUnfavorite = false
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Are you sure you want to delete \(selectedOutfits.count) outfit\(selectedOutfits.count == 1 ? "" : "s")? This action cannot be undone.")
             }
-            Button("Cancel", role: .cancel) {
-                pendingFavoriteSelectionWillUnfavorite = false
+            .alert(pendingOutfitCategoryWillRemove ? "Remove Category?" : "Set Category?", isPresented: $showOutfitCategorySelectionConfirmAlert) {
+                Button(pendingOutfitCategoryWillRemove ? "Remove" : "Apply", role: pendingOutfitCategoryWillRemove ? .destructive : nil) {
+                    let category = pendingOutfitCategoryWillRemove ? nil : pendingOutfitCategoryTarget
+                    if let message = applyCategoryToSelectedOutfits(category: category) {
+                        completeBulkSelectionAction(toast: message)
+                    }
+                    pendingOutfitCategoryTarget = nil
+                    pendingOutfitCategoryWillRemove = false
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingOutfitCategoryTarget = nil
+                    pendingOutfitCategoryWillRemove = false
+                }
+            } message: {
+                let name = pendingOutfitCategoryTarget?.name ?? "category"
+                Text(pendingOutfitCategoryWillRemove
+                     ? "Remove category “\(name)” from \(selectedOutfits.count) selected outfit(s)?"
+                     : "Set category “\(name)” on \(selectedOutfits.count) selected outfit(s)?")
             }
-        } message: {
-            let count = selectedItems.count
-            let itemPhrase = "\(count) selected item\(count == 1 ? "" : "s")"
-            Text(pendingFavoriteSelectionWillUnfavorite
-                 ? "Remove \(itemPhrase) from favorites?"
-                 : "Add \(itemPhrase) to favorites?")
+    }
+
+    // MARK: - Core Data fetch
+
+    /// One in-flight items fetch; bumps generation so stale results are dropped.
+    private func scheduleItemsFetch() {
+        itemFetchGeneration += 1
+        let generation = itemFetchGeneration
+        itemFetchTask?.cancel()
+        itemFetchTask = Task { @MainActor in
+            guard !Task.isCancelled, generation == itemFetchGeneration else { return }
+            fetchItems(generation: generation)
         }
-        .alert("Delete Items", isPresented: $showDeleteConfirmation) {
-            Button("Delete", role: .destructive) {
-                deleteSelectedItems()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Are you sure you want to delete \(selectedItems.count) item\(selectedItems.count == 1 ? "" : "s")? This action cannot be undone.")
-        }
-        .alert("Delete Outfits", isPresented: $showOutfitDeleteConfirmation) {
-            Button("Delete", role: .destructive) {
-                deleteSelectedOutfits()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Are you sure you want to delete \(selectedOutfits.count) outfit\(selectedOutfits.count == 1 ? "" : "s")? This action cannot be undone.")
-        }
-        .overlay(alignment: .top) {
-            if showDeletionToast {
-                Text(deletionToastMessage)
-                    .font(.subheadline)
-                    .foregroundColor(.white)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(.black.opacity(0.8))
-                    .clipShape(Capsule())
-                    .padding(.top, 10)
-                    .padding(.horizontal, 16)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
-        }
-        .navigationDestination(item: $selectedItemForNavigation) { item in
-            ItemDetailView(item: item)
-        }
-        .navigationDestination(item: $selectedOutfitForNavigation) { outfit in
-            OutfitDetailView(outfit: outfit)
-        }
-        .navigationDestination(isPresented: $shouldNavigateToItemAdd) {
-            ItemAddView(
-                parentContext: viewContext,
-                selectedWardrobe: selectedWardrobe,
-                queueCoordinator: queueCoordinator,
-                sessionAccountId: authSession.userId?.uuidString
-            )
-            .onDisappear {
-                handleItemAddViewDismiss()
-            }
-        }
-        .navigationDestination(isPresented: $shouldNavigateToItemAddDirect) {
-            ItemAddView(
-                parentContext: viewContext,
-                selectedWardrobe: selectedWardrobe,
-                sessionAccountId: authSession.userId?.uuidString
+    }
+
+    /// One in-flight outfits refresh (local fetch + pending Redress).
+    private func scheduleOutfitsRefresh(forceRedressRefresh: Bool = false) {
+        outfitRefreshGeneration += 1
+        let generation = outfitRefreshGeneration
+        outfitRefreshTask?.cancel()
+        outfitRefreshTask = Task { @MainActor in
+            guard !Task.isCancelled, generation == outfitRefreshGeneration else { return }
+            await performOutfitsRefresh(
+                generation: generation,
+                forceRedressRefresh: forceRedressRefresh
             )
         }
     }
 
-/*    private var ControlsBar: some View {
-        HStack {
-            NavigationLink(destination: FilterView(filterModel: filterModel)) {
-                Image(systemName: "line.3.horizontal.decrease.circle")
-            }
-            Spacer()
-            Image(systemName: "arrow.up.arrow.down")
-            Spacer()
-            Image(systemName: "square.grid.3x2")
-            Spacer()
-            NavigationLink(
-                destination: ItemAddView(parentContext: viewContext, selectedWardrobe: selectedWardrobe)
-            ) {
-                Image(systemName: "plus")
-            }
+    /// Coalesce rapid viewContext saves into a single items+outfits reload.
+    private func scheduleDebouncedContextSaveRefresh() {
+        contextSaveDebounceTask?.cancel()
+        contextSaveDebounceTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: Self.contextSaveDebounceNanos)
+            guard !Task.isCancelled else { return }
+            scheduleItemsFetch()
+            scheduleOutfitsRefresh()
         }
-      //  .font(.system(size: 20))
-        .padding(.horizontal)
-        .padding(.vertical, 6)
-        .background(.ultraThinMaterial)
-    }*/
-    
-    // MARK: - Core Data fetch
-    func fetchItems() {
+    }
+
+    private func scheduleDebouncedItemFetch() {
+        itemSearchDebounceTask?.cancel()
+        itemSearchDebounceTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: Self.searchDebounceNanos)
+            guard !Task.isCancelled else { return }
+            scheduleItemsFetch()
+        }
+    }
+
+    private func scheduleDebouncedOutfitFetch() {
+        outfitSearchDebounceTask?.cancel()
+        outfitSearchDebounceTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: Self.searchDebounceNanos)
+            guard !Task.isCancelled else { return }
+            scheduleOutfitsRefresh()
+        }
+    }
+
+    @MainActor
+    private func performOutfitsRefresh(generation: Int, forceRedressRefresh: Bool) async {
+        async let redressLoad: Void = loadPendingRedressSuggestionsIfNeeded(
+            forceRefresh: forceRedressRefresh,
+            applyFetchGeneration: generation
+        )
+        fetchOutfits(generation: generation)
+        await redressLoad
+        guard generation == outfitRefreshGeneration else { return }
+        await hydrateAcceptedRedressSuggesterProfilesIfNeeded()
+    }
+
+    func fetchItems(generation: Int? = nil) {
         // Require authentication - get userId
         guard let userId = authSession.userId?.uuidString else {
+            needsItemFetchRetry = true
             return
         }
         
@@ -531,96 +1039,15 @@ struct ItemGridView: View {
         // Add userId filter (CRITICAL: only show current user's items)
         let userIdPredicate = NSPredicate(format: "userId == %@", userId)
         subpredicates.append(userIdPredicate)
-        
-        // Add all filter predicates except wardrobe (we'll handle wardrobe separately)
-        if !filterModel.selectedColors.isEmpty {
-            let colorPredicate = NSPredicate(format: "ANY colors.name IN %@", Array(filterModel.selectedColors))
-            subpredicates.append(colorPredicate)
-        }
-        if !filterModel.selectedSeasons.isEmpty {
-            let seasonPredicate = NSPredicate(format: "ANY seasons.name IN %@", Array(filterModel.selectedSeasons))
-            subpredicates.append(seasonPredicate)
-        }
-        if let brand = filterModel.selectedBrand, let brandName = brand.name, !brandName.isEmpty {
-            let brandPredicate = NSPredicate(format: "brand.name ==[c] %@", brandName)
-            subpredicates.append(brandPredicate)
-        }
-        if let minPrice = filterModel.minPrice {
-            let minPricePredicate = NSPredicate(format: "price.amount >= %@", minPrice as NSDecimalNumber)
-            subpredicates.append(minPricePredicate)
-        }
-        if let maxPrice = filterModel.maxPrice {
-            let maxPricePredicate = NSPredicate(format: "price.amount <= %@", maxPrice as NSDecimalNumber)
-            subpredicates.append(maxPricePredicate)
-        }
-        if !filterModel.selectedTags.isEmpty {
-            let tagNames = filterModel.selectedTags.compactMap { $0.name }
-            let tagPredicate = NSPredicate(format: "ANY tags.name IN %@", tagNames)
-            subpredicates.append(tagPredicate)
-        }
-        // Handle category/subcategory filtering
-        if let subcategoryName = filterModel.selectedSubcategoryName, !subcategoryName.isEmpty,
-           let categoryName = filterModel.selectedCategoryName, !categoryName.isEmpty {
-            // Filter by subcategory (which also implies the category)
-            let subcategoryPredicate = NSPredicate(format: "subcategory.name ==[c] %@ AND category.name ==[c] %@", subcategoryName, categoryName)
-            subpredicates.append(subcategoryPredicate)
-        } else if let categoryName = filterModel.selectedCategoryName, !categoryName.isEmpty {
-            // Filter by category only
-            let categoryPredicate = NSPredicate(format: "category.name ==[c] %@", categoryName)
-            subpredicates.append(categoryPredicate)
-        }
-        if let sizeValue = filterModel.selectedSizeValue, !sizeValue.isEmpty {
-            let sizePredicate = NSPredicate(format: "size.value == %@", sizeValue)
-            subpredicates.append(sizePredicate)
-        }
-        if let location = filterModel.selectedLocation {
-            let locationPredicate = NSPredicate(format: "location == %@", location)
-            subpredicates.append(locationPredicate)
+
+        if let filter = makePredicate(for: filterModel, context: viewContext) {
+            subpredicates.append(filter)
         }
         
-        // Favorites-only filter
-        if filterModel.favoritesOnly {
-            let favoritesPredicate = NSPredicate(format: "isFavorite == YES")
-            subpredicates.append(favoritesPredicate)
-        }
-        
-        // Weight filter - only show items that can support user's weight
-        if filterModel.filterByWeight {
-            let repository = UserProfileRepository(context: viewContext)
-            let userWeightKg = repository.getWeightKg()
-            if userWeightKg > 0 {
-                // Show ONLY items where:
-                // - Item has weight set (weight != nil) AND
-                // - Item's max wearable weight <= user's weight
-                // Logic: Item weight = max wearable weight the item can support
-                // If item.weight > userWeight, the item CANNOT support the user (user is too heavy)
-                // If item.weight <= userWeight, the item CAN support the user
-                // Items without weight are EXCLUDED when filter is active
-                // Note: weight is stored in kg in Core Data
-                let weightExistsPredicate = NSPredicate(format: "weight != nil")
-                let weightSupportedPredicate = NSPredicate(format: "weight <= %@", userWeightKg as NSNumber)
-                
-                // weight != nil AND weight <= userWeight
-                let weightPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [weightExistsPredicate, weightSupportedPredicate])
-                
-                subpredicates.append(weightPredicate)
-                print("🔍 Weight filter active: showing ONLY items with max wearable weight <= \(String(format: "%.2f", userWeightKg)) kg (excluding items without weight)")
-                print("🔍 Weight predicate: \(weightPredicate)")
-            } else {
-                print("⚠️ Weight filter enabled but user weight not set in Profile")
-            }
-            // If user hasn't set their weight, don't filter (show all items)
-        }
-        
-        // Always scope to the wardrobe the user is viewing in the closet/wishlist picker.
-        // Do not replace with filterModel.selectedWardrobes alone — that shows items from other
-        // wardrobes (e.g. default) while the secondary closet tab is selected.
-        subpredicates.append(NSPredicate(format: "ANY wardrobes == %@", selectedWardrobe))
-        
-        // If the filter sheet also narrowed wardrobes, intersect so both apply.
-        let filteredWardrobes = filterModel.selectedWardrobes.filter { $0.type == wardrobeType }
-        if !filteredWardrobes.isEmpty {
-            subpredicates.append(NSPredicate(format: "ANY wardrobes IN %@", Array(filteredWardrobes)))
+        subpredicates.append(wardrobeScopePredicate())
+
+        if let searchPredicate = ItemFilterModel.itemSearchPredicate(query: filterModel.searchQuery) {
+            subpredicates.append(searchPredicate)
         }
         
         // Exclude drafts from item listings
@@ -647,19 +1074,14 @@ struct ItemGridView: View {
         
         do {
             let results = try viewContext.fetch(request)
-            let selectedWardrobeID = selectedWardrobe.objectID
-            let scoped = results.filter { item in
-                guard let wardrobes = item.wardrobes as? Set<Wardrobe> else { return false }
-                return wardrobes.contains { $0.objectID == selectedWardrobeID }
-            }
             
             // Debug: Log results if weight filter is active
             if filterModel.filterByWeight {
                 let repository = UserProfileRepository(context: viewContext)
                 let userWeightKg = repository.getWeightKg()
-                print("🔍 Fetched \(scoped.count) items with weight filter")
+                print("🔍 Fetched \(results.count) items with weight filter")
                 // Sample a few items to check their weights
-                for (index, item) in scoped.prefix(5).enumerated() {
+                for (index, item) in results.prefix(5).enumerated() {
                     if let weight = item.primitiveValue(forKey: "weight") as? Double {
                         print("🔍 Item \(index + 1): weight = \(String(format: "%.2f", weight)) kg (>= \(String(format: "%.2f", userWeightKg))? \(weight >= userWeightKg))")
                     } else {
@@ -667,26 +1089,124 @@ struct ItemGridView: View {
                     }
                 }
             }
-            
-            DispatchQueue.main.async {
-                self.closetItems = scoped
-                self.hasCompletedInitialItemsFetch = true
-            }
+
+            if let generation, generation != itemFetchGeneration { return }
+            closetItems = results
+            hasCompletedInitialItemsFetch = true
+            needsItemFetchRetry = false
         } catch {
             print("❌ Failed to fetch items: \(error)")
             if let nsError = error as NSError? {
                 print("❌ Error details: \(nsError.userInfo)")
             }
-            DispatchQueue.main.async {
-                self.closetItems = []
-                self.hasCompletedInitialItemsFetch = true
-            }
+            if let generation, generation != itemFetchGeneration { return }
+            // Keep prior results; retry when the scene becomes active.
+            needsItemFetchRetry = true
         }
     }
-    
-    func fetchOutfits() {
+
+    private func wardrobeScopePredicate() -> NSPredicate {
+        ItemFilterModel.wardrobeMembershipPredicate(
+            viewingWardrobe: selectedWardrobe,
+            wardrobeType: wardrobeType,
+            filterModel: filterModel
+        )
+    }
+
+    @MainActor
+    private func hydrateAcceptedRedressSuggesterProfilesIfNeeded() async {
+        guard appCapabilities.enablesFriendsAndSharing else { return }
+        let needsHydration: [Outfit] = outfits.compactMap { outfit -> Outfit? in
+            guard outfit.isRedressOutfit, outfit.id != nil else { return nil }
+            let missingUserId = outfit.redressSuggesterUserId == nil
+            let missingAvatar = (outfit.redressSuggesterAvatarUrl ?? "").isEmpty
+            let missingUsername = (outfit.redressSuggesterUsername ?? "").isEmpty
+            return (missingUserId || missingAvatar || missingUsername) ? outfit : nil
+        }
+        guard !needsHydration.isEmpty else { return }
+
+        var changed = false
+        for outfit in needsHydration.prefix(25) {
+            guard let outfitId = outfit.id,
+                  let context = await supabaseService.fetchOutfitRedressSuggestionContext(suggestionId: outfitId)
+            else { continue }
+            if outfit.persistRedressHistoryIfNeeded(from: context) {
+                changed = true
+            }
+        }
+        if changed {
+            try? viewContext.save()
+        }
+    }
+
+    @MainActor
+    private func loadPendingRedressSuggestionsIfNeeded(
+        forceRefresh: Bool = false,
+        applyFetchGeneration: Int? = nil
+    ) async {
+        guard appCapabilities.enablesFriendsAndSharing,
+              let wardrobeId = selectedWardrobe.id else {
+            pendingRedressOutfitIds = []
+            profilePendingSuggestions = []
+            hasCompletedInitialRedressFetch = true
+            isLoadingRedressSuggestions = false
+            return
+        }
+
+        // Avoid stacking duplicate in-flight loads unless a refresh was requested.
+        if isLoadingRedressSuggestions, !forceRefresh { return }
+
+        isLoadingRedressSuggestions = true
+        defer { isLoadingRedressSuggestions = false }
+
+        do {
+            let suggestions = try await supabaseService.fetchRecipientOutfitSuggestions(
+                wardrobeId: wardrobeId,
+                forceRefresh: forceRefresh
+            )
+            // Pending suggestion IDs match materialized outfit IDs when previewed.
+            pendingRedressOutfitIds = Set(suggestions.map(\.id))
+            profilePendingSuggestions = showsProfilePendingRedressSuggestions ? suggestions : []
+            hasCompletedInitialRedressFetch = true
+            fetchOutfits(generation: applyFetchGeneration)
+        } catch {
+            print("⚠️ Failed to load pending Redress suggestions: \(error.localizedDescription)")
+            // Keep prior pending IDs / suggestions; still refresh local outfits for this generation.
+            hasCompletedInitialRedressFetch = true
+            fetchOutfits(generation: applyFetchGeneration)
+        }
+    }
+
+    /// Pending Redress suggestions for the active filter, respecting search / attribute filters / sort.
+    private var displayedPendingRedressSuggestions: [VisibleOutfitSuggestion] {
+        guard isRedressFilterActive, showsProfilePendingRedressSuggestions else { return [] }
+        // Attribute filters only apply to saved outfits; pending suggestions have no category/tags.
+        if outfitFilterModel.selectedCategory != nil
+            || !outfitFilterModel.selectedTags.isEmpty
+            || outfitFilterModel.filterTagsNotSet
+            || outfitFilterModel.favoritesOnly {
+            return []
+        }
+        var list = profilePendingSuggestions
+        let query = outfitFilterModel.trimmedSearchQuery
+        if !query.isEmpty {
+            list = list.filter { suggestion in
+                (suggestion.name ?? "").localizedCaseInsensitiveContains(query)
+                    || (suggestion.suggesterUsername ?? "").localizedCaseInsensitiveContains(query)
+                    || (suggestion.suggesterDisplayName ?? "").localizedCaseInsensitiveContains(query)
+            }
+        }
+        // RPC returns newest-first; reverse for oldest-first.
+        if outfitFilterModel.sortOrder == .oldestFirst {
+            list.reverse()
+        }
+        return list
+    }
+
+    func fetchOutfits(generation: Int? = nil) {
         // Require authentication - get userId
         guard let userId = authSession.userId?.uuidString else {
+            needsOutfitFetchRetry = true
             return
         }
         
@@ -702,53 +1222,44 @@ struct ItemGridView: View {
         let userIdPredicate = NSPredicate(format: "userId == %@", userId)
         
         // Combine predicates
-        let basePredicates = [draftPredicate, softDeleteFilter, userIdPredicate]
-        let finalPredicate: NSPredicate
+        var outfitSubpredicates = [draftPredicate, softDeleteFilter, userIdPredicate]
         if let filter = filterPredicate {
-            finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: basePredicates + [filter])
-        } else {
-            finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: basePredicates)
+            outfitSubpredicates.append(filter)
         }
+        if let searchPredicate = OutfitFilterModel.outfitSearchPredicate(query: outfitFilterModel.searchQuery) {
+            outfitSubpredicates.append(searchPredicate)
+        }
+        let finalPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: outfitSubpredicates)
         
         request.predicate = finalPredicate
 
         do {
             let allOutfits = try viewContext.fetch(request)
-            // Filter by wardrobe
-            let isWishlist = selectedWardrobe.type?.lowercased() == "wishlist"
             let filtered = allOutfits.filter { outfit in
-                guard let items = outfit.items as? Set<Item>, !items.isEmpty else { return false }
-                if isWishlist {
-                    // Wishlist: at least 1 item from this wardrobe; all wishlist items must be from it; closet items allowed
-                    let hasItemFromThisWishlist = items.contains { item in
-                        guard let wardrobes = item.wardrobes as? Set<Wardrobe> else { return false }
-                        return wardrobes.contains(selectedWardrobe)
+                guard outfit.isVisible(in: selectedWardrobe) else { return false }
+                if isRedressFilterActive {
+                    // Accepted Redress only (pending shown separately from remote suggestions).
+                    guard outfit.isRedressOutfit else { return false }
+                    if let outfitId = outfit.id, pendingRedressOutfitIds.contains(outfitId) {
+                        return false
                     }
-                    guard hasItemFromThisWishlist else { return false }
-                    return items.allSatisfy { item in
-                        guard let wardrobes = item.wardrobes as? Set<Wardrobe> else { return false }
-                        let wishlistWardrobes = wardrobes.filter { $0.type?.lowercased() == "wishlist" }
-                        if wishlistWardrobes.isEmpty { return true } // Closet item, allowed
-                        return wishlistWardrobes.contains(selectedWardrobe)
-                    }
-                } else {
-                    // Closet: every item must be in the selected wardrobe
-                    return items.allSatisfy { item in
-                        guard let wardrobes = item.wardrobes as? Set<Wardrobe> else { return false }
-                        return wardrobes.contains(selectedWardrobe)
-                    }
+                    return true
                 }
+                // Default grid: own outfits + accepted Redress; hide still-pending suggestions.
+                if let outfitId = outfit.id, pendingRedressOutfitIds.contains(outfitId) {
+                    return false
+                }
+                return true
             }
-            DispatchQueue.main.async {
-                self.outfits = filtered
-                self.hasCompletedInitialOutfitsFetch = true
-            }
+            if let generation, generation != outfitRefreshGeneration { return }
+            outfits = filtered
+            hasCompletedInitialOutfitsFetch = true
+            needsOutfitFetchRetry = false
         } catch {
             print("Failed to fetch outfits: \(error)")
-            DispatchQueue.main.async {
-                self.outfits = []
-                self.hasCompletedInitialOutfitsFetch = true
-            }
+            if let generation, generation != outfitRefreshGeneration { return }
+            // Keep prior results; retry when the scene becomes active.
+            needsOutfitFetchRetry = true
         }
     }
 
@@ -774,13 +1285,13 @@ struct ItemGridView: View {
         }
 
         wardrobe.addToItems(item)   // <-- attach to the correct wardrobe
+        ItemLifecycleDates.applyOnSave(for: item, at: now)
 
         do {
             try viewContext.save()
             print("✅ New item saved in \(wardrobe.name ?? "unknown wardrobe")")
-            path.append(item)
             // Refresh items after adding new one
-            fetchItems()
+            scheduleItemsFetch()
             
             // Trigger automatic sync for the new item
             SyncService.shared.syncItemIfNeeded(item)
@@ -789,78 +1300,73 @@ struct ItemGridView: View {
         }
     }
     
-    private func closetContentLoadingView(syncStatus: String?) -> some View {
-        VStack(spacing: 12) {
-            ProgressView()
-            if let syncStatus, !syncStatus.isEmpty {
-                Text(syncStatus)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    private var closetContentLoadingView: some View {
+        ProgressView()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(minHeight: usesProfileUnifiedScroll ? 240 : 0)
     }
 
     private var itemsTab: some View {
-        Group {
+        ScrollView(showsIndicators: false) {
             if isItemsTabLoading {
-                closetContentLoadingView(
-                    syncStatus: appCapabilities.enablesCloudSync && syncService.isSyncing ? syncService.syncStatus : nil
-                )
+                closetContentLoadingView
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: 240)
             } else if closetItems.isEmpty {
                 EmptyItemStateView(wardrobe: selectedWardrobe)
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: 240)
             } else {
-                ScrollView(showsIndicators: false) {
-                    LazyVGrid(columns: gridColumns, spacing: 2) {
-                        ForEach(closetItems, id: \.objectID) { item in
-                            ItemView(item: item)
-                                .overlay(
-                                    // Transparent white overlay when in selection mode
-                                    Group {
-                                        if isInSelectionMode && selectedItems.contains(item) {
-                                            Rectangle()
-                                                .fill(Color.white.opacity(0.35))
-                                        }
-                                    }
-                                )
-                                .overlay(
-                                    // Show selection checkmark when in selection mode (on top of white overlay)
-                                    Group {
-                                        if isInSelectionMode && selectedItems.contains(item) {
-                                            VStack {
-                                                Spacer()
-                                                HStack {
-                                                    Spacer()
-                                                    Image(systemName: "checkmark.circle")
-                                                        .foregroundColor(.white)
-                                                        .background(
-                                                            Circle()
-                                                                .fill(Color.blue)
-                                                                .padding(2)
-                                                        )
-                                                        .font(.system(size: 22))
-                                                        .shadow(radius: 1)
-                                                        .padding(8)
-                                                }
-                                            }
-                                        }
-                                    }
-                                )
-                                .contentShape(Rectangle()) // Make entire area tappable
-                                .onTapGesture {
-                                    print("📱 Tap gesture detected on item: \(item.id?.uuidString ?? "no-id")")
-                                    handleTap(for: item)
-                                }
-                                .onLongPressGesture(minimumDuration: 0.5) {
-                                    handleLongPress(for: item)
-                                }
-                        }
-                    }
-                    .padding(.top, 2)
-                }
+                itemsLazyGrid
             }
         }
+    }
+
+    private var itemsLazyGrid: some View {
+        LazyVGrid(columns: gridColumns, spacing: 2) {
+            ForEach(closetItems, id: \.objectID) { item in
+                ItemView(item: item, showsFavoriteOverlay: !isReadOnly, usesGridThumbnailOnly: true)
+                    .overlay(
+                        Group {
+                            if isInSelectionMode && selectedItems.contains(item) {
+                                Rectangle()
+                                    .fill(Color.white.opacity(0.35))
+                            }
+                        }
+                    )
+                    .overlay(
+                        Group {
+                            if isInSelectionMode && selectedItems.contains(item) {
+                                VStack {
+                                    Spacer()
+                                    HStack {
+                                        Spacer()
+                                        Image(systemName: "checkmark.circle")
+                                            .foregroundColor(.white)
+                                            .background(
+                                                Circle()
+                                                    .fill(Color.blue)
+                                                    .padding(2)
+                                            )
+                                            .font(.system(size: 22))
+                                            .shadow(radius: 1)
+                                            .padding(8)
+                                    }
+                                }
+                            }
+                        }
+                    )
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        print("📱 Tap gesture detected on item: \(item.id?.uuidString ?? "no-id")")
+                        handleTap(for: item)
+                    }
+                    .onLongPressGesture(minimumDuration: 0.5) {
+                        handleLongPress(for: item)
+                    }
+            }
+        }
+        .padding(.top, 2)
     }
     
     // MARK: - Gesture Handlers
@@ -885,12 +1391,18 @@ struct ItemGridView: View {
             }
         } else {
             // Navigate to detail view
-            print("📱 Navigating to ItemDetailView for item: \(item.id?.uuidString ?? "no-id")")
-            selectedItemForNavigation = item
+            if isReadOnly {
+                openProfileReadOnlyItemDetail(item)
+            } else {
+                print("📱 Navigating to ItemDetailView for item: \(item.id?.uuidString ?? "no-id")")
+                selectedItemURIForNavigation = item.objectID.uriRepresentation().absoluteString
+            }
         }
     }
     
     private func handleLongPress(for item: Item) {
+        guard !isReadOnly else { return }
+
         // Haptic feedback
         let generator = UIImpactFeedbackGenerator(style: .medium)
         generator.impactOccurred()
@@ -904,7 +1416,84 @@ struct ItemGridView: View {
     }
     
     // MARK: - Outfit Gesture Handlers
-    
+
+    private func managedItem(forURI uriString: String) -> Item? {
+        guard let url = URL(string: uriString),
+              let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url),
+              let item = try? viewContext.existingObject(with: objectID) as? Item,
+              item.isSoftDeleted != true else {
+            return nil
+        }
+        return item
+    }
+
+    private func managedOutfit(forURI uriString: String) -> Outfit? {
+        guard let url = URL(string: uriString),
+              let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url),
+              let outfit = try? viewContext.existingObject(with: objectID) as? Outfit,
+              outfit.isSoftDeleted != true else {
+            return nil
+        }
+        return outfit
+    }
+
+    private func openProfileReadOnlyItemDetail(_ item: Item) {
+        guard let ownerUserId = authSession.userId,
+              let wardrobeId = selectedWardrobe.id,
+              let itemId = item.id else { return }
+        let photos = Array((item.photos as? Set<Photo>) ?? [])
+        // Prefer typed front (same as ItemDetailView.getImage), then legacy primary, then any.
+        let frontPhoto =
+            photos.first(where: { ($0.type ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "front" })
+            ?? photos.first(where: {
+                $0.isPrimary && ($0.type ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            })
+            ?? photos.first(where: { $0.isPrimary })
+            ?? photos.first
+        let type = wardrobeType.lowercased() == "wishlist" ? "wishlist" : "closet"
+        tabBarHideState.shouldHideTabBar = true
+        profileReadOnlyItemDestination = ProfileReadOnlyItemDestination(
+            ownerUserId: ownerUserId,
+            wardrobeId: wardrobeId,
+            item: VisibleWardrobeItem(
+                id: itemId,
+                name: item.name,
+                thumbnailUrl: frontPhoto?.thumbnailUrl ?? frontPhoto?.imageUrl,
+                imageUrl: frontPhoto?.imageUrl,
+                createdAt: item.createdAt ?? item.timestamp ?? item.purchasedAt ?? item.wishedAt
+            ),
+            wardrobeType: type
+        )
+    }
+
+    private func openProfileReadOnlyOutfitDetail(_ outfit: Outfit) {
+        guard let ownerUserId = authSession.userId,
+              let wardrobeId = selectedWardrobe.id,
+              let outfitId = outfit.id else { return }
+        let type = wardrobeType.lowercased() == "wishlist" ? "wishlist" : "closet"
+        tabBarHideState.shouldHideTabBar = true
+        profileReadOnlyOutfitDestination = ProfileReadOnlyOutfitDestination(
+            ownerUserId: ownerUserId,
+            wardrobeId: wardrobeId,
+            outfit: VisibleWardrobeOutfit(
+                id: outfitId,
+                name: outfit.name,
+                imageUrl: nil,
+                wornImageUrl: nil,
+                createdAt: outfit.createdAt ?? outfit.timestamp
+            ),
+            wardrobeType: type
+        )
+    }
+
+    private func ownProfileForReadOnlyDetail(userId: UUID) -> PublicUserProfile {
+        PublicUserProfile(
+            userId: userId,
+            username: supabaseService.cachedUsername ?? "",
+            displayName: nil
+        )
+    }
+
     private func handleOutfitTap(for outfit: Outfit) {
         if isInSelectionMode {
             // Toggle selection
@@ -920,11 +1509,16 @@ struct ItemGridView: View {
             }
         } else {
             // Navigate to detail view
-            selectedOutfitForNavigation = outfit
+            if isReadOnly {
+                openProfileReadOnlyOutfitDetail(outfit)
+            } else {
+                selectedOutfitURIForNavigation = outfit.objectID.uriRepresentation().absoluteString
+            }
         }
     }
     
     private func handleOutfitLongPress(for outfit: Outfit) {
+        guard !isReadOnly else { return }
         // Haptic feedback
         let generator = UIImpactFeedbackGenerator(style: .medium)
         generator.impactOccurred()
@@ -937,6 +1531,69 @@ struct ItemGridView: View {
         selectedOutfits.insert(outfit)
     }
     
+    @ViewBuilder
+    private var tabActionsBar: some View {
+        if selectedTab == "Items" {
+            ItemFilterSortSearchBar(
+                sortOrder: $filterModel.sortOrder,
+                searchQuery: $filterModel.searchQuery,
+                isSearchActive: $isActionBarSearchActive,
+                isSearchFocused: $isActionBarSearchFocused,
+                onFilter: { onOpenItemFilter() },
+                onDismissSearch: { dismissActionBarSearch(clearQueries: true) },
+                onPack: showsPackAction ? {
+                    tabBarHideState.shouldHideTabBar = true
+                    packingNavigation = .packing
+                } : nil,
+                activeFilterCount: filterModel.activeFilterCount,
+                barHeight: Self.tabActionsBarHeight
+            )
+        } else if selectedTab == "Outfits" {
+            ItemFilterSortSearchBar(
+                sortOrder: $outfitFilterModel.sortOrder,
+                searchQuery: $outfitFilterModel.searchQuery,
+                isSearchActive: $isActionBarSearchActive,
+                isSearchFocused: $isActionBarSearchFocused,
+                onFilter: { onOpenOutfitFilter() },
+                onDismissSearch: { dismissActionBarSearch(clearQueries: true) },
+                onRedress: showsRedressFilterAction
+                    ? {
+                        isRedressFilterActive.toggle()
+                        scheduleOutfitsRefresh(forceRedressRefresh: isRedressFilterActive)
+                    }
+                    : nil,
+                isRedressFilterActive: isRedressFilterActive,
+                activeFilterCount: outfitFilterModel.activeFilterCount,
+                searchPlaceholder: "Name, category, tag",
+                barHeight: Self.tabActionsBarHeight
+            )
+        }
+    }
+
+    private var showsPackAction: Bool {
+        !isReadOnly && wardrobeType.lowercased() != "wishlist"
+    }
+
+    /// Closet + Profile Closet outfits: Redress filter chip (not Wishlist).
+    /// Shown even when the outfits list is empty; Profile’s grid is read-only but still includes Redress.
+    private var showsRedressFilterAction: Bool {
+        guard appCapabilities.enablesFriendsAndSharing else { return false }
+        guard wardrobeType.lowercased() != "wishlist" else { return false }
+        if showsProfilePendingRedressSuggestions { return true }
+        return !isReadOnly
+    }
+
+    private func dismissActionBarSearch(clearQueries: Bool) {
+        itemSearchDebounceTask?.cancel()
+        outfitSearchDebounceTask?.cancel()
+        if clearQueries {
+            filterModel.searchQuery = ""
+            outfitFilterModel.searchQuery = ""
+        }
+        isActionBarSearchActive = false
+        isActionBarSearchFocused = false
+    }
+
     // MARK: - Toolbar Content
     
     @ViewBuilder
@@ -990,20 +1647,9 @@ struct ItemGridView: View {
     
     @ViewBuilder
     private func nonSelectionModeLeadingToolbar() -> some View {
-        if selectedTab == "Items" {
-            NavigationLink(destination: ItemFilterView(filterModel: filterModel, wardrobeType: wardrobeType)) {
-                Image(systemName: "line.3.horizontal.decrease.circle")
-            }
-        } else {
-            NavigationLink(destination: OutfitFilterView(filterModel: outfitFilterModel)) {
-                Image(systemName: "line.3.horizontal.decrease.circle")
-            }
-        }
-        if appCapabilities.enablesFriendsAndSharing {
-            Button {
-                showSharedUsersSheet = true
-            } label: {
-                Image(systemName: "person.2")
+        if !isReadOnly {
+            if appCapabilities.enablesCloudSync {
+                wardrobeVisibilityToolbarMenu
             }
         }
     }
@@ -1034,14 +1680,45 @@ struct ItemGridView: View {
     
     @ViewBuilder
     private func nonSelectionModeTrailingToolbar() -> some View {
-        HStack(spacing: 16) {
-            NavigationLink(destination: TravelPackingView(selectedWardrobe: selectedWardrobe, wardrobeType: wardrobeType)) {
-                Image(systemName: "airplane.circle")
+        if isReadOnly {
+            EmptyView()
+        } else {
+            nonSelectionModeAddToolbarButton
+        }
+    }
+
+    private var wardrobeVisibilityToolbarMenu: some View {
+        Menu {
+            ForEach(WardrobeVisibility.allCases) { option in
+                Button {
+                    updateSelectedWardrobeVisibility(option)
+                } label: {
+                    Label(option.menuLabel, systemImage: option.iconName)
+                }
             }
-            if selectedTab == "Items" {
+        } label: {
+            Image(systemName: selectedWardrobe.wardrobeVisibility.iconName)
+        }
+        .id(wardrobeVisibilityRevision)
+        .accessibilityLabel("Wardrobe visibility")
+    }
+
+    private func updateSelectedWardrobeVisibility(_ visibility: WardrobeVisibility) {
+        WardrobeVisibilityPersistence.apply(
+            visibility,
+            to: selectedWardrobe,
+            userId: authSession.userId?.uuidString
+        )
+        WardrobeVisibilityPersistence.saveAndSync(selectedWardrobe, in: viewContext)
+        wardrobeVisibilityRevision += 1
+    }
+
+    @ViewBuilder
+    private var nonSelectionModeAddToolbarButton: some View {
+        if selectedTab == "Items" {
                 if selectedWardrobe.isDefault == true {
                     Button {
-                        shouldNavigateToItemAddDirect = true
+                        itemAddNavigation = .direct
                     } label: {
                         Image(systemName: "plus")
                     }
@@ -1050,10 +1727,14 @@ struct ItemGridView: View {
                         Button {
                             showAddFromClosetSheet = true
                         } label: {
-                            Label("Add from Closet", systemImage: "hanger")
+                            let isWishlist = wardrobeType.lowercased() == "wishlist"
+                            Label(
+                                isWishlist ? "Add from Wishlist" : "Add from Closet",
+                                systemImage: isWishlist ? "heart" : "hanger"
+                            )
                         }
                         Button {
-                            shouldNavigateToItemAddDirect = true
+                            itemAddNavigation = .direct
                         } label: {
                             Label("Add Item", systemImage: "plus")
                         }
@@ -1062,17 +1743,12 @@ struct ItemGridView: View {
                     }
                 }
             } else {
-                NavigationLink(
-                    destination: OutfitAddView(
-                        wardrobeType: wardrobeType,
-                        initialWardrobe: selectedWardrobe,
-                        lockWardrobeSource: selectedWardrobe.isDefault != true
-                    )
-                ) {
+                Button {
+                    outfitAddNavigation = OutfitAddNavigation(sessionID: UUID())
+                } label: {
                     Image(systemName: "plus")
                 }
             }
-        }
     }
     
     // MARK: - Cropper Cancel Handler
@@ -1112,9 +1788,6 @@ struct ItemGridView: View {
     // MARK: - ItemAddView Dismiss Handler
     
     private func handleItemAddViewDismiss() {
-        // Reset navigation state
-        shouldNavigateToItemAdd = false
-        
         // Check if there's a current image available
         if queueCoordinator.isQueueActive {
             // If hasMore is false AND we have a cropped image, we just processed the last image
@@ -1231,257 +1904,6 @@ struct ItemGridView: View {
         .presentationDetents([.medium, .large])
     }
     
-    @ViewBuilder
-    private func sharedUsersSheet() -> some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                HStack {
-                    TextField("Search friends", text: $sharedUsersSearchText)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 8)
-                
-                Group {
-                    if isSearchingSharedUsers {
-                        ProgressView("Searching…")
-                            .padding()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else if isLoadingConnectedFriends && sharedUsersSearchText.isEmpty {
-                        ProgressView("Loading friends…")
-                            .padding()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else if let error = sharedUsersError {
-                        Text(error)
-                            .foregroundColor(.red)
-                            .font(.caption)
-                            .padding()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else if sharedUserResults.isEmpty && !sharedUsersSearchText.isEmpty {
-                        Text("No users found for “\(sharedUsersSearchText)”")
-                            .foregroundColor(.secondary)
-                            .padding()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else if sharedUserResults.isEmpty && connectedFriends.isEmpty {
-                        Text("Search by username to find other users.")
-                            .foregroundColor(.secondary)
-                            .padding()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        List(sharedUsersSearchText.isEmpty ? connectedFriends : sharedUserResults) { profile in
-                            HStack(spacing: 12) {
-                                Button {
-                                    // Placeholder until public profile view exists
-                                } label: {
-                                    HStack(spacing: 12) {
-                                        PublicUserProfileAvatarView(profile: profile, size: 44)
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(profile.username)
-                                                .font(.headline)
-                                                .foregroundStyle(.primary)
-                                            if let name = profile.displayName, !name.isEmpty {
-                                                Text(name)
-                                                    .font(.subheadline)
-                                                    .foregroundStyle(.secondary)
-                                            }
-                                        }
-                                        Spacer(minLength: 0)
-                                    }
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                if sharedUsersSearchText.isEmpty || friendUserIds.contains(profile.userId) {
-                                    Button {
-                                        unfriendTargetUserId = profile.userId
-                                        showUnfriendAlert = true
-                                    } label: {
-                                        HStack(spacing: 6) {
-                                            Text("Friends")
-                                            Image(systemName: "checkmark")
-                                        }
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .font(.caption)
-                                } else if pendingFriendRequestUserIds.contains(profile.userId) {
-                                    Button("Request Sent") {
-                                        Task {
-                                            do {
-                                                try await supabaseService.cancelFriendRequest(toUserId: profile.userId)
-                                                await MainActor.run {
-                                                    pendingFriendRequestUserIds.remove(profile.userId)
-                                                }
-                                            } catch {
-                                                print("Failed to cancel friend request: \(error.localizedDescription)")
-                                            }
-                                        }
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .font(.caption)
-                                } else {
-                                    Button("Add Friend") {
-                                        Task {
-                                            do {
-                                                try await supabaseService.sendFriendRequest(
-                                                    toUserId: profile.userId,
-                                                    toUsername: profile.username,
-                                                    toDisplayName: profile.displayName
-                                                )
-                                                await MainActor.run {
-                                                    pendingFriendRequestUserIds.insert(profile.userId)
-                                                }
-                                            } catch {
-                                                print("Failed to send friend request: \(error.localizedDescription)")
-                                            }
-                                        }
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .font(.caption)
-                                }
-                            }
-                        }
-                        .listStyle(.plain)
-                        .scrollContentBackground(.hidden)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .navigationTitle("Shared Users")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(Color(UIColor.secondarySystemBackground), for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .task(id: sharedUsersSearchText) {
-                await searchSharedUsers()
-            }
-            .task(id: showSharedUsersSheet) {
-                if showSharedUsersSheet {
-                    await loadConnectedFriends()
-                    await refreshFriendshipBadges()
-                }
-            }
-            .alert("Unfriend?", isPresented: $showUnfriendAlert) {
-                Button("Cancel", role: .cancel) {}
-                Button("Unfriend", role: .destructive) {
-                    guard let targetId = unfriendTargetUserId else { return }
-                    Task {
-                        do {
-                            try await supabaseService.unfriend(userId: targetId)
-                            await MainActor.run {
-                                friendUserIds.remove(targetId)
-                                connectedFriends.removeAll { $0.userId == targetId }
-                            }
-                            supabaseService.applyFriendCountDelta(-1)
-                        } catch {
-                            print("Failed to unfriend: \(error.localizedDescription)")
-                        }
-                    }
-                }
-            } message: {
-                Text("Are you sure you want to remove this friend?")
-            }
-        }
-        .presentationDetents([.medium, .large])
-    }
-
-    private func searchSharedUsers() async {
-        let query = sharedUsersSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if query.isEmpty {
-            sharedUserResults = []
-            sharedUsersError = nil
-            return
-        }
-        
-        isSearchingSharedUsers = true
-        sharedUsersError = nil
-        
-        do {
-            // simple debounce
-            try await Task.sleep(nanoseconds: 250_000_000)
-            guard !Task.isCancelled else { return }
-            
-            let results = try await supabaseService.searchUsers(byUsername: query)
-            let currentUserId = authSession.userId
-            let filtered = results.filter { profile in
-                guard let currentUserId = currentUserId else { return true }
-                return profile.userId != currentUserId
-            }
-            await MainActor.run {
-                sharedUserResults = filtered
-            }
-            await refreshFriendshipBadges()
-        } catch {
-            await MainActor.run {
-                sharedUsersError = error.localizedDescription
-                sharedUserResults = []
-            }
-        }
-        
-        await MainActor.run {
-            isSearchingSharedUsers = false
-        }
-    }
-
-    private func loadConnectedFriends() async {
-        guard authSession.isAuthenticated else {
-            await MainActor.run { connectedFriends = []; isLoadingConnectedFriends = false }
-            return
-        }
-        await MainActor.run { isLoadingConnectedFriends = true }
-        defer { Task { @MainActor in isLoadingConnectedFriends = false } }
-        do {
-            let friends = try await supabaseService.fetchFriends()
-            await MainActor.run { connectedFriends = friends }
-        } catch {
-            await MainActor.run { connectedFriends = [] }
-        }
-    }
-
-    private func refreshFriendshipBadges() async {
-        guard authSession.isAuthenticated else {
-            await MainActor.run {
-                friendUserIds = []
-            }
-            return
-        }
-        
-        do {
-            let rows = try await supabaseService.fetchFriendshipsForCurrentUser()
-            let currentId = authSession.userId
-            let resultIds = Set(sharedUserResults.map(\.userId))
-            
-            var accepted: Set<UUID> = []
-            var outgoingPending: Set<UUID> = []
-            
-            for row in rows {
-                guard let currentId else { continue }
-                let otherId: UUID
-                if row.user_id == currentId {
-                    otherId = row.friend_user_id
-                } else if row.friend_user_id == currentId {
-                    otherId = row.user_id
-                } else {
-                    continue
-                }
-                
-                guard resultIds.contains(otherId) else { continue }
-                
-                if row.status == "accepted" {
-                    accepted.insert(otherId)
-                } else if row.status == "pending", row.user_id == currentId {
-                    // only show outgoing pending as "Request Sent"
-                    outgoingPending.insert(otherId)
-                }
-            }
-            
-            await MainActor.run {
-                friendUserIds = accepted
-                pendingFriendRequestUserIds.formUnion(outgoingPending)
-            }
-        } catch {
-            print("Failed to refresh friendships: \(error.localizedDescription)")
-        }
-    }
-    
     private func areAllSelectedItemsInWardrobe(_ wardrobe: Wardrobe) -> Bool {
         guard !selectedItems.isEmpty else { return false }
         
@@ -1585,6 +2007,18 @@ struct ItemGridView: View {
         return selectedItemsAllFavorited ? "heart.fill" : "heart"
     }
 
+    private var selectedOutfitsAllFavorited: Bool {
+        _ = favoriteToolbarTick
+        guard !selectedOutfits.isEmpty else { return false }
+        return selectedOutfits.allSatisfy(\.isFavorite)
+    }
+
+    private var selectedOutfitsFavoriteToolbarIcon: String {
+        _ = favoriteToolbarTick
+        guard !selectedOutfits.isEmpty else { return "heart" }
+        return selectedOutfitsAllFavorited ? "heart.fill" : "heart"
+    }
+
     @discardableResult
     private func applyFavoriteToSelectedItems(favorite: Bool) -> String? {
         guard !selectedItems.isEmpty else { return nil }
@@ -1608,6 +2042,33 @@ struct ItemGridView: View {
             return "Removed \(selectionCount) item\(selectionCount == 1 ? "" : "s") from favorites."
         } catch {
             print("❌ Failed to update favorites: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    @discardableResult
+    private func applyFavoriteToSelectedOutfits(favorite: Bool) -> String? {
+        guard !selectedOutfits.isEmpty else { return nil }
+        let selectionCount = selectedOutfits.count
+        var outfitsUpdated = 0
+        for outfit in selectedOutfits where outfit.isFavorite != favorite {
+            outfit.isFavorite = favorite
+            setUpdatedAt(outfit)
+            outfitsUpdated += 1
+        }
+        do {
+            try viewContext.save()
+            for outfit in selectedOutfits {
+                SyncService.shared.syncOutfitIfNeeded(outfit)
+            }
+            favoriteToolbarTick += 1
+            print("✅ \(favorite ? "Favorited" : "Unfavorited") \(outfitsUpdated) outfits")
+            if favorite {
+                return "Added \(selectionCount) outfit\(selectionCount == 1 ? "" : "s") to favorites."
+            }
+            return "Removed \(selectionCount) outfit\(selectionCount == 1 ? "" : "s") from favorites."
+        } catch {
+            print("❌ Failed to update outfit favorites: \(error.localizedDescription)")
             return nil
         }
     }
@@ -1699,7 +2160,7 @@ struct ItemGridView: View {
             // Exit selection mode and refresh items after deletion
             isInSelectionMode = false
             selectedItems.removeAll()
-            fetchItems()
+            scheduleItemsFetch()
         } catch {
             print("❌ Failed to delete items: \(error.localizedDescription)")
         }
@@ -1722,7 +2183,11 @@ struct ItemGridView: View {
         showColorSelectionSheet = false
         showCategorySelectionSheet = false
         isInSelectionMode = false
-        selectedItems.removeAll()
+        if selectedTab == "Items" {
+            selectedItems.removeAll()
+        } else {
+            selectedOutfits.removeAll()
+        }
         showToast(message)
     }
 
@@ -1731,19 +2196,23 @@ struct ItemGridView: View {
     private func deleteSelectedOutfits() {
         guard !selectedOutfits.isEmpty else { return }
         
-        // Soft delete all selected outfits (for sync)
-        for outfit in selectedOutfits {
+        let outfitsToDelete = Array(selectedOutfits)
+        for outfit in outfitsToDelete {
             softDelete(outfit)
         }
         
         do {
             try viewContext.save()
-            print("✅ Deleted \(selectedOutfits.count) outfits")
+            print("✅ Deleted \(outfitsToDelete.count) outfits")
+            
+            for outfit in outfitsToDelete {
+                SyncService.shared.syncOutfitIfNeeded(outfit)
+            }
             
             // Exit selection mode and refresh outfits after deletion
             isInSelectionMode = false
             selectedOutfits.removeAll()
-            fetchOutfits()
+            scheduleOutfitsRefresh()
         } catch {
             print("❌ Failed to delete outfits: \(error.localizedDescription)")
         }
@@ -1770,7 +2239,7 @@ struct ItemGridView: View {
     
     @ViewBuilder
     private func tagSelectionSheet() -> some View {
-        let tagsForContext = fetchAllTags()
+        let tagsForContext = selectedTab == "Outfits" ? fetchAllOutfitTags() : fetchAllTags()
         return NavigationView {
             List {
                 if tagsForContext.isEmpty {
@@ -1781,11 +2250,13 @@ struct ItemGridView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     ForEach(tagsForContext, id: \.self) { tag in
-                    let allItemsHaveTag = doAllSelectedItemsHaveTag(tag)
+                    let allSelectedHaveTag = selectedTab == "Outfits"
+                        ? doAllSelectedOutfitsHaveTag(tag)
+                        : doAllSelectedItemsHaveTag(tag)
                     
                     Button {
                         pendingTagSelectionTarget = tag
-                        pendingTagSelectionWillRemove = allItemsHaveTag
+                        pendingTagSelectionWillRemove = allSelectedHaveTag
                         showTagSelectionConfirmAlert = true
                     } label: {
                         HStack {
@@ -1793,7 +2264,7 @@ struct ItemGridView: View {
                             
                             Spacer()
                             
-                            Image(systemName: allItemsHaveTag ? "checkmark" : "plus")
+                            Image(systemName: allSelectedHaveTag ? "checkmark" : "plus")
                                 .foregroundColor(.blue)
                                 .font(.system(size: 16, weight: .medium))
                         }
@@ -1814,9 +2285,13 @@ struct ItemGridView: View {
                 guard let tag = pendingTagSelectionTarget else { return }
                 let message: String?
                 if pendingTagSelectionWillRemove {
-                    message = removeTagFromSelectedItems(tag)
+                    message = selectedTab == "Outfits"
+                        ? removeTagFromSelectedOutfits(tag)
+                        : removeTagFromSelectedItems(tag)
                 } else {
-                    message = addTagToSelectedItems(tag)
+                    message = selectedTab == "Outfits"
+                        ? addTagToSelectedOutfits(tag)
+                        : addTagToSelectedItems(tag)
                 }
                 if let message {
                     completeBulkSelectionAction(toast: message)
@@ -1830,11 +2305,49 @@ struct ItemGridView: View {
             }
         } message: {
             let name = pendingTagSelectionTarget?.name ?? "this tag"
-            Text(pendingTagSelectionWillRemove
-                 ? "Remove tag “\(name)” from \(selectedItems.count) selected item(s)?"
-                 : "Add tag “\(name)” to \(selectedItems.count) selected item(s)?")
+            if selectedTab == "Outfits" {
+                Text(pendingTagSelectionWillRemove
+                     ? "Remove tag “\(name)” from \(selectedOutfits.count) selected outfit(s)?"
+                     : "Add tag “\(name)” to \(selectedOutfits.count) selected outfit(s)?")
+            } else {
+                Text(pendingTagSelectionWillRemove
+                     ? "Remove tag “\(name)” from \(selectedItems.count) selected item(s)?"
+                     : "Add tag “\(name)” to \(selectedItems.count) selected item(s)?")
+            }
         }
         .presentationDetents([.medium, .large])
+    }
+
+    private func doAllSelectedOutfitsHaveTag(_ tag: Tag) -> Bool {
+        guard !selectedOutfits.isEmpty else { return false }
+        return selectedOutfits.allSatisfy { outfit in
+            let tags = outfit.tags as? Set<Tag> ?? []
+            return tags.contains(tag)
+        }
+    }
+
+    private func fetchAllOutfitTags() -> [Tag] {
+        guard let userId = authSession.userId?.uuidString, !userId.isEmpty else { return [] }
+        let request: NSFetchRequest<Tag> = Tag.fetchRequest()
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Tag.name, ascending: true)]
+        request.predicate = NSPredicate(
+            format: "SUBQUERY(outfits, $o, $o.userId == %@ AND ($o.isSoftDeleted != YES OR $o.isSoftDeleted == nil)).@count > 0",
+            userId
+        )
+        do {
+            var tags = try viewContext.fetch(request)
+            for outfit in selectedOutfits {
+                let outfitTags = outfit.tags as? Set<Tag> ?? []
+                for tag in outfitTags where !tags.contains(where: { $0.objectID == tag.objectID }) {
+                    tags.append(tag)
+                }
+            }
+            tags.sort { ($0.name ?? "").localizedCaseInsensitiveCompare($1.name ?? "") == .orderedAscending }
+            return tags
+        } catch {
+            print("❌ Failed to fetch outfit tags: \(error.localizedDescription)")
+            return []
+        }
     }
     
     private func doAllSelectedItemsHaveTag(_ tag: Tag) -> Bool {
@@ -1873,6 +2386,111 @@ struct ItemGridView: View {
         } catch {
             print("❌ Failed to fetch tags: \(error.localizedDescription)")
             return []
+        }
+    }
+
+    // MARK: - Outfit Category Selection Sheet
+
+    @ViewBuilder
+    private func outfitCategorySelectionSheet() -> some View {
+        let categoriesForContext = fetchAllOutfitCategories()
+        return NavigationView {
+            List {
+                if categoriesForContext.isEmpty {
+                    Text("Categories added to your outfits will appear here.")
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    ForEach(categoriesForContext, id: \.objectID) { category in
+                        let allOutfitsHaveCategory = doAllSelectedOutfitsHaveCategory(category)
+                        Button {
+                            pendingOutfitCategoryTarget = category
+                            pendingOutfitCategoryWillRemove = allOutfitsHaveCategory
+                            showOutfitCategorySelectionConfirmAlert = true
+                        } label: {
+                            HStack {
+                                Text(category.name ?? "")
+                                Spacer()
+                                Image(systemName: allOutfitsHaveCategory ? "checkmark" : "plus")
+                                    .foregroundColor(.blue)
+                                    .font(.system(size: 16, weight: .medium))
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .navigationTitle("Set Category")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Color(UIColor.secondarySystemBackground), for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func doAllSelectedOutfitsHaveCategory(_ category: OutfitCategory) -> Bool {
+        guard !selectedOutfits.isEmpty else { return false }
+        return selectedOutfits.allSatisfy { $0.category?.objectID == category.objectID }
+    }
+
+    private func fetchAllOutfitCategories() -> [OutfitCategory] {
+        guard let userId = authSession.userId?.uuidString, !userId.isEmpty else { return [] }
+        do {
+            var categories = try viewContext.fetchOutfitCategoriesForFilterList(
+                userId: userId,
+                wardrobe: selectedWardrobe
+            )
+            for outfit in selectedOutfits {
+                if let category = outfit.category,
+                   !categories.contains(where: { $0.objectID == category.objectID }) {
+                    categories.append(category)
+                }
+            }
+            categories.sort { ($0.name ?? "").localizedCaseInsensitiveCompare($1.name ?? "") == .orderedAscending }
+            return categories
+        } catch {
+            print("❌ Failed to fetch outfit categories: \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    @discardableResult
+    private func applyCategoryToSelectedOutfits(category: OutfitCategory?) -> String? {
+        guard !selectedOutfits.isEmpty else { return nil }
+        let selectionCount = selectedOutfits.count
+
+        var outfitsUpdated = 0
+        var previousCategories: [OutfitCategory] = []
+        for outfit in selectedOutfits {
+            if outfit.category?.objectID != category?.objectID {
+                if let old = outfit.category {
+                    previousCategories.append(old)
+                }
+                outfit.category = category
+                setUpdatedAt(outfit)
+                outfitsUpdated += 1
+            }
+        }
+
+        do {
+            try viewContext.save()
+            for outfit in selectedOutfits {
+                SyncService.shared.syncOutfitIfNeeded(outfit)
+            }
+            for old in Set(previousCategories) {
+                cleanupOutfitCategoryIfOrphaned(old)
+            }
+            let label = category?.name ?? "None"
+            print("✅ Set category '\(label)' on \(outfitsUpdated) outfits")
+            if let name = category?.name {
+                return "Set category “\(name)” on \(selectionCount) outfit\(selectionCount == 1 ? "" : "s")."
+            }
+            return "Removed category from \(selectionCount) outfit\(selectionCount == 1 ? "" : "s")."
+        } catch {
+            print("❌ Failed to set category on outfits: \(error.localizedDescription)")
+            return nil
         }
     }
     
@@ -1926,6 +2544,58 @@ struct ItemGridView: View {
             return "Removed tag “\(name)” from \(selectionCount) item\(selectionCount == 1 ? "" : "s")."
         } catch {
             print("❌ Failed to remove tag from items: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    @discardableResult
+    private func addTagToSelectedOutfits(_ tag: Tag) -> String? {
+        guard !selectedOutfits.isEmpty else { return nil }
+        let selectionCount = selectedOutfits.count
+        var outfitsAdded = 0
+        for outfit in selectedOutfits {
+            let tags = outfit.tags as? Set<Tag> ?? []
+            if !tags.contains(tag) {
+                outfit.addToTags(tag)
+                setUpdatedAt(outfit)
+                outfitsAdded += 1
+            }
+        }
+        do {
+            try viewContext.save()
+            for outfit in selectedOutfits {
+                SyncService.shared.syncOutfitIfNeeded(outfit)
+            }
+            print("✅ Added tag '\(tag.name ?? "unknown")' to \(outfitsAdded) outfits")
+            let name = tag.name ?? "tag"
+            return "Added tag “\(name)” to \(selectionCount) outfit\(selectionCount == 1 ? "" : "s")."
+        } catch {
+            print("❌ Failed to add tag to outfits: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    @discardableResult
+    private func removeTagFromSelectedOutfits(_ tag: Tag) -> String? {
+        guard !selectedOutfits.isEmpty else { return nil }
+        let selectionCount = selectedOutfits.count
+        for outfit in selectedOutfits {
+            let tags = outfit.tags as? Set<Tag> ?? []
+            if tags.contains(tag) {
+                outfit.removeFromTags(tag)
+                setUpdatedAt(outfit)
+            }
+        }
+        do {
+            try viewContext.save()
+            for outfit in selectedOutfits {
+                SyncService.shared.syncOutfitIfNeeded(outfit)
+            }
+            print("✅ Removed tag '\(tag.name ?? "unknown")' from \(selectionCount) outfits")
+            let name = tag.name ?? "tag"
+            return "Removed tag “\(name)” from \(selectionCount) outfit\(selectionCount == 1 ? "" : "s")."
+        } catch {
+            print("❌ Failed to remove tag from outfits: \(error.localizedDescription)")
             return nil
         }
     }
@@ -2143,13 +2813,13 @@ struct ItemGridView: View {
         guard !selectedItems.isEmpty,
               let first = selectedItems.first,
               let sharedCategory = first.category,
-              selectedItems.allSatisfy({ $0.category?.objectID == sharedCategory.objectID }),
-              let listCategory = categories.first(where: { $0.objectID == sharedCategory.objectID })
+              selectedItems.allSatisfy({ pickerCategoriesMatch($0.category, sharedCategory) }),
+              let listCategory = resolveCategoryInPickerList(sharedCategory, categories: categories)
         else { return }
 
         if let sharedSub = first.subcategory,
-           sharedSub.category == sharedCategory,
-           selectedItems.allSatisfy({ $0.subcategory?.objectID == sharedSub.objectID }) {
+           subcategoryBelongsToPickerCategory(sharedSub, listCategory: sharedCategory),
+           selectedItems.allSatisfy({ pickerSubcategoriesMatch($0.subcategory, sharedSub) }) {
             bulkSetCategoryExpanded.insert(listCategory.objectID)
         }
     }
@@ -2157,9 +2827,9 @@ struct ItemGridView: View {
     private func allSelectedItemsMatch(category: Category, subcategory: Subcategory?) -> Bool {
         guard !selectedItems.isEmpty else { return false }
         return selectedItems.allSatisfy { item in
-            guard item.category?.objectID == category.objectID else { return false }
+            guard pickerCategoriesMatch(item.category, category) else { return false }
             if let subcategory {
-                return item.subcategory?.objectID == subcategory.objectID
+                return pickerSubcategoriesMatch(item.subcategory, subcategory)
             }
             return item.subcategory == nil
         }
@@ -2169,19 +2839,32 @@ struct ItemGridView: View {
     private func applyCategoryToSelectedItems(category: Category, subcategory: Subcategory?) -> String? {
         guard !selectedItems.isEmpty else { return nil }
 
+        let userId = authSession.userId?.uuidString ?? ""
+        let normalizedCategory = userId.isEmpty
+            ? category
+            : viewContext.canonicalCategoryForAttributePicker(category, userId: userId)
+        let normalizedSubcategory: Subcategory?
+        if let subcategory {
+            normalizedSubcategory = userId.isEmpty
+                ? subcategory
+                : viewContext.canonicalSubcategoryForAttributePicker(subcategory, parent: normalizedCategory, userId: userId)
+        } else {
+            normalizedSubcategory = nil
+        }
+
         let selectionCount = selectedItems.count
         for item in selectedItems {
-            item.category = category
-            item.subcategory = subcategory
+            item.category = normalizedCategory
+            item.subcategory = normalizedSubcategory
             setUpdatedAt(item)
         }
 
         let label: String
-        if let subName = subcategory?.name, !subName.isEmpty {
-            let catName = category.name ?? "category"
+        if let subName = normalizedSubcategory?.name, !subName.isEmpty {
+            let catName = normalizedCategory.name ?? "category"
             label = "\(catName) › \(subName)"
         } else {
-            label = category.name ?? "category"
+            label = normalizedCategory.name ?? "category"
         }
 
         do {
@@ -2197,89 +2880,207 @@ struct ItemGridView: View {
         }
     }
 
+    @ViewBuilder
+    private var outfitsEmptyState: some View {
+        if isRedressFilterActive {
+            EmptyOutfitStateView(
+                title: "No Redress outfits",
+                message: "Nobody has redressed you yet! Connect with friends and invite them to redress you.",
+                systemImage: "person.2"
+            )
+        } else {
+            EmptyOutfitStateView()
+        }
+    }
+
+    private var hasRedressFilterContent: Bool {
+        !displayedPendingRedressSuggestions.isEmpty || !outfits.isEmpty
+    }
+
     private var outfitsTab: some View {
-        Group {
-            if isOutfitsTabLoading {
-                closetContentLoadingView(
-                    syncStatus: appCapabilities.enablesCloudSync && syncService.isSyncing ? syncService.syncStatus : nil
-                )
+        ScrollView(showsIndicators: false) {
+            if isOutfitsTabLoading || (isRedressFilterActive && isRedressLoading && !hasRedressFilterContent) {
+                closetContentLoadingView
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: 240)
+            } else if isRedressFilterActive {
+                if !hasRedressFilterContent {
+                    outfitsEmptyState
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: 240)
+                } else {
+                    redressFilterContent
+                }
             } else if outfits.isEmpty {
-                EmptyOutfitStateView()
+                outfitsEmptyState
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: 240)
             } else {
-                ScrollView(showsIndicators: false) {
-                    LazyVGrid(columns: gridColumns, spacing: 2) {
-                        ForEach(outfits, id: \.objectID) { outfit in
-                            OutfitView(outfit: outfit)
-                                .overlay(
-                                    // Transparent white overlay when in selection mode
-                                    Group {
-                                        if isInSelectionMode && selectedOutfits.contains(outfit) {
-                                            Rectangle()
-                                                .fill(Color.white.opacity(0.35))
-                                        }
-                                    }
-                                )
-                                .overlay(
-                                    // Show selection checkmark when in selection mode (on top of white overlay)
-                                    Group {
-                                        if isInSelectionMode {
-                                            VStack {
-                                                Spacer()
-                                                HStack {
-                                                    Spacer()
-                                                    Image(systemName: selectedOutfits.contains(outfit) ? "checkmark.circle" : "circle")
-                                                        .foregroundColor(.white)
-                                                        .background(
-                                                            Circle()
-                                                                .fill(selectedOutfits.contains(outfit) ? Color.blue : Color.clear)
-                                                                .padding(2)
-                                                        )
-                                                        .font(.system(size: 22))
-                                                        .shadow(radius: 1)
-                                                        .padding(8)
-                                                }
-                                            }
-                                        }
-                                    }
-                                )
-                                .contentShape(Rectangle()) // Make entire area tappable
+                outfitsLazyGrid
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var redressFilterContent: some View {
+        let hasPending = !displayedPendingRedressSuggestions.isEmpty
+        VStack(spacing: 0) {
+            if hasPending {
+                redressSectionHeader("PENDING")
+                pendingRedressSuggestionsGrid
+            }
+            if !outfits.isEmpty {
+                // PENDING/ACCEPTED headers only when there is at least one pending suggestion
+                // (Profile). Closet Redress shows accepted only, with no section headers.
+                if hasPending {
+                    redressSectionHeader("ACCEPTED")
+                }
+                outfitsLazyGrid
+            }
+        }
+    }
+
+    private func redressSectionHeader(_ title: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.footnote)
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Color(.systemBackground))
+    }
+
+    private var pendingRedressSuggestionsGrid: some View {
+        let suggestions = displayedPendingRedressSuggestions
+        let rowCount = (suggestions.count + 2) / 3
+        return VStack(spacing: 2) {
+            ForEach(0..<rowCount, id: \.self) { row in
+                HStack(spacing: 2) {
+                    ForEach(0..<3, id: \.self) { column in
+                        let index = row * 3 + column
+                        if index < suggestions.count {
+                            let suggestion = suggestions[index]
+                            ProfilePendingRedressOutfitCell(suggestion: suggestion)
+                                .contentShape(Rectangle())
                                 .onTapGesture {
-                                    handleOutfitTap(for: outfit)
+                                    openProfilePendingSuggestion(suggestion)
                                 }
-                                .onLongPressGesture(minimumDuration: 0.5) {
-                                    handleOutfitLongPress(for: outfit)
-                                }
+                        } else {
+                            Color.clear
+                                .aspectRatio(1, contentMode: .fit)
                         }
                     }
-                    .padding(.top, 2)
                 }
             }
         }
+        .padding(.top, 2)
+        .id(suggestions.map(\.id))
     }
 
-  /*  private func handleScroll(_ topIndex: Int) {
-        if let last = currentTopIndex {
-            if topIndex > last && !isControlsHidden {
-                // Scrolling down
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    isControlsHidden = true
-                }
-            } else if topIndex < last && isControlsHidden {
-                // Scrolling up
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    isControlsHidden = false
-                }
+    private func openProfilePendingSuggestion(_ suggestion: VisibleOutfitSuggestion) {
+        guard let recipientUserId = authSession.userId,
+              let wardrobeId = selectedWardrobe.id else { return }
+
+        selectedPendingRedress = PendingRedressNavigationDestination(
+            recipientUserId: recipientUserId,
+            wardrobeId: wardrobeId,
+            suggestionSummary: suggestion.asGridOutfit(),
+            viewerRole: .recipient
+        )
+    }
+
+    private var outfitsLazyGrid: some View {
+        LazyVGrid(columns: gridColumns, spacing: 2) {
+            ForEach(outfits, id: \.objectID) { outfit in
+                OutfitView(outfit: outfit, showsFavoriteOverlay: !isReadOnly)
+                    .overlay(
+                        Group {
+                            if isInSelectionMode && selectedOutfits.contains(outfit) {
+                                Rectangle()
+                                    .fill(Color.white.opacity(0.35))
+                            }
+                        }
+                    )
+                    .overlay(
+                        Group {
+                            if isInSelectionMode {
+                                VStack {
+                                    Spacer()
+                                    HStack {
+                                        Spacer()
+                                        Image(systemName: selectedOutfits.contains(outfit) ? "checkmark.circle" : "circle")
+                                            .foregroundColor(.white)
+                                            .background(
+                                                Circle()
+                                                    .fill(selectedOutfits.contains(outfit) ? Color.blue : Color.clear)
+                                                    .padding(2)
+                                            )
+                                            .font(.system(size: 22))
+                                            .shadow(radius: 1)
+                                            .padding(8)
+                                    }
+                                }
+                            }
+                        }
+                    )
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        handleOutfitTap(for: outfit)
+                    }
+                    .onLongPressGesture(minimumDuration: 0.5) {
+                        handleOutfitLongPress(for: outfit)
+                    }
             }
         }
-        currentTopIndex = topIndex
-    }*/
+        .padding(.top, 2)
+    }
 }
 
-/* MARK: - Scroll Offset PreferenceKey
-struct ScrollOffsetPreferenceKey: PreferenceKey {
-    typealias Value = Int?
-    static var defaultValue: Int? = nil
-    static func reduce(value: inout Int?, nextValue: () -> Int?) {
-        value = value ?? nextValue()
+// MARK: - Profile pending Redress outfit cell
+
+private struct ProfilePendingRedressOutfitCell: View {
+    let suggestion: VisibleOutfitSuggestion
+
+    private var collageURL: URL? {
+        guard let imageUrl = suggestion.imageUrl, let url = URL(string: imageUrl) else { return nil }
+        return url
     }
-}*/
+
+    var body: some View {
+        Color(red: 247 / 255, green: 247 / 255, blue: 247 / 255)
+            .overlay {
+                if let url = collageURL {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image.resizable().scaledToFill()
+                        case .failure:
+                            Image(systemName: "photo").foregroundStyle(.secondary)
+                        default:
+                            ProgressView()
+                        }
+                    }
+                } else {
+                    Image(systemName: "photo").foregroundStyle(.secondary)
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if let profile = suggestion.suggesterProfile {
+                    GeometryReader { geo in
+                        RedressSuggesterAvatarBadge(
+                            profile: profile,
+                            size: max(22, geo.size.width * 0.28)
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                        .padding(6)
+                    }
+                }
+            }
+            .clipped()
+            .aspectRatio(1, contentMode: .fit)
+    }
+}

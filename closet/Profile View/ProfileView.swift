@@ -11,10 +11,17 @@ import UIKit
 import CoreData
 
 struct ProfileView: View {
+    /// When set, shows another user's public profile. `nil` = signed-in user's own profile tab.
+    var viewedProfile: PublicUserProfile? = nil
+    /// When this profile is pushed from Friends/Users, reuse the root Profile tab's hide flag
+    /// so the tab bar stays hidden for the full push path.
+    var sharedTabBarHideState: TabBarHideState? = nil
+
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.appCapabilities) private var appCapabilities
     @EnvironmentObject var supabaseService: SupabaseService
     @EnvironmentObject var authSession: AuthSession
+    @EnvironmentObject private var deepLinkRouter: DeepLinkRouter
     
     /// All active wardrobes; scoped to the signed-in user via computed properties (FetchRequest cannot use dynamic `userId`).
     @FetchRequest(
@@ -24,7 +31,20 @@ struct ProfileView: View {
     
     /// Matches `ItemGridView` tab pattern: segmented control + paged `TabView` for swiping.
     @State private var selectedProfileWardrobeTab: String = "Closet"
+    @State private var selectedProfileWardrobe: Wardrobe?
+    @State private var showWardrobesSheet = false
+    @State private var isProfileItemGridInSelectionMode = false
+    @State private var isProfileGridDetailNavigationActive = false
+    @State private var isProfileFilterActionsVisible = true
+    @StateObject private var profileFilterModel = ItemFilterModel()
+    @StateObject private var profileOutfitFilterModel = OutfitFilterModel()
+    @StateObject private var ownedTabBarHideState = TabBarHideState()
     @State private var profileHowToPage = 0
+    @State private var navigationPath = NavigationPath()
+
+    private var tabBarHideState: TabBarHideState {
+        sharedTabBarHideState ?? ownedTabBarHideState
+    }
     
     @FetchRequest(
         entity: Item.entity(),
@@ -37,16 +57,6 @@ struct ProfileView: View {
         sortDescriptors: []
     ) private var allUserProfiles: FetchedResults<UserProfile>
     
-    @State private var notifications: [NotificationRecord] = []
-    @State private var isNotificationsSheetPresented = false
-    @State private var isLoadingNotifications = false
-    @State private var notificationsError: String?
-    @State private var respondingNotificationIds: Set<UUID> = []
-    @State private var isFriendsSheetPresented = false
-    @State private var friends: [PublicUserProfile] = []
-    @State private var isLoadingFriends = false
-    @State private var friendsError: String?
-    
     @State private var isProfilePhotoActionDialogPresented = false
     @State private var isProfileLibraryPickerPresented = false
     @State private var profilePickerImage: UIImage?
@@ -56,11 +66,61 @@ struct ProfileView: View {
     /// Prevents `getUsername` + `refreshAllObjects` on every navigation back (was reloading the avatar / AsyncImage).
     @State private var didBootstrapProfileFromServerForUserId: String?
 
-    @State private var isEditingDisplayName = false
-    @State private var editedDisplayName: String = ""
-    @State private var isSavingDisplayName = false
-    @State private var errorMessage: String?
+    /// Diameter of the profile photo in the header.
+    private static let profileHeaderAvatarSize: CGFloat = 104
+    /// Space above the profile image.
+    private static let profileHeaderTopPadding: CGFloat = 8
+    /// Matches the default vertical padding formerly on the wardrobe bar’s top edge.
+    private static let wardrobeBarEdgePadding: CGFloat = 16
+    private static let profileHeaderBottomPadding: CGFloat = 4 + wardrobeBarEdgePadding
+    /// Gap between avatar row and display name.
+    private static let profileHeaderNameTopPadding: CGFloat = 8
+    private static let profileHeaderActionIconSize: CGFloat = 20
+    /// Full header template (bio/tags/location/socials/Sizes flanking) — see `.cursor/rules/profile-header-full-template-deferred.mdc`.
+
     @State private var refreshToken = UUID()
+
+    @State private var remoteWardrobes: [VisibleWardrobe] = []
+    @State private var selectedRemoteWardrobe: VisibleWardrobe?
+    @State private var isLoadingRemoteWardrobes = false
+    @State private var remoteWardrobesError: String?
+    @State private var showRemoteWardrobesSheet = false
+    @State private var selectedRemoteWardrobeTab: String = "Closet"
+    @State private var viewedUserFollowingCount: Int?
+    @State private var viewedUserFollowersCount: Int?
+    @State private var isFriendWithViewedUser = false
+    /// Accepted outgoing edge: current user → viewed user.
+    @State private var isFollowingViewedUser = false
+    /// Reciprocal accepted edges both ways.
+    @State private var isMutualFriendWithViewedUser = false
+    @State private var showRemoveFriendAlert = false
+    @State private var isUpdatingFriendship = false
+    @State private var showOtherUserProfileOptionsDialog = false
+    @State private var canShowRedress = false
+    @State private var isRedressOutfitPresented = false
+    @State private var isNotificationsPresented = false
+    @State private var isSettingsPresented = false
+    @State private var isEditProfilePresented = false
+    @State private var isUsersPresented = false
+    @State private var isFriendsPresented = false
+    @State private var remoteGridRefreshToken = UUID()
+    @State private var remoteGridPreferredTab = "Items"
+    // Deferred: other-user WARDROBE/CALENDAR tab — see `.cursor/rules/other-user-profile-calendar-deferred.mdc`
+    // @State private var otherUserContentTab = "WARDROBE"
+    @State private var lastOwnFriendshipRefreshAt: Date?
+
+    private var isViewingOtherUser: Bool {
+        guard let viewedProfile else { return false }
+        return viewedProfile.userId != authSession.userId
+    }
+
+    private var remoteClosets: [VisibleWardrobe] {
+        remoteWardrobes.filter { $0.wardrobeType == "closet" }
+    }
+
+    private var remoteWishlists: [VisibleWardrobe] {
+        remoteWardrobes.filter { $0.wardrobeType == "wishlist" }
+    }
 
     // Filter user profiles by current user (if authenticated)
     private var userProfiles: [UserProfile] {
@@ -173,15 +233,47 @@ struct ProfileView: View {
         userProfile?.displayName
     }
 
+    // TODO: Revisit profile style tags — UI removed for now; keep ProfileStyleTag model / sync for a later pass.
+    // private var currentStyleTagLabels: [String] {
+    //     userProfile?.profileStyleTags.map(\.rawValue) ?? []
+    // }
+
     private var profileNavigationTitle: String {
-        if appCapabilities.enablesFriendsAndSharing {
-            return username ?? supabaseService.cachedUsername ?? "@username"
+        appCapabilities.tier == .testflight ? "Info" : "Profile"
+    }
+
+    private var profileUsernameText: String {
+        if isViewingOtherUser, let viewedProfile {
+            return sanitizeUsername(viewedProfile.username)
         }
-        return "Profile"
+        let raw = (username ?? supabaseService.cachedUsername ?? "username")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return sanitizeUsername(raw)
+    }
+
+    private func sanitizeUsername(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("@") {
+            return String(trimmed.dropFirst())
+        }
+        return trimmed
+    }
+
+    private var profileScreenNavigationTitle: String {
+        if isViewingOtherUser {
+            return profileUsernameText
+        }
+        if appCapabilities.showsWishlistTab {
+            return profileUsernameText
+        }
+        return profileNavigationTitle
     }
 
     /// Header avatar uses the same remote URL + initials pattern as friend lists.
     private var profileForAvatar: PublicUserProfile? {
+        if isViewingOtherUser, let viewedProfile {
+            return viewedProfile
+        }
         guard let uid = authSession.userId else { return nil }
         return PublicUserProfile(
             userId: uid,
@@ -191,17 +283,33 @@ struct ProfileView: View {
         )
     }
 
-    /// Stable identity for forcing image reload when avatar bytes change at the same URL (single R2 key).
+    /// Stable identity for forcing image reload when the avatar URL changes (upload/remove).
     private var avatarHeaderViewIdentity: String {
-        let url = userProfile?.storedProfileAvatarURL ?? ""
-        let t = userProfile?.updatedAt?.timeIntervalSinceReferenceDate ?? 0
-        return "\(url)#\(t)"
+        if isViewingOtherUser {
+            return viewedProfile?.avatarUrl ?? viewedProfile?.userId.uuidString ?? "other"
+        }
+        return userProfile?.storedProfileAvatarURL ?? ""
     }
     
-    private var friendsCount: Int { supabaseService.cachedFriendCount ?? 0 }
-    
-    private var unreadNotificationsCount: Int {
-        notifications.filter { !$0.is_read }.count
+    private var followingCount: Int { supabaseService.cachedFollowingCount ?? 0 }
+    private var followersCount: Int { supabaseService.cachedFollowersCount ?? 0 }
+
+    private var displayedFollowingCount: Int {
+        if isViewingOtherUser {
+            return viewedUserFollowingCount ?? 0
+        }
+        return followingCount
+    }
+
+    private var displayedFollowersCount: Int {
+        if isViewingOtherUser {
+            return viewedUserFollowersCount ?? 0
+        }
+        return followersCount
+    }
+
+    private var displayedProfileUserId: UUID? {
+        viewedProfile?.userId ?? authSession.userId
     }
     
     /// Items linked to this wardrobe that ItemGridView would show with no extra filters (userId, not draft, not soft-deleted).
@@ -226,6 +334,61 @@ struct ProfileView: View {
         default: return "Closet"
         }
     }
+
+    private var profileWardrobeNavigationTitle: String {
+        selectedProfileWardrobe?.name ?? "Wardrobes"
+    }
+
+    private func setInitialProfileWardrobe() {
+        guard currentUserId != nil else { return }
+
+        if let selected = selectedProfileWardrobe {
+            let stillValid = userClosets.contains(where: { $0.objectID == selected.objectID })
+                || userWishlists.contains(where: { $0.objectID == selected.objectID })
+            if !stillValid {
+                selectedProfileWardrobe = nil
+            }
+        }
+
+        if selectedProfileWardrobe == nil {
+            selectedProfileWardrobe = WardrobeBootstrap.primaryWardrobe(in: userClosets)
+        }
+    }
+
+    private func presentNotificationsIfRequestedFromPush() {
+        guard deepLinkRouter.shouldOpenNotifications, !isViewingOtherUser else { return }
+        isNotificationsPresented = true
+        deepLinkRouter.consumeOpenNotifications()
+        PushNotificationService.shared.clearBadge()
+    }
+
+    /// Avoid hammering the server (and remounting UI) on every Profile tab return.
+    private func refreshOwnFriendshipStateIfStale() async {
+        let now = Date()
+        if let last = lastOwnFriendshipRefreshAt, now.timeIntervalSince(last) < 30 {
+            return
+        }
+        lastOwnFriendshipRefreshAt = now
+        await supabaseService.refreshOwnFriendshipStateFromServer()
+    }
+
+    private func syncProfileWardrobeSheetTabToSelection() {
+        if (selectedProfileWardrobe?.type ?? "").lowercased() == "wishlist" {
+            selectedProfileWardrobeTab = "Wishlist"
+        } else {
+            selectedProfileWardrobeTab = "Closet"
+        }
+    }
+
+    private func selectProfileWardrobe(_ wardrobe: Wardrobe) {
+        if selectedProfileWardrobe?.objectID != wardrobe.objectID {
+            profileFilterModel.clearAll()
+            profileOutfitFilterModel.clearAll()
+            navigationPath = NavigationPath()
+        }
+        selectedProfileWardrobe = wardrobe
+        showWardrobesSheet = false
+    }
     
     private func wardrobeSubtitle(for wardrobe: Wardrobe) -> String {
         let type = wardrobeTypeLabel(for: wardrobe)
@@ -234,11 +397,10 @@ struct ProfileView: View {
         return "\(type) · \(countPart)"
     }
 
-    /// Closet / wishlist lists — production only (`showsWishlistTab`). Hidden on TestFlight.
-    @ViewBuilder
-    private var profileWardrobeSection: some View {
-        if appCapabilities.showsWishlistTab {
-            VStack(spacing: 0) {
+    /// Closet / wishlist picker + lists — shown in the Wardrobes sheet (production only).
+    private var profileWardrobesSheetContent: some View {
+        VStack(spacing: 0) {
+            SelectionPanelHeader(title: "Wardrobes") {
                 Picker("", selection: $selectedProfileWardrobeTab) {
                     Text("Closet (\(userClosets.count))")
                         .tag("Closet")
@@ -247,20 +409,22 @@ struct ProfileView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(Color(.systemBackground))
-
-                TabView(selection: $selectedProfileWardrobeTab) {
-                    profileWardrobePage(wardrobes: userClosets, emptyNoun: "closets")
-                        .tag("Closet")
-                    profileWardrobePage(wardrobes: userWishlists, emptyNoun: "wishlists")
-                        .tag("Wishlist")
-                }
-                .tabViewStyle(.page(indexDisplayMode: .never))
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Group {
+                if selectedProfileWardrobeTab == "Closet" {
+                    profileWardrobePage(wardrobes: userClosets, emptyNoun: "closets")
+                } else {
+                    profileWardrobePage(wardrobes: userWishlists, emptyNoun: "wishlists")
+                }
+            }
         }
+    }
+
+    private var profileWardrobesSheet: some View {
+        profileWardrobesSheetContent
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
     }
     
     @ViewBuilder
@@ -273,14 +437,27 @@ struct ProfileView: View {
                     .listRowInsets(EdgeInsets(top: 12, leading: 20, bottom: 12, trailing: 20))
             } else {
                 ForEach(wardrobes, id: \.objectID) { wardrobe in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(wardrobe.name ?? "Untitled")
-                        Text(wardrobeSubtitle(for: wardrobe))
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        selectProfileWardrobe(wardrobe)
+                    } label: {
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(wardrobe.name ?? "Untitled")
+                                    .foregroundStyle(.primary)
+                                Text(wardrobeSubtitle(for: wardrobe))
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 0)
+                            if selectedProfileWardrobe?.objectID == wardrobe.objectID {
+                                Image(systemName: "checkmark")
+                                    .foregroundStyle(.blue)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .buttonStyle(.plain)
                     .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 10, trailing: 20))
                 }
             }
@@ -288,58 +465,150 @@ struct ProfileView: View {
         .listStyle(.plain)
     }
 
-    private func startEditingDisplayName() {
-        editedDisplayName = currentDisplayName ?? ""
-        isEditingDisplayName = true
+    private var shouldHideTabBar: Bool {
+        isViewingOtherUser
+            || isNotificationsPresented
+            || isSettingsPresented
+            || isEditProfilePresented
+            || isUsersPresented
+            || isFriendsPresented
+            || isRedressOutfitPresented
+            || isProfileItemGridInSelectionMode
+            || isProfileGridDetailNavigationActive
     }
 
-    private func saveDisplayName() async {
-        let trimmed = editedDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let currentTrimmed = (currentDisplayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard trimmed != currentTrimmed else {
-            errorMessage = nil
-            isEditingDisplayName = false
-            return
-        }
-
-        isSavingDisplayName = true
-        errorMessage = nil
-
-        do {
-            try await supabaseService.updateDisplayName(trimmed)
-            // Display name is automatically synced to Core Data by updateDisplayName()
-            try? await Task.sleep(nanoseconds: 100_000_000)
-            viewContext.refreshAllObjects()
-            refreshToken = UUID()
-            isEditingDisplayName = false
-        } catch {
-            errorMessage = error.localizedDescription
-            // Keep editing mode on error so user can try again
-        }
-
-        isSavingDisplayName = false
+    /// Own-profile ItemGridView fills the screen and owns nav toolbar items (same as Closet).
+    private var profileItemGridOwnsNavigationToolbar: Bool {
+        !isViewingOtherUser
+            && appCapabilities.tier != .testflight
+            && appCapabilities.showsWishlistTab
+            && selectedProfileWardrobe != nil
     }
 
     var body: some View {
-        profileRootStack
-            .navigationTitle(profileNavigationTitle)
-            .navigationBarTitleDisplayMode(.inline)
+        // Own profile tab owns the stack. Nested profiles (Friends / Users / Redress)
+        // must join that stack — a second NavigationStack orphans Friends and makes
+        // Back from item detail jump to the root profile.
+        if ownsNavigationStack {
+            NavigationStack(path: $navigationPath) {
+                profileWithPresentations
+                    .navigationDestination(for: ItemGridFilterRoute.self) { route in
+                        switch route {
+                        case .itemFilter:
+                            ItemFilterView(
+                                filterModel: profileFilterModel,
+                                tabBarHideState: tabBarHideState,
+                                wardrobeType: (selectedProfileWardrobe?.type ?? "closet").lowercased(),
+                                attributesReadOnly: true,
+                                selectedWardrobe: selectedProfileWardrobe
+                            )
+                        case .outfitFilter:
+                            OutfitFilterView(
+                                filterModel: profileOutfitFilterModel,
+                                wardrobeType: (selectedProfileWardrobe?.type ?? "closet").lowercased(),
+                                attributesReadOnly: true,
+                                selectedWardrobe: selectedProfileWardrobe
+                            )
+                        }
+                    }
+            }
+        } else {
+            profileWithPresentations
+        }
+    }
+
+    /// `true` only for the Profile tab root (`viewedProfile == nil`).
+    private var ownsNavigationStack: Bool {
+        viewedProfile == nil
+    }
+
+    private var profileWithPresentations: some View {
+        profileWithLifecycle
+            .alert("Photo", isPresented: avatarUploadErrorPresented) {
+                Button("OK", role: .cancel) { avatarUploadError = nil }
+            } message: {
+                Text(avatarUploadError ?? "")
+            }
+            .sheet(isPresented: $isProfileLibraryPickerPresented) {
+                profileLibraryPickerSheet
+            }
+            .toolbar {
+                if isViewingOtherUser {
+                    otherUserProfileToolbar()
+                } else if !profileItemGridOwnsNavigationToolbar {
+                    profileNavigationToolbar()
+                }
+            }
+            .toolbar(shouldHideTabBar ? .hidden : .automatic, for: .tabBar)
+            .onAppear {
+                if isViewingOtherUser || isFriendsPresented || isUsersPresented {
+                    tabBarHideState.shouldHideTabBar = true
+                }
+            }
+            .onChange(of: isFriendsPresented) { _, presented in
+                if presented {
+                    tabBarHideState.shouldHideTabBar = true
+                } else if !isUsersPresented && !isProfileGridDetailNavigationActive && !isProfileItemGridInSelectionMode {
+                    tabBarHideState.shouldHideTabBar = false
+                }
+            }
+            .onChange(of: isUsersPresented) { _, presented in
+                if presented {
+                    tabBarHideState.shouldHideTabBar = true
+                } else if !isFriendsPresented && !isProfileGridDetailNavigationActive && !isProfileItemGridInSelectionMode {
+                    tabBarHideState.shouldHideTabBar = false
+                }
+            }
+            .confirmationDialog(
+                "Profile",
+                isPresented: $showOtherUserProfileOptionsDialog,
+                titleVisibility: .visible
+            ) {
+                Button("Share Profile") {
+                    // Share action TBD
+                }
+                Button("Block User", role: .destructive) {}
+                Button("Report User", role: .destructive) {}
+                Button("Cancel", role: .cancel) {}
+            }
+            .sheet(isPresented: wardrobesSheetPresented) {
+                profileWardrobesSheet
+            }
+            .sheet(isPresented: $showRemoteWardrobesSheet) {
+                remoteWardrobesSheet
+            }
+            .alert("Remove Friend?", isPresented: $showRemoveFriendAlert) {
+                Button("Cancel", role: .cancel) {}
+                Button("Remove Friend", role: .destructive) {
+                    Task { await removeFriendshipWithViewedUser() }
+                }
+            } message: {
+                Text("Are you sure you want to remove this friend?")
+            }
+    }
+
+    private var profileWithLifecycle: some View {
+        profileWithDestinations
             .task(id: authSession.userId) {
+                guard !isViewingOtherUser else { return }
                 await bootstrapProfileIfNeeded()
             }
-            .onAppear {
-                if !appCapabilities.showsWishlistTab {
-                    selectedProfileWardrobeTab = "Closet"
-                }
+            .task(id: viewedProfile?.userId) {
+                guard isViewingOtherUser, appCapabilities.enablesCloudSync else { return }
+                // otherUserContentTab = "WARDROBE" // deferred: other-user-profile-calendar-deferred.mdc
+                hydrateOtherUserProfileFromCacheIfNeeded()
+                async let wardrobes: Void = loadRemoteWardrobes()
+                async let social: Void = loadViewedUserSocialMetadata()
+                async let redress: Void = loadRedressAvailability()
+                _ = await (wardrobes, social, redress)
+            }
+            .onAppear(perform: handleProfileAppear)
+            .onChange(of: deepLinkRouter.shouldOpenNotifications) { _, open in
+                guard open else { return }
+                presentNotificationsIfRequestedFromPush()
             }
             .onChange(of: authSession.userId) { _, newId in
-                if newId == nil {
-                    didBootstrapProfileFromServerForUserId = nil
-                    isEditingDisplayName = false
-                    editedDisplayName = ""
-                    errorMessage = nil
-                }
+                handleAuthUserIdChange(newId)
             }
             .onChange(of: userProfiles.count) { _ in
                 viewContext.refreshAllObjects()
@@ -350,45 +619,153 @@ struct ProfileView: View {
             .onChange(of: userProfile?.username) { _ in
                 viewContext.refreshAllObjects()
             }
-            .alert("Photo", isPresented: avatarUploadErrorPresented) {
-                Button("OK", role: .cancel) { avatarUploadError = nil }
-            } message: {
-                Text(avatarUploadError ?? "")
+    }
+
+    private var profileWithDestinations: some View {
+        profileNavigationChrome
+            .navigationDestination(isPresented: $isRedressOutfitPresented) {
+                redressOutfitDestination
             }
-            .sheet(isPresented: $isProfileLibraryPickerPresented) {
-                ImagePicker(
-                    image: $profilePickerImage,
-                    sourceType: $profileImagePickerSource,
-                    allowsEditing: true
-                ) { image in
-                    isProfileLibraryPickerPresented = false
-                    guard let image else { return }
-                    Task { await uploadProfileAvatarFromLibrary(image) }
+            .navigationDestination(isPresented: $isNotificationsPresented) {
+                UserNotificationsView()
+            }
+            .navigationDestination(isPresented: $isSettingsPresented) {
+                SettingsView()
+            }
+            .navigationDestination(isPresented: $isEditProfilePresented) {
+                EditProfileView()
+            }
+            .navigationDestination(isPresented: $isUsersPresented) {
+                UsersView(tabBarHideState: tabBarHideState)
+            }
+            .navigationDestination(isPresented: $isFriendsPresented) {
+                if let userId = displayedProfileUserId {
+                    FriendsView(
+                        userId: userId,
+                        followersCount: displayedFollowersCount,
+                        followingCount: displayedFollowingCount,
+                        tabBarHideState: tabBarHideState
+                    )
                 }
             }
-            .toolbar { profileNavigationToolbar() }
-            .sheet(isPresented: notificationsSheetPresented) {
-                profileNotificationsSheet
+    }
+
+    private var profileNavigationChrome: some View {
+        profileRootStack
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(UIColor.systemBackground))
+            .navigationTitle(profileScreenNavigationTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Color(UIColor.systemBackground), for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbar(.visible, for: .navigationBar)
+            .modifier(NavigationBarHairlineHidden(backgroundColor: UIColor.systemBackground))
+    }
+
+    @ViewBuilder
+    private var redressOutfitDestination: some View {
+        if let profile = viewedProfile {
+            OutfitAddView(redressRecipient: profile) {
+                if let ownerId = viewedProfile?.userId {
+                    supabaseService.invalidateWardrobeGridOutfitsCache(forUserId: ownerId)
+                }
+                remoteGridRefreshToken = UUID()
+                remoteGridPreferredTab = "Outfits"
             }
-            .sheet(isPresented: friendsSheetPresented) {
-                profileFriendsSheet
+        }
+    }
+
+    private var profileLibraryPickerSheet: some View {
+        ImagePicker(
+            image: $profilePickerImage,
+            sourceType: $profileImagePickerSource,
+            allowsEditing: true,
+            usesProfileCrop: true
+        ) { image in
+            isProfileLibraryPickerPresented = false
+            guard let image else { return }
+            Task { await uploadProfileAvatarFromLibrary(image) }
+        }
+    }
+
+    private func handleProfileAppear() {
+        if isViewingOtherUser {
+            hydrateOtherUserProfileFromCacheIfNeeded()
+        } else if appCapabilities.showsWishlistTab {
+            if let uid = authSession.userId {
+                try? WardrobeBootstrap.ensureDefaultWardrobes(for: uid, in: viewContext)
             }
+            setInitialProfileWardrobe()
+        } else {
+            selectedProfileWardrobeTab = "Closet"
+        }
+        presentNotificationsIfRequestedFromPush()
+        if !isViewingOtherUser, appCapabilities.enablesFriendsAndSharing {
+            Task { await refreshOwnFriendshipStateIfStale() }
+        }
+    }
+
+    private func handleAuthUserIdChange(_ newId: UUID?) {
+        if newId == nil {
+            didBootstrapProfileFromServerForUserId = nil
+            selectedProfileWardrobe = nil
+        } else if appCapabilities.showsWishlistTab {
+            setInitialProfileWardrobe()
+        }
     }
 
     @ViewBuilder
     private var profileRootStack: some View {
-        if appCapabilities.tier == .testflight {
+        if isViewingOtherUser {
+            otherUserProfileContent
+        } else if appCapabilities.tier == .testflight {
             HowToTipsCarousel(
                 currentPage: $profileHowToPage,
                 pages: HowToPage.testFlightPages(displayName: currentDisplayName)
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.horizontal)
+        } else if appCapabilities.showsWishlistTab, let selectedWardrobe = selectedProfileWardrobe {
+            ItemGridView(
+                filterModel: profileFilterModel,
+                outfitFilterModel: profileOutfitFilterModel,
+                wardrobeType: (selectedWardrobe.type ?? "closet").lowercased(),
+                selectedWardrobe: selectedWardrobe,
+                isReadOnly: true,
+                showsProfilePendingRedressSuggestions: true,
+                isInSelectionMode: $isProfileItemGridInSelectionMode,
+                isDetailNavigationActive: $isProfileGridDetailNavigationActive,
+                isTabActionsBarVisible: $isProfileFilterActionsVisible,
+                onOpenItemFilter: {
+                    tabBarHideState.shouldHideTabBar = true
+                    navigationPath.append(ItemGridFilterRoute.itemFilter)
+                },
+                onOpenOutfitFilter: {
+                    tabBarHideState.shouldHideTabBar = true
+                    navigationPath.append(ItemGridFilterRoute.outfitFilter)
+                },
+                tabBarHideState: tabBarHideState,
+                profileCollapsingHeader: {
+                    profileHeaderSection
+                },
+                profileStickyPrefix: {
+                    profileWardrobeBar
+                }
+            )
+            // Closet-style: toolbar on the leaf content that fills the nav stack,
+            // not only on the Profile wrapper (nested UIKit scroll otherwise wins).
+            .toolbar {
+                if !isProfileItemGridInSelectionMode {
+                    profileNavigationToolbar()
+                }
+            }
+            .id(selectedWardrobe.objectID)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
             VStack(spacing: 0) {
                 profileHeaderSection
-                profileWardrobeSection
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
     }
 
@@ -399,314 +776,837 @@ struct ProfileView: View {
         )
     }
 
-    private var notificationsSheetPresented: Binding<Bool> {
+    private var wardrobesSheetPresented: Binding<Bool> {
         Binding(
-            get: { appCapabilities.enablesFriendsAndSharing && isNotificationsSheetPresented },
-            set: { isNotificationsSheetPresented = $0 }
-        )
-    }
-
-    private var friendsSheetPresented: Binding<Bool> {
-        Binding(
-            get: { appCapabilities.enablesFriendsAndSharing && isFriendsSheetPresented },
-            set: { isFriendsSheetPresented = $0 }
+            get: { appCapabilities.showsWishlistTab && showWardrobesSheet },
+            set: { showWardrobesSheet = $0 }
         )
     }
 
     @ViewBuilder
     private var profileHeaderSection: some View {
-        HStack(alignment: .top, spacing: 16) {
-            profileAvatarButton
-            profileInfoColumn
-            profileDisplayNameEditButton
+        if isViewingOtherUser {
+            otherUserProfileHeaderSection
+        } else {
+            ownProfileHeaderSection
+        }
+    }
+
+    /// Own-profile header: avatar, display name, Friends + Edit Profile.
+    /// Full template (bio/tags/location/socials/Sizes/etc.) — `.cursor/rules/profile-header-full-template-deferred.mdc`.
+    @ViewBuilder
+    private var ownProfileHeaderSection: some View {
+        VStack(alignment: .center, spacing: 0) {
+            ownProfileAvatarWithPhotoTap
+
+            // Display name typography — see profile-display-name-font-deferred.mdc
+            Text(displayNameForHeader)
+                .font(.system(.title2, design: .serif).weight(.semibold))
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(.top, Self.profileHeaderNameTopPadding)
+
+            ownProfileHeaderActionsRow
+                .padding(.top, Self.otherUserHeaderActionsVerticalSpacing)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal)
-        .padding(.vertical, 12)
-    }
-
-    private var profileAvatarButton: some View {
-        Button {
-            isProfilePhotoActionDialogPresented = true
-        } label: {
-            ZStack {
-                if let p = profileForAvatar {
-                    PublicUserProfileAvatarView(profile: p, size: 80)
-                        .id(avatarHeaderViewIdentity)
-                } else {
-                    Image(systemName: "person.circle.fill")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 80, height: 80)
-                        .foregroundColor(.gray)
-                }
-                if isAvatarUploading {
-                    Circle()
-                        .fill(.ultraThinMaterial)
-                    ProgressView()
-                }
-            }
-            .frame(width: 80, height: 80)
-            .clipShape(Circle())
-            .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .disabled(isAvatarUploading)
-        .confirmationDialog(
-            "Profile Photo",
-            isPresented: $isProfilePhotoActionDialogPresented,
-            titleVisibility: .visible
-        ) {
-            Button("Take Photo") { }
-            Button("Choose from Library") {
-                profileImagePickerSource = .photoLibrary
-                isProfileLibraryPickerPresented = true
-            }
-            Button("Remove Current Photo", role: .destructive) {
-                Task { await removeProfileAvatar() }
-            }
-            Button("Cancel", role: .cancel) { }
-        }
-    }
-
-    private var profileInfoColumn: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            profileDisplayNameField
-
-            if let error = errorMessage {
-                Text(error)
-                    .foregroundColor(.red)
-                    .font(.caption)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            if appCapabilities.enablesCloudSync {
-                Text("Lifestyle | Vintage | Fashion")
-                    .font(.subheadline)
-                    .foregroundColor(.gray)
-            }
-
-            if appCapabilities.enablesFriendsAndSharing {
-                Button {
-                    isFriendsSheetPresented = true
-                } label: {
-                    Text("\(friendsCount) friends")
-                        .font(.subheadline)
-                        .foregroundColor(.gray)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, Self.profileHeaderTopPadding)
+        .padding(.bottom, Self.profileHeaderBottomPadding)
         .id(refreshToken)
     }
 
-    @ViewBuilder
-    private var profileDisplayNameField: some View {
-        if appCapabilities.enablesCloudSync && isEditingDisplayName {
-            TextField("Display Name", text: $editedDisplayName)
-                .textFieldStyle(.roundedBorder)
-                .autocapitalization(.words)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            Text(currentDisplayName ?? "Name")
-                .font(.title2)
-                .fontWeight(.semibold)
+    /// Friends + Edit Profile — equal-width outlined buttons (border matches former action-tile circle stroke).
+    private var ownProfileHeaderActionsRow: some View {
+        HStack(alignment: .center, spacing: 12) {
+            if appCapabilities.enablesFriendsAndSharing {
+                Button {
+                    tabBarHideState.shouldHideTabBar = true
+                    isFriendsPresented = true
+                } label: {
+                    ownProfileOutlinedHeaderButtonLabel(
+                        title: "Friends",
+                        systemImage: "person.2"
+                    )
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity)
+                .accessibilityLabel("Friends")
+            }
+
+            Button {
+                isEditProfilePresented = true
+            } label: {
+                ownProfileOutlinedHeaderButtonLabel(
+                    title: "Edit Profile",
+                    systemImage: "pencil"
+                )
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity)
+            .accessibilityLabel("Edit profile")
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func ownProfileOutlinedHeaderButtonLabel(title: String, systemImage: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .semibold))
+            Text(title)
+                .font(.system(.subheadline, design: .serif).weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+        }
+        .foregroundStyle(.primary)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: Self.otherUserHeaderActionCornerRadius, style: .continuous)
+                .fill(Color.clear)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: Self.otherUserHeaderActionCornerRadius, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
         }
     }
 
-    @ViewBuilder
-    private var profileDisplayNameEditButton: some View {
-        if authSession.isAuthenticated && appCapabilities.enablesCloudSync {
+    private var ownProfileAvatarWithPhotoTap: some View {
+        ZStack {
+            avatarImageContent(size: Self.profileHeaderAvatarSize)
+                .shadow(color: .black.opacity(0.22), radius: 6, x: 0, y: 3)
+
             Button {
-                if isEditingDisplayName {
-                    Task { await saveDisplayName() }
-                } else {
-                    startEditingDisplayName()
-                }
+                isProfilePhotoActionDialogPresented = true
             } label: {
-                if isSavingDisplayName {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle())
-                        .scaleEffect(0.8)
-                } else if isEditingDisplayName {
-                    Image(systemName: "checkmark")
-                        .foregroundColor(.green)
-                } else {
-                    Image(systemName: "pencil")
-                        .foregroundColor(.accentColor)
-                }
+                Color.clear
+                    .frame(
+                        width: Self.profileHeaderAvatarSize,
+                        height: Self.profileHeaderAvatarSize
+                    )
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .disabled(isSavingDisplayName)
-            .accessibilityLabel(isEditingDisplayName ? "Save profile" : "Edit profile")
+            .disabled(isAvatarUploading)
+            .confirmationDialog(
+                "Profile Photo",
+                isPresented: $isProfilePhotoActionDialogPresented,
+                titleVisibility: .visible
+            ) {
+                Button("Take Photo") { }
+                Button("Choose from Library") {
+                    profileImagePickerSource = .photoLibrary
+                    isProfileLibraryPickerPresented = true
+                }
+                Button("Remove Current Photo", role: .destructive) {
+                    Task { await removeProfileAvatar() }
+                }
+                Button("Cancel", role: .cancel) { }
+            }
+        }
+        .frame(width: Self.profileHeaderAvatarSize, height: Self.profileHeaderAvatarSize)
+        .accessibilityLabel("Profile photo")
+    }
+
+    /// Shared corner radius for own / other-user header action buttons.
+    private static let otherUserHeaderActionCornerRadius: CGFloat = 8
+    /// Gap between display name ↔ action buttons, and action buttons ↔ wardrobe row.
+    private static let otherUserHeaderActionsVerticalSpacing: CGFloat = 14
+
+    // MARK: - Other-user header (centered avatar; actions under display name)
+
+    @ViewBuilder
+    private var otherUserProfileHeaderSection: some View {
+        VStack(alignment: .center, spacing: 0) {
+            avatarImageContent(size: Self.profileHeaderAvatarSize)
+                .shadow(color: .black.opacity(0.22), radius: 6, x: 0, y: 3)
+
+            // Display name typography — see profile-display-name-font-deferred.mdc
+            Text(displayNameForHeader)
+                .font(.title2.weight(.semibold))
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(.top, Self.profileHeaderNameTopPadding)
+
+            if appCapabilities.enablesFriendsAndSharing {
+                otherUserHeaderActionsRow
+                    .padding(.top, Self.otherUserHeaderActionsVerticalSpacing)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal)
+        .padding(.top, Self.profileHeaderTopPadding)
+        .padding(.bottom, Self.otherUserHeaderActionsVerticalSpacing)
+        .id(refreshToken)
+    }
+
+    /// Add/Remove/Friends (outlined, matches own-profile Friends) + Redress (cayenne); equal width.
+    private var otherUserHeaderActionsRow: some View {
+        HStack(alignment: .center, spacing: 12) {
+            otherUserFriendshipButton
+                .frame(maxWidth: .infinity)
+            otherUserRedressButton
+                .frame(maxWidth: .infinity)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var otherUserFriendshipButton: some View {
+        let title: String
+        let systemImage: String
+        let accessibility: String
+        let showsConnectedState: Bool
+
+        if isMutualFriendWithViewedUser {
+            title = "Friends"
+            systemImage = "checkmark"
+            accessibility = "Friends"
+            showsConnectedState = true
+        } else if isFollowingViewedUser {
+            title = "Remove"
+            systemImage = "person.badge.minus"
+            accessibility = "Remove friend"
+            showsConnectedState = true
+        } else {
+            title = "Add Friend"
+            systemImage = "person.badge.plus"
+            accessibility = "Add friend"
+            showsConnectedState = false
+        }
+
+        return Button {
+            if showsConnectedState {
+                showRemoveFriendAlert = true
+            } else {
+                Task { await sendFriendRequestToViewedUser() }
+            }
+        } label: {
+            // Match own-profile Friends outlined button (clear fill + thin border).
+            ownProfileOutlinedHeaderButtonLabel(title: title, systemImage: systemImage)
+        }
+        .buttonStyle(.plain)
+        .disabled(isUpdatingFriendship)
+        .accessibilityLabel(accessibility)
+    }
+
+    private var otherUserRedressButton: some View {
+        let enabled = isRedressHeaderActionEnabled
+        return Button {
+            guard enabled else { return }
+            isRedressOutfitPresented = true
+        } label: {
+            HStack(spacing: 8) {
+                Image("Redress.SFSymbol")
+                    .resizable()
+                    .renderingMode(.template)
+                    .scaledToFit()
+                    .frame(width: Self.profileHeaderActionIconSize, height: Self.profileHeaderActionIconSize)
+                Text("Redress")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .foregroundStyle(enabled ? .white : .primary)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: Self.otherUserHeaderActionCornerRadius, style: .continuous)
+                    .fill(
+                        enabled
+                            ? AnyShapeStyle(Color.cayenne.gradient)
+                            : AnyShapeStyle(Color(UIColor.secondarySystemFill))
+                    )
+            )
+            .overlay {
+                if !enabled {
+                    RoundedRectangle(cornerRadius: Self.otherUserHeaderActionCornerRadius, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .allowsHitTesting(enabled)
+        .accessibilityLabel("Redress")
+        .accessibilityHint(enabled ? "" : "Unavailable")
+    }
+
+    private var isRedressHeaderActionEnabled: Bool {
+        canShowRedress && !remoteWardrobes.isEmpty
+    }
+
+    private func avatarImageContent(size: CGFloat) -> some View {
+        ZStack {
+            if let p = profileForAvatar {
+                PublicUserProfileAvatarView(profile: p, size: size)
+                    // Identity = avatar URL only. Do not include @State UUIDs — those reset when
+                    // ProfileView is recreated (tab switch) and would remount/reload the image.
+                    .id(avatarHeaderViewIdentity)
+            } else {
+                Image(systemName: "person.circle.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: size, height: size)
+                    .foregroundColor(.gray)
+            }
+            if isAvatarUploading {
+                Circle()
+                    .fill(.ultraThinMaterial)
+                ProgressView()
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .contentShape(Circle())
+    }
+
+    private var displayNameForHeader: String {
+        if isViewingOtherUser, let viewedProfile {
+            let name = viewedProfile.displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return name.isEmpty ? "Name" : name
+        }
+        return currentDisplayName ?? "Name"
+    }
+
+    @ViewBuilder
+    private var profileWardrobeBar: some View {
+        if !isProfileItemGridInSelectionMode {
+            HStack {
+                Spacer(minLength: 0)
+                HStack(spacing: 4) {
+                    if !isViewingOtherUser {
+                        profileWardrobeVisibilityIcon
+                    }
+                    profileWardrobeSelectionButton()
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, Self.wardrobeBarEdgePadding)
+            .background(Color(.systemBackground))
+        }
+    }
+
+    private var selectedProfileWardrobeVisibility: WardrobeVisibility {
+        selectedProfileWardrobe?.wardrobeVisibility ?? .public
+    }
+
+    private var profileWardrobeVisibilityIcon: some View {
+        Image(systemName: selectedProfileWardrobeVisibility.iconName)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .accessibilityLabel(selectedProfileWardrobeVisibility.menuLabel)
+    }
+
+    @ToolbarContentBuilder
+    private func otherUserProfileToolbar() -> some ToolbarContent {
+        ToolbarItem(placement: .navigationBarTrailing) {
+            Button {
+                showOtherUserProfileOptionsDialog = true
+            } label: {
+                Image(systemName: "ellipsis")
+                    .rotationEffect(.degrees(90))
+            }
+            .accessibilityLabel("More options")
         }
     }
 
     @ToolbarContentBuilder
     private func profileNavigationToolbar() -> some ToolbarContent {
         ToolbarItem(placement: .navigationBarLeading) {
-            NavigationLink {
-                SettingsView()
-                    .toolbar(.hidden, for: .tabBar)
+            Button {
+                isSettingsPresented = true
             } label: {
                 Image(systemName: "gearshape")
             }
         }
-        if appCapabilities.enablesFriendsAndSharing {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button {
-                    isNotificationsSheetPresented = true
-                } label: {
-                    notificationsBellLabel
-                }
+        ToolbarItemGroup(placement: .navigationBarTrailing) {
+            Button {
+                isUsersPresented = true
+            } label: {
+                Image(systemName: "plus")
             }
-        }
-        if appCapabilities.enablesCloudSync {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button {
-                    // Action not defined yet
-                } label: {
-                    Image(systemName: "plus")
-                }
-            }
+            .accessibilityLabel("Add friend")
         }
     }
 
-    private var notificationsBellLabel: some View {
-        ZStack(alignment: .topTrailing) {
-            Image(systemName: "bell")
-            if unreadNotificationsCount > 0 {
-                Text("\(min(unreadNotificationsCount, 99))")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 2)
-                    .background(Color.red)
-                    .clipShape(Capsule())
-                    .offset(x: 8, y: -8)
+    private func profileWardrobeSelectionButton() -> some View {
+        Button {
+            syncProfileWardrobeSheetTabToSelection()
+            showWardrobesSheet = true
+        } label: {
+            HStack(spacing: 4) {
+                Text(profileWardrobeNavigationTitle)
+                    .font(.system(.headline, design: .serif))
+                Image(systemName: "chevron.down")
+                    .font(.system(.caption, design: .serif))
             }
         }
-    }
-
-    private var profileNotificationsSheet: some View {
-        NavigationView {
-            profileNotificationsSheetContent
-                .navigationTitle("Notifications")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") {
-                            isNotificationsSheetPresented = false
-                        }
-                    }
-                }
-                .task {
-                    await loadNotifications(markPassiveAsRead: true)
-                }
-        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
-    private var profileNotificationsSheetContent: some View {
-        if isLoadingNotifications {
-            ProgressView("Loading notifications…")
-        } else if let error = notificationsError {
-            Text(error)
-                .foregroundColor(.red)
+    private var otherUserProfileContent: some View {
+        if !appCapabilities.enablesFriendsAndSharing {
+            Text("Profile viewing is not available in this build.")
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if !appCapabilities.enablesCloudSync {
+            Text("Sign in with cloud sync to view profiles.")
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if isLoadingRemoteWardrobes {
+            ProgressView("Loading profile…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let remoteWardrobesError {
+            Text(remoteWardrobesError)
+                .foregroundStyle(.red)
+                .multilineTextAlignment(.center)
                 .padding()
-        } else if notifications.isEmpty {
-            Text("No new notifications")
-                .foregroundColor(.secondary)
-                .padding()
-        } else {
-            List(notifications) { notification in
-                profileNotificationRow(notification)
-            }
-            .listStyle(.plain)
-        }
-    }
-
-    private func profileNotificationRow(_ notification: NotificationRecord) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(notification.title)
-                    .font(.headline)
-                if let body = notification.body, !body.isEmpty {
-                    Text(body)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if remoteWardrobes.isEmpty {
+            otherUserEmptyPublicWardrobesContent
+        } else if let wardrobe = selectedRemoteWardrobe, let ownerId = viewedProfile?.userId {
+            RemoteProfileWardrobeGridView(
+                ownerUserId: ownerId,
+                wardrobe: wardrobe,
+                ownerProfile: viewedProfile,
+                refreshToken: remoteGridRefreshToken,
+                preferredTab: $remoteGridPreferredTab,
+                tabBarHideState: tabBarHideState,
+                profileCollapsingHeader: {
+                    profileHeaderSection
+                },
+                profileStickyPrefix: {
+                    // Deferred WARDROBE/CALENDAR tab row — other-user-profile-calendar-deferred.mdc
+                    // VStack(spacing: 0) {
+                    //     otherUserSectionTabBar
+                    //     remoteProfileWardrobeBar(wardrobe: wardrobe)
+                    // }
+                    remoteProfileWardrobeBar(wardrobe: wardrobe)
                 }
-                Text(notification.created_at, style: .date)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            if notification.type == "friend_request", notification.is_read == false {
-                friendRequestActions(for: notification)
-            }
+            )
+            .id("\(wardrobe.id)-\(remoteGridRefreshToken.uuidString)")
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        } else {
+            ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .padding(.vertical, 6)
     }
 
-    private var profileFriendsSheet: some View {
-        NavigationView {
-            profileFriendsSheetContent
-                .navigationTitle("Friends")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") {
-                            isFriendsSheetPresented = false
-                        }
+    /*
+    // MARK: Deferred — other-user WARDROBE / CALENDAR (other-user-profile-calendar-deferred.mdc)
+
+    private var otherUserSectionTabBar: some View {
+        UnderlineTabBar(
+            selectedTab: $otherUserContentTab,
+            tabs: ["WARDROBE", "CALENDAR"]
+        )
+        .padding(.horizontal, 14)
+        .padding(.bottom, 8)
+        .background(Color(.systemBackground))
+    }
+
+    private var otherUserCalendarContent: some View {
+        VStack(spacing: 0) {
+            profileHeaderSection
+            otherUserSectionTabBar
+            ScrollView(showsIndicators: false) {
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible(), spacing: 2),
+                        GridItem(.flexible(), spacing: 2),
+                        GridItem(.flexible(), spacing: 2),
+                    ],
+                    spacing: 2
+                ) {
+                    ForEach(Self.otherUserCalendarPlaceholderEvents) { event in
+                        OtherUserPlaceholderEventCard(event: event)
                     }
                 }
-                .task {
-                    await loadFriends()
-                }
+                .padding(.horizontal, 14)
+                .padding(.top, 8)
+                .padding(.bottom, 24)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(Color(.systemBackground))
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color(.systemBackground))
+    }
+
+    private static let otherUserCalendarPlaceholderEvents: [OtherUserPlaceholderEvent] = [
+        OtherUserPlaceholderEvent(day: "Friday", date: "14", time: "7:00 PM", location: "Downtown"),
+        OtherUserPlaceholderEvent(day: "Saturday", date: "15", time: "11:30 AM", location: "City Park"),
+        OtherUserPlaceholderEvent(day: "Sunday", date: "16", time: "6:00 PM", location: "Harbor"),
+    ]
+    */
+
+    /// Other-user profile with no public wardrobes: same UIKit nested chrome as a populated grid.
+    private var otherUserEmptyPublicWardrobesContent: some View {
+        ProfileNestedScrollContainer(
+            selectedTab: $remoteGridPreferredTab,
+            header: profileHeaderSection,
+            sticky: VStack(spacing: 0) {
+                // otherUserSectionTabBar // deferred: other-user-profile-calendar-deferred.mdc
+                remoteLockedClosetWardrobeBar
+                Picker("", selection: $remoteGridPreferredTab) {
+                    Text("Items (0)").tag("Items")
+                    Text("Outfits (0)").tag("Outfits")
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .disabled(true)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
+                .background(Color(.systemBackground))
+            }
+            .background(Color(.systemBackground)),
+            itemsPage: emptyRemoteWardrobeTabMessage,
+            outfitsPage: emptyRemoteWardrobeTabMessage,
+            onRefresh: {
+                await loadRemoteWardrobes()
+            }
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var emptyRemoteWardrobeTabMessage: some View {
+        ScrollView(showsIndicators: false) {
+            Text("No public wardrobes")
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 24)
+        }
+    }
+
+    private var remoteLockedClosetWardrobeBar: some View {
+        HStack {
+            Spacer(minLength: 0)
+            HStack(spacing: 4) {
+                Image(systemName: WardrobeVisibility.private.iconName)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(WardrobeVisibility.private.menuLabel)
+
+                Text("Closet")
+                    .font(.system(.headline, design: .serif))
+                    .foregroundStyle(.primary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 0)
+        .padding(.bottom, Self.wardrobeBarEdgePadding)
+        .background(Color(.systemBackground))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Closet, private")
+    }
+
+    private func remoteProfileWardrobeBar(wardrobe: VisibleWardrobe) -> some View {
+        HStack {
+            Spacer(minLength: 0)
+            HStack(spacing: 4) {
+                Image(systemName: wardrobe.wardrobeVisibility.iconName)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(wardrobe.wardrobeVisibility.menuLabel)
+
+                Button {
+                    syncRemoteWardrobeSheetTabToSelection()
+                    showRemoteWardrobesSheet = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(wardrobe.name)
+                            .font(.system(.headline, design: .serif))
+                        Image(systemName: "chevron.down")
+                            .font(.system(.caption, design: .serif))
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 0)
+        .padding(.bottom, Self.wardrobeBarEdgePadding)
+        .background(Color(.systemBackground))
+    }
+
+    private var remoteWardrobesSheet: some View {
+        VStack(spacing: 0) {
+            SelectionPanelHeader(title: "Wardrobes") {
+                Picker("", selection: $selectedRemoteWardrobeTab) {
+                    Text("Closet (\(remoteClosets.count))").tag("Closet")
+                    Text("Wishlist (\(remoteWishlists.count))").tag("Wishlist")
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+
+            Group {
+                if selectedRemoteWardrobeTab == "Closet" {
+                    remoteWardrobePage(wardrobes: remoteClosets, emptyNoun: "closets")
+                } else {
+                    remoteWardrobePage(wardrobes: remoteWishlists, emptyNoun: "wishlists")
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 
     @ViewBuilder
-    private var profileFriendsSheetContent: some View {
-        if isLoadingFriends {
-            ProgressView("Loading friends…")
-        } else if let error = friendsError {
-            Text(error)
-                .foregroundColor(.red)
-                .padding()
-        } else if friends.isEmpty {
-            Text("No friends yet")
-                .foregroundColor(.secondary)
-                .padding()
-        } else {
-            List(friends) { friend in
-                profileFriendRow(friend)
-            }
-            .listStyle(.plain)
-        }
-    }
-
-    private func profileFriendRow(_ friend: PublicUserProfile) -> some View {
-        HStack(spacing: 12) {
-            PublicUserProfileAvatarView(profile: friend, size: 44)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(friend.username)
-                    .font(.headline)
-                if let name = friend.displayName, !name.isEmpty {
-                    Text(name)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+    private func remoteWardrobePage(wardrobes: [VisibleWardrobe], emptyNoun: String) -> some View {
+        List {
+            if wardrobes.isEmpty {
+                Text("No public \(emptyNoun)")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .listRowInsets(EdgeInsets(top: 12, leading: 20, bottom: 12, trailing: 20))
+            } else {
+                ForEach(wardrobes) { wardrobe in
+                    Button {
+                        selectedRemoteWardrobe = wardrobe
+                        showRemoteWardrobesSheet = false
+                    } label: {
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(wardrobe.name)
+                                    .foregroundStyle(.primary)
+                                Text(wardrobe.wardrobeType == "wishlist" ? "Wishlist" : "Closet")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 0)
+                            if selectedRemoteWardrobe?.id == wardrobe.id {
+                                Image(systemName: "checkmark")
+                                    .foregroundStyle(.blue)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 10, trailing: 20))
                 }
             }
         }
-        .padding(.vertical, 4)
+        .listStyle(.plain)
+    }
+
+    private func syncRemoteWardrobeSheetTabToSelection() {
+        if selectedRemoteWardrobe?.wardrobeType == "wishlist" {
+            selectedRemoteWardrobeTab = "Wishlist"
+        } else {
+            selectedRemoteWardrobeTab = "Closet"
+        }
+    }
+
+    private func setInitialRemoteWardrobe() {
+        if let selected = selectedRemoteWardrobe,
+           !remoteWardrobes.contains(where: { $0.id == selected.id }) {
+            selectedRemoteWardrobe = nil
+        }
+        if selectedRemoteWardrobe == nil {
+            selectedRemoteWardrobe = remoteClosets.first ?? remoteWardrobes.first
+        }
+    }
+
+    private func loadRedressAvailability() async {
+        guard let userId = viewedProfile?.userId else { return }
+        do {
+            let wardrobes = try await supabaseService.fetchRedressWardrobes(forUserId: userId)
+            var hasItems = false
+            for wardrobe in wardrobes {
+                let items = try await supabaseService.fetchRedressWardrobeItems(
+                    userId: userId,
+                    wardrobeId: wardrobe.id
+                )
+                if !items.isEmpty {
+                    hasItems = true
+                    break
+                }
+            }
+            await MainActor.run {
+                canShowRedress = hasItems
+            }
+        } catch {
+            print("⚠️ Failed to load Redress availability: \(error.localizedDescription)")
+            await MainActor.run {
+                canShowRedress = false
+            }
+        }
+    }
+
+    private func hydrateOtherUserProfileFromCacheIfNeeded() {
+        guard let userId = viewedProfile?.userId else { return }
+
+        if let cachedWardrobes = supabaseService.cachedVisibleWardrobes(forUserId: userId) {
+            remoteWardrobes = cachedWardrobes
+            setInitialRemoteWardrobe()
+            isLoadingRemoteWardrobes = false
+        }
+        if let counts = supabaseService.cachedViewedUserFollowCounts(forUserId: userId) {
+            viewedUserFollowingCount = counts.following
+            viewedUserFollowersCount = counts.followers
+        }
+        if let details = supabaseService.cachedViewedUserFriendshipDetails(forUserId: userId) {
+            applyViewedUserFriendshipDetails(details)
+        } else if let isFriend = supabaseService.cachedViewedUserIsFriend(forUserId: userId) {
+            isFriendWithViewedUser = isFriend
+            isFollowingViewedUser = isFriend
+            isMutualFriendWithViewedUser = false
+        }
+    }
+
+    private func loadRemoteWardrobes() async {
+        guard let userId = viewedProfile?.userId else { return }
+        let hasCachedWardrobes = supabaseService.cachedVisibleWardrobes(forUserId: userId) != nil
+        if !hasCachedWardrobes {
+            await MainActor.run {
+                isLoadingRemoteWardrobes = true
+                remoteWardrobesError = nil
+            }
+        }
+        do {
+            let wardrobes = try await supabaseService.fetchVisibleWardrobes(forUserId: userId, forceRefresh: true)
+            await MainActor.run {
+                remoteWardrobes = wardrobes
+                setInitialRemoteWardrobe()
+                isLoadingRemoteWardrobes = false
+            }
+        } catch {
+            await MainActor.run {
+                if !hasCachedWardrobes {
+                    remoteWardrobes = []
+                    selectedRemoteWardrobe = nil
+                }
+                remoteWardrobesError = error.localizedDescription
+                isLoadingRemoteWardrobes = false
+            }
+        }
+    }
+
+    private func loadViewedUserSocialMetadata() async {
+        guard let userId = viewedProfile?.userId else { return }
+        let hasCachedCounts = supabaseService.cachedViewedUserFollowCounts(forUserId: userId) != nil
+        let hasCachedFriendshipDetails = supabaseService.cachedViewedUserFriendshipDetails(forUserId: userId) != nil
+        if hasCachedCounts || hasCachedFriendshipDetails || supabaseService.cachedViewedUserIsFriend(forUserId: userId) != nil {
+            await MainActor.run {
+                if let counts = supabaseService.cachedViewedUserFollowCounts(forUserId: userId) {
+                    viewedUserFollowingCount = counts.following
+                    viewedUserFollowersCount = counts.followers
+                }
+                if let details = supabaseService.cachedViewedUserFriendshipDetails(forUserId: userId) {
+                    applyViewedUserFriendshipDetails(details)
+                } else if let isFriend = supabaseService.cachedViewedUserIsFriend(forUserId: userId) {
+                    isFriendWithViewedUser = isFriend
+                    isFollowingViewedUser = isFriend
+                    isMutualFriendWithViewedUser = false
+                }
+            }
+        }
+        do {
+            async let friendshipsTask = supabaseService.fetchFriendshipsForCurrentUser()
+            let counts: FollowCounts
+            if hasCachedCounts, let cached = supabaseService.cachedViewedUserFollowCounts(forUserId: userId) {
+                counts = cached
+            } else {
+                counts = try await supabaseService.fetchFollowCounts(forUserId: userId)
+            }
+            let friendships = try await friendshipsTask
+            let details = Self.friendshipDetails(
+                with: userId,
+                currentUserId: authSession.userId,
+                friendships: friendships
+            )
+            await MainActor.run {
+                viewedUserFollowingCount = counts.following
+                viewedUserFollowersCount = counts.followers
+                applyViewedUserFriendshipDetails(details)
+            }
+            supabaseService.storeViewedUserFriendshipDetails(details, forUserId: userId)
+        } catch {
+            print("⚠️ Failed to load viewed user social metadata: \(error.localizedDescription)")
+        }
+    }
+
+    private func applyViewedUserFriendshipDetails(_ details: ViewedUserFriendshipDetails) {
+        isFriendWithViewedUser = details.isFriend
+        isFollowingViewedUser = details.isFollowing
+        isMutualFriendWithViewedUser = details.isMutual
+    }
+
+    private static func friendshipDetails(
+        with userId: UUID,
+        currentUserId: UUID?,
+        friendships: [FriendshipRecord]
+    ) -> ViewedUserFriendshipDetails {
+        guard let currentId = currentUserId else {
+            return ViewedUserFriendshipDetails(isFriend: false, isFollowing: false, isMutual: false)
+        }
+        let iFollow = friendships.contains {
+            $0.status == "accepted" && $0.user_id == currentId && $0.friend_user_id == userId
+        }
+        let theyFollow = friendships.contains {
+            $0.status == "accepted" && $0.user_id == userId && $0.friend_user_id == currentId
+        }
+        return ViewedUserFriendshipDetails(
+            isFriend: iFollow || theyFollow,
+            isFollowing: iFollow,
+            isMutual: iFollow && theyFollow
+        )
+    }
+
+    private func sendFriendRequestToViewedUser() async {
+        guard let profile = viewedProfile else { return }
+        await MainActor.run { isUpdatingFriendship = true }
+        defer { Task { @MainActor in isUpdatingFriendship = false } }
+        do {
+            try await supabaseService.sendFriendRequest(
+                toUserId: profile.userId,
+                toUsername: profile.username,
+                toDisplayName: profile.displayName
+            )
+        } catch {
+            print("⚠️ Failed to send friend request: \(error.localizedDescription)")
+        }
+    }
+
+    private func removeFriendshipWithViewedUser() async {
+        guard let userId = viewedProfile?.userId else { return }
+        await MainActor.run { isUpdatingFriendship = true }
+        defer { Task { @MainActor in isUpdatingFriendship = false } }
+        do {
+            try await supabaseService.unfriend(userId: userId)
+            await supabaseService.refreshOwnFriendshipStateFromServer()
+            await MainActor.run {
+                isFriendWithViewedUser = false
+                isFollowingViewedUser = false
+                isMutualFriendWithViewedUser = false
+                viewedUserFollowingCount = nil
+                viewedUserFollowersCount = nil
+            }
+            // Force a fresh fetch after cache invalidation from unfriend.
+            do {
+                let counts = try await supabaseService.fetchFollowCounts(forUserId: userId, forceRefresh: true)
+                await MainActor.run {
+                    viewedUserFollowingCount = counts.following
+                    viewedUserFollowersCount = counts.followers
+                }
+            } catch {
+                print("⚠️ Failed to refresh viewed user follow counts: \(error.localizedDescription)")
+            }
+        } catch {
+            print("⚠️ Failed to unfriend: \(error.localizedDescription)")
+        }
     }
 
     private func bootstrapProfileIfNeeded() async {
         guard authSession.isAuthenticated, let uid = authSession.userId else { return }
-        if !appCapabilities.enablesCloudSync {
-            try? profileRepository.restoreLocalAvatarIfNeeded(userId: uid.uuidString)
+        try? profileRepository.restoreLocalAvatarIfNeeded(userId: uid.uuidString)
+        // Production: drop any leftover local JPEG so it cannot shadow the CDN avatar.
+        if appCapabilities.enablesCloudSync, let uuid = authSession.userId {
+            ProfileAvatarLocalStorage.delete(userId: uuid)
         }
         if didBootstrapProfileFromServerForUserId != uid.uuidString {
             do {
@@ -718,120 +1618,10 @@ struct ProfileView: View {
                 print("⚠️ Error loading profile in ProfileView: \(error.localizedDescription)")
             }
         }
-        if appCapabilities.enablesFriendsAndSharing {
-            await loadNotifications()
-        }
     }
 }
 
 extension ProfileView {
-    @ViewBuilder
-    private func friendRequestActions(for notification: NotificationRecord) -> some View {
-        let isBusy = respondingNotificationIds.contains(notification.id)
-        let friendshipIdString = notification.payload?["friendship_id"]
-        let friendshipId = friendshipIdString.flatMap { UUID(uuidString: $0) }
-        
-        if friendshipId == nil {
-            Text("Unable to respond to this request.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-        } else {
-            HStack(spacing: 12) {
-                Button {
-                    Task { await respondToFriendRequest(notification: notification, accept: true) }
-                } label: {
-                    if isBusy {
-                        ProgressView().scaleEffect(0.8)
-                    } else {
-                        Text("Accept")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(isBusy)
-                
-                Button(role: .destructive) {
-                    Task { await respondToFriendRequest(notification: notification, accept: false) }
-                } label: {
-                    Text("Decline")
-                }
-                .buttonStyle(.bordered)
-                .disabled(isBusy)
-            }
-        }
-    }
-    
-    private func loadNotifications(markPassiveAsRead: Bool = false) async {
-        guard authSession.isAuthenticated else {
-            notifications = []
-            return
-        }
-        
-        isLoadingNotifications = true
-        notificationsError = nil
-        
-        do {
-            var fetched = try await supabaseService.fetchNotifications()
-            
-            if markPassiveAsRead {
-                let idsToMarkRead = fetched
-                    .filter { !$0.is_read && !notificationRequiresAction($0) }
-                    .map(\.id)
-                
-                if !idsToMarkRead.isEmpty {
-                    for notificationId in idsToMarkRead {
-                        try await supabaseService.markNotificationRead(id: notificationId)
-                    }
-                    fetched = try await supabaseService.fetchNotifications()
-                }
-            }
-            
-            await MainActor.run {
-                notifications = fetched
-            }
-        } catch {
-            await MainActor.run {
-                notificationsError = error.localizedDescription
-                notifications = []
-            }
-        }
-        
-        await MainActor.run {
-            isLoadingNotifications = false
-        }
-    }
-    
-    private func notificationRequiresAction(_ notification: NotificationRecord) -> Bool {
-        notification.type == "friend_request"
-    }
-    
-    private func respondToFriendRequest(notification: NotificationRecord, accept: Bool) async {
-        guard let friendshipIdString = notification.payload?["friendship_id"],
-              let friendshipId = UUID(uuidString: friendshipIdString) else {
-            return
-        }
-        
-        await MainActor.run {
-            respondingNotificationIds.insert(notification.id)
-        }
-        
-        do {
-            try await supabaseService.respondToFriendRequest(friendshipId: friendshipId, accept: accept)
-            try await supabaseService.markNotificationRead(id: notification.id)
-            if accept {
-                supabaseService.applyFriendCountDelta(1)
-            }
-            await loadNotifications()
-        } catch {
-            await MainActor.run {
-                notificationsError = error.localizedDescription
-            }
-        }
-        
-        await MainActor.run {
-            respondingNotificationIds.remove(notification.id)
-        }
-    }
-    
     /// Square-crops, flattens to opaque JPEG. Production uploads to R2 + Supabase; TestFlight stores on device only.
     private func uploadProfileAvatarFromLibrary(_ image: UIImage) async {
         guard let userId = authSession.userId else { return }
@@ -854,9 +1644,12 @@ extension ProfileView {
         }
 
         do {
+            let previousAvatarURL = userProfile?.storedProfileAvatarURL
             if appCapabilities.enablesCloudSync {
                 let url = try await supabaseService.uploadProfileAvatar(imageData: data, userId: userId)
                 try await supabaseService.updateProfileAvatarURL(url)
+                // Don't let a leftover local JPEG shadow the CDN URL in the header avatar.
+                ProfileAvatarLocalStorage.delete(userId: userId)
             } else {
                 _ = try ProfileAvatarLocalStorage.saveJPEG(userId: userId, data: data)
                 let repository = UserProfileRepository(context: viewContext)
@@ -865,6 +1658,9 @@ extension ProfileView {
                     userId: userId.uuidString,
                     syncToCloud: false
                 )
+            }
+            if let previousAvatarURL {
+                ProfileAvatarImageCache.remove(for: previousAvatarURL)
             }
             await MainActor.run {
                 viewContext.refreshAllObjects()
@@ -879,6 +1675,7 @@ extension ProfileView {
 
     private func removeProfileAvatar() async {
         guard let userId = authSession.userId else { return }
+        let previousAvatarURL = userProfile?.storedProfileAvatarURL
         await MainActor.run {
             isAvatarUploading = true
             avatarUploadError = nil
@@ -892,10 +1689,14 @@ extension ProfileView {
             if appCapabilities.enablesCloudSync {
                 try? await supabaseService.deleteProfileAvatar(userId: userId)
                 try await supabaseService.updateProfileAvatarURL(nil)
+                ProfileAvatarLocalStorage.delete(userId: userId)
             } else {
                 ProfileAvatarLocalStorage.delete(userId: userId)
                 let repository = UserProfileRepository(context: viewContext)
                 try repository.updateAvatarUrl(nil, userId: userId.uuidString, syncToCloud: false)
+            }
+            if let previousAvatarURL {
+                ProfileAvatarImageCache.remove(for: previousAvatarURL)
             }
             await MainActor.run {
                 viewContext.refreshAllObjects()
@@ -908,30 +1709,78 @@ extension ProfileView {
         }
     }
 
-    private func loadFriends() async {
-        guard authSession.isAuthenticated else {
-            await MainActor.run { friends = [] }
-            return
-        }
-        
-        await MainActor.run {
-            isLoadingFriends = true
-            friendsError = nil
-        }
-        
-        do {
-            let fetched = try await supabaseService.fetchFriends()
-            await MainActor.run {
-                friends = fetched
-                isLoadingFriends = false
-            }
-        } catch {
-            await MainActor.run {
-                friendsError = error.localizedDescription
-                friends = []
-                isLoadingFriends = false
-            }
-        }
-    }
 }
 
+// MARK: - Other-user calendar placeholders (deferred — other-user-profile-calendar-deferred.mdc)
+// Kept as design stubs for event-redress profile calendar; not shown in UI yet.
+
+struct OtherUserPlaceholderEvent: Identifiable {
+    let id = UUID()
+    let day: String
+    let date: String
+    let time: String
+    let location: String
+}
+
+/// Placeholder event card: SelectionHeader-style gray band + square outfit/items stub + location.
+struct OtherUserPlaceholderEventCard: View {
+    let event: OtherUserPlaceholderEvent
+
+    private let cornerRadius: CGFloat = 10
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 2) {
+                Text(event.day.uppercased())
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+
+                Text(event.date)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.white)
+
+                Text(event.time)
+                    .font(.caption2)
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .padding(.horizontal, 4)
+            .background(Color(UIColor.systemGray))
+
+            Color(UIColor.tertiarySystemFill)
+                .aspectRatio(1, contentMode: .fit)
+                .overlay {
+                    Image(systemName: "hanger")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityLabel("Chosen items or outfit placeholder")
+
+            HStack(spacing: 3) {
+                Image(systemName: "mappin")
+                    .font(.caption2)
+                Text(event.location)
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 6)
+            .background(Color(.systemBackground))
+        }
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .strokeBorder(Color(UIColor.separator), lineWidth: 1)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(event.day) \(event.date), \(event.time), \(event.location)")
+    }
+}

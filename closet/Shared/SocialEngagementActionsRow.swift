@@ -7,22 +7,19 @@ import SwiftUI
 
 enum SocialEngagementToolbarSegment: Int, CaseIterable, Hashable {
     case tshirt
-    // case arrowBackward
-    case person
+    case worn
 
     var systemImage: String {
         switch self {
         case .tshirt: "tshirt"
-        // case .arrowBackward: "arrowshape.turn.up.backward"
-        case .person: "person.crop.square.badge.camera"
+        case .worn: "person.crop.square.badge.camera"
         }
     }
 
     var accessibilityLabel: String {
         switch self {
         case .tshirt: "T-shirt"
-        // case .arrowBackward: "Back"
-        case .person: "Person"
+        case .worn: "Worn photo"
         }
     }
 }
@@ -30,11 +27,21 @@ enum SocialEngagementToolbarSegment: Int, CaseIterable, Hashable {
 struct SocialEngagementActionsRow: View {
     @Binding private var segmentSelection: SocialEngagementToolbarSegment
 
-    /// When non-`nil`, the heart reflects favorite on/off (`true` = `heart.fill`). When `nil`, shows outline `heart` (e.g. outfits).
+    /// When non-`nil`, the heart reflects liked/favorited on/off (`true` = `heart.fill`). When `nil`, shows outline `heart`.
     var favoriteSelection: Bool?
+    /// When non-`nil`, shows the social like count next to the heart (other-user profiles).
+    var likeCount: Int? = nil
+    var showsLikeButton: Bool = true
+    var isLikeInteractive: Bool = true
+    var showsRedressButton: Bool = false
     var showsShareButton: Bool
+    var showsMoveToClosetButton: Bool
+    var showsWornSegment: Bool = true
+    var disabledSegments: Set<SocialEngagementToolbarSegment> = []
     var onLike: () -> Void
+    var onRedress: () -> Void
     var onShare: () -> Void
+    var onMoveToCloset: () -> Void
 
     private var heartSystemImage: String {
         guard let isOn = favoriteSelection else { return "heart" }
@@ -42,57 +49,147 @@ struct SocialEngagementActionsRow: View {
     }
 
     private var heartAccessibilityLabel: String {
-        guard let isOn = favoriteSelection else { return "Like" }
-        return isOn ? "Remove from favorites" : "Add to favorites"
+        let base: String
+        if let isOn = favoriteSelection {
+            base = isOn ? "Unlike" : "Like"
+        } else {
+            base = "Like"
+        }
+        if let likeCount, likeCount > 0 {
+            return "\(base), \(likeCount) \(likeCount == 1 ? "like" : "likes")"
+        }
+        return base
     }
 
     init(
         segmentSelection: Binding<SocialEngagementToolbarSegment> = .constant(.tshirt),
         favoriteSelection: Bool? = nil,
+        likeCount: Int? = nil,
+        showsLikeButton: Bool = true,
+        isLikeInteractive: Bool = true,
+        showsRedressButton: Bool = false,
         showsShareButton: Bool = true,
+        showsMoveToClosetButton: Bool = false,
+        showsWornSegment: Bool = true,
+        disabledSegments: Set<SocialEngagementToolbarSegment> = [],
         onLike: @escaping () -> Void = {},
-        onShare: @escaping () -> Void = {}
+        onRedress: @escaping () -> Void = {},
+        onShare: @escaping () -> Void = {},
+        onMoveToCloset: @escaping () -> Void = {}
     ) {
         _segmentSelection = segmentSelection
         self.favoriteSelection = favoriteSelection
+        self.likeCount = likeCount
+        self.showsLikeButton = showsLikeButton
+        self.isLikeInteractive = isLikeInteractive
+        self.showsRedressButton = showsRedressButton
         self.showsShareButton = showsShareButton
+        self.showsMoveToClosetButton = showsMoveToClosetButton
+        self.showsWornSegment = showsWornSegment
+        self.disabledSegments = disabledSegments
         self.onLike = onLike
+        self.onRedress = onRedress
         self.onShare = onShare
+        self.onMoveToCloset = onMoveToCloset
+    }
+
+    private var visibleSegments: [SocialEngagementToolbarSegment] {
+        showsWornSegment
+            ? SocialEngagementToolbarSegment.allCases
+            : [.tshirt]
+    }
+
+    /// Shared column width so the count centers under the heart without shifting the actions row.
+    private let likeColumnWidth: CGFloat = 28
+
+    @ViewBuilder
+    private var likeControlLabel: some View {
+        Image(systemName: heartSystemImage)
+            .imageScale(.large)
+            .frame(width: likeColumnWidth, alignment: .center)
     }
 
     var body: some View {
-        HStack(spacing: 24) {
-            Button(action: onLike) {
-                Image(systemName: heartSystemImage)
-                    .imageScale(.large)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(heartAccessibilityLabel)
-
-            if showsShareButton {
-                Button(action: onShare) {
-                    Image(systemName: "paperplane")
-                        .imageScale(.large)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 24) {
+                if showsLikeButton {
+                    Group {
+                        if isLikeInteractive {
+                            Button(action: onLike) {
+                                likeControlLabel
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            likeControlLabel
+                        }
+                    }
+                    .accessibilityLabel(heartAccessibilityLabel)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Share")
-            }
 
-            Spacer(minLength: 12)
+                if showsRedressButton {
+                    Button(action: onRedress) {
+                        Image("Redress.SFSymbol")
+                            .resizable()
+                            .renderingMode(.template)
+                            .scaledToFit()
+                            .frame(width: 22, height: 22)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Redress")
+                }
 
-            Picker("", selection: $segmentSelection) {
-                ForEach(SocialEngagementToolbarSegment.allCases, id: \.self) { segment in
-                    Image(systemName: segment.systemImage)
-                        .tag(segment)
-                        .accessibilityLabel(segment.accessibilityLabel)
+                if showsMoveToClosetButton {
+                    Button(action: onMoveToCloset) {
+                        Image(systemName: "hanger")
+                            .imageScale(.large)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Add to closet")
+                }
+
+                if showsShareButton {
+                    Button(action: onShare) {
+                        Image(systemName: "paperplane")
+                            .imageScale(.large)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Share")
+                }
+
+                Spacer(minLength: 12)
+
+                if !visibleSegments.isEmpty {
+                    Picker("", selection: $segmentSelection) {
+                        ForEach(visibleSegments, id: \.self) { segment in
+                            Image(systemName: segment.systemImage)
+                                .tag(segment)
+                                .selectionDisabled(disabledSegments.contains(segment))
+                                .accessibilityLabel(segment.accessibilityLabel)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(maxWidth: showsWornSegment ? 140 : 70)
                 }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: 140)
+
+            // Always reserve this slot when social likes are enabled (`likeCount != nil`)
+            // so revealing the count after a tap doesn't shift the actions row upward.
+            // Centered in the same column width as the heart.
+            if showsLikeButton, let likeCount {
+                Text(likeCount > 0 ? "\(likeCount)" : "0")
+                    .font(.caption.weight(.semibold))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .opacity(likeCount > 0 ? 1 : 0)
+                    .frame(width: likeColumnWidth, alignment: .center)
+                    .accessibilityHidden(true)
+            }
         }
         .foregroundStyle(.primary)
         .padding(.horizontal, 14)
+        .padding(.top, 4)
        // .padding(.vertical, 10)
         .background(Color(.systemBackground))
     }

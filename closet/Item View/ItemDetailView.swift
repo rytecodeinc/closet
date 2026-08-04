@@ -12,6 +12,7 @@ import CoreData
 
 struct ItemDetailView: View {
     @ObservedObject var item: Item
+    var isReadOnly: Bool = false
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appCapabilities) private var appCapabilities
@@ -23,8 +24,9 @@ struct ItemDetailView: View {
     @State private var attributesSheet: AttributesSectionView.Sheet?
     @State private var isImageFullScreen = false
     @State private var isAttributesExpanded = true
-    @State private var isSetsExpanded = true
+    @State private var isSetsExpanded = false
     @State private var isOutfitsExpanded = false
+    @State private var isHistoryExpanded = false
     
     private let currencySymbol = Locale.current.currencySymbol ?? "$"
 
@@ -37,6 +39,7 @@ struct ItemDetailView: View {
     @State private var imageToEdit: UIImage? // Store the image to edit directly
     @State private var cropEditorSessionID = UUID()
     @State private var showShareSheet = false
+    @State private var isPreparingShareSheet = false
     @State private var shareItems: [Any] = []
     @State private var showShareSelectionSheet = false
     @State private var selectedShareAttributes: Set<ShareableAttribute> = []
@@ -46,15 +49,28 @@ struct ItemDetailView: View {
     @State private var selectedImageType: ImageType = .front
     /// Inline hero carousel: 0 = front, 1 = worn (fixed slots; fullscreen still skips empty slots).
     @State private var heroCarouselPage: Int = 0
+    @State private var likeCount = 0
+    @State private var isLikedByMe = false
+    @State private var isLikeBusy = false
     @State private var showThumbnailActionSheet: Bool = false
     @State private var thumbnailActionSheetType: ImageType?
     @State private var showDeleteConfirmation = false
+    @State private var showAddToClosetConfirmation = false
+    @State private var showRemoveWornImageConfirmation = false
+    /// Set when a worn photo is saved/replaced. Consumed after any front reset so Worn wins.
+    @State private var pendingSelectWornHero = false
     @State private var showHeroDisplayOptionsDialog = false
     @State private var showPairItemSelection = false
+    @State private var pairSelectionInitialSegment: PairItemSelectionView.PairSourceSegment = .closet
     @State private var showViewAllPairsSheet = false
+    @State private var viewAllPairsInitialSegment: PairItemSelectionView.PairSourceSegment = .closet
     @State private var showViewAllOutfitsSheet = false
+    @State private var pendingCreateOutfitAfterSheetDismiss = false
     @State private var selectedPairedItemForNavigation: Item?
+    @State private var pendingPairedItemForNavigation: Item?
     @State private var selectedOutfitURIForNavigation: String?
+    @State private var showAddToClosetToast = false
+    @State private var addToClosetToastMessage = "Added to closet."
     
     private enum CreateOutfitNavigation: Hashable {
         case create
@@ -113,10 +129,118 @@ struct ItemDetailView: View {
         isSetsExpanded ? "minus" : "plus"
     }
 
+    private func handlePairsSectionHeaderTap() {
+        if !isReadOnly && pairedItems.isEmpty {
+            openPairItemSelection(segment: .closet)
+            return
+        }
+        guard !pairedItems.isEmpty else { return }
+        withAnimation {
+            isSetsExpanded.toggle()
+        }
+    }
+
+    private func openPairItemSelection(segment: PairItemSelectionView.PairSourceSegment = .closet) {
+        pairSelectionInitialSegment = segment
+        showPairItemSelection = true
+    }
+
+    private func presentViewAllPairsSheet(segment: PairItemSelectionView.PairSourceSegment) {
+        viewAllPairsInitialSegment = segment
+        showViewAllPairsSheet = true
+    }
+
+    private func handleViewAllPairsSheetDismissed() {
+        guard let pending = pendingPairedItemForNavigation else { return }
+        pendingPairedItemForNavigation = nil
+        selectedPairedItemForNavigation = pending
+    }
+
+    @ViewBuilder
+    private var pairsSectionContent: some View {
+        if !pairedItems.isEmpty {
+            FeaturedItemsSubsectionRow(
+                pairedItems: pairedItems,
+                wishlistItems: wishlistPairedItems,
+                closetItems: closetPairedItems,
+                showsWardrobeLabels: shouldShowPairsWardrobeLabels,
+                isReadOnly: isReadOnly,
+                onSelectPairedItem: { selectedPairedItemForNavigation = $0 },
+                onViewAll: { presentViewAllPairsSheet(segment: .closet) }
+            )
+        }
+    }
+
+    private var isWishlistItem: Bool {
+        (item.wardrobes as? Set<Wardrobe>)?.contains { $0.type?.lowercased() == "wishlist" } ?? false
+    }
+
+    private func pairedItemIsWishlistMember(_ pairedItem: Item) -> Bool {
+        (pairedItem.wardrobes as? Set<Wardrobe>)?.contains { $0.type?.lowercased() == "wishlist" } ?? false
+    }
+
+    private var wishlistPairedItems: [Item] {
+        pairedItems.filter { pairedItemIsWishlistMember($0) }
+    }
+
+    private var closetPairedItems: [Item] {
+        pairedItems.filter { !pairedItemIsWishlistMember($0) }
+    }
+
+    private var shouldShowPairsWardrobeLabels: Bool {
+        let hasWishlistPairs = !wishlistPairedItems.isEmpty
+        let hasClosetPairs = !closetPairedItems.isEmpty
+        return (hasWishlistPairs && hasClosetPairs)
+            || (isWishlistItem && hasClosetPairs)
+            || (!isWishlistItem && hasWishlistPairs)
+    }
+
     private var outfitsSectionHeaderIconName: String {
         isOutfitsExpanded ? "minus" : "plus"
     }
-    
+
+    private func handleOutfitsSectionHeaderTap() {
+        if !isReadOnly && outfits.isEmpty {
+            openCreateOutfit()
+            return
+        }
+        guard !outfits.isEmpty else { return }
+        withAnimation {
+            isOutfitsExpanded.toggle()
+        }
+    }
+
+    private func handleViewAllOutfitsSheetDismissed() {
+        guard pendingCreateOutfitAfterSheetDismiss else { return }
+        pendingCreateOutfitAfterSheetDismiss = false
+        openCreateOutfit()
+    }
+
+    private func openCreateOutfit() {
+        let uri = item.objectID.uriRepresentation().absoluteString
+        createOutfitSessionID = UUID()
+        print("🧭 [ItemDetailView] Create Outfit tapped. itemURI=\(uri) sessionID=\(createOutfitSessionID.uuidString)")
+        createOutfitNavigation = .create
+    }
+
+    @ViewBuilder
+    private var outfitsSectionContent: some View {
+        if !outfits.isEmpty {
+            OutfitsSubsectionRow(
+                outfits: outfits,
+                isReadOnly: isReadOnly,
+                onSelectOutfit: { outfit in
+                    selectedOutfitURIForNavigation = outfit.objectID.uriRepresentation().absoluteString
+                },
+                onViewAll: { showViewAllOutfitsSheet = true }
+            )
+        }
+    }
+
+    private var historySectionHeaderIconName: String {
+        isHistoryExpanded ? "minus" : "plus"
+    }
+
     private func initializeSelectedImageType() {
         selectedImageType = .front
         heroCarouselPage = 0
@@ -148,8 +272,13 @@ struct ItemDetailView: View {
             selectedImageType = .front
         }
     }
-    
+
     var body: some View {
+        itemDetailWithAlerts
+            .toolbar(.hidden, for: .tabBar)
+    }
+
+    private var itemDetailMainContent: some View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
                 List {
@@ -163,7 +292,7 @@ struct ItemDetailView: View {
 
                         SocialEngagementActionsRow(
                             segmentSelection: Binding(
-                                get: { heroCarouselPage == 0 ? .tshirt : .person },
+                                get: { heroCarouselPage == 0 ? .tshirt : .worn },
                                 set: { segment in
                                     withAnimation {
                                         heroCarouselPage = segment == .tshirt ? 0 : 1
@@ -172,14 +301,24 @@ struct ItemDetailView: View {
                                     _ = item.photos
                                 }
                             ),
-                            favoriteSelection: item.isFavorite,
+                            favoriteSelection: isReadOnly ? isLikedByMe : item.isFavorite,
+                            likeCount: isReadOnly ? likeCount : nil,
+                            showsLikeButton: true,
+                            isLikeInteractive: isReadOnly ? canToggleSocialLike : true,
                             showsShareButton: appCapabilities.enablesFriendsAndSharing,
+                            showsMoveToClosetButton: !isReadOnly && appCapabilities.showsWishlistTab && isWishlistItem,
+                            showsWornSegment: getImage(for: .worn) != nil || !isReadOnly,
                             onLike: {
-                                withAnimation {
-                                    toggleFavorite()
+                                if isReadOnly {
+                                    toggleSocialLike()
+                                } else {
+                                    withAnimation {
+                                        toggleFavorite()
+                                    }
                                 }
                             },
-                            onShare: { showShareFriendsSheet = true }
+                            onShare: { showShareFriendsSheet = true },
+                            onMoveToCloset: { showAddToClosetConfirmation = true }
                         )
                     }
                     .listRowInsets(EdgeInsets(.zero))
@@ -188,45 +327,43 @@ struct ItemDetailView: View {
                     
                     
                     // ATTRIBUTES Section
-                    Section {
-                        if isAttributesExpanded {
-                            AttributesSectionView(item: item, activeSheet: $attributesSheet)
-                                .transition(.opacity.combined(with: .slide))
-                                .listRowInsets(EdgeInsets(top: 05, leading: 20, bottom: 05, trailing: 20))
-                        }
-                    } header: {
-                        HStack {
-                            Text("ATTRIBUTES")
-                                .fontWeight(.semibold)
-                            Spacer()
-                            Image(systemName: isAttributesExpanded ? "minus" : "plus")
-                                .foregroundColor(.gray)
-                                .font(.caption)
-                        }
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            withAnimation {
-                                isAttributesExpanded.toggle()
+                    if !isReadOnly || AttributesSectionView.hasReadOnlyVisibleContent(for: item) {
+                        Section {
+                            if isAttributesExpanded {
+                                AttributesSectionView(
+                                    item: item,
+                                    activeSheet: $attributesSheet,
+                                    isReadOnly: isReadOnly
+                                )
+                                    .transition(.opacity.combined(with: .slide))
+                                    .listRowInsets(EdgeInsets(top: 05, leading: 20, bottom: 05, trailing: 20))
+                            }
+                        } header: {
+                            HStack {
+                                Text("ATTRIBUTES")
+                                    .fontWeight(.semibold)
+                                Spacer()
+                                Image(systemName: isAttributesExpanded ? "minus" : "plus")
+                                    .foregroundColor(.gray)
+                                    .font(.caption)
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                withAnimation {
+                                    isAttributesExpanded.toggle()
+                                }
                             }
                         }
                     }
                     //  .listRowInsets(EdgeInsets(.zero))
                     
-                    Section {
-                        if isSetsExpanded {
-                            PairsSection(
-                                pairedItems: pairedItems,
-                                onManagePairs: { showPairItemSelection = true },
-                                onViewAll: {
-                                    let uri = item.objectID.uriRepresentation().absoluteString
-                                    print("🧭 [ItemDetailView] View All pairs tapped. itemURI=\(uri) pairsCount=\(pairedItems.count)")
-                                    showViewAllPairsSheet = true
-                                },
-                                onSelectPairedItem: { selectedPairedItemForNavigation = $0 }
-                            )
-                            .transition(.opacity.combined(with: .slide))
-                        }
-                    } header: {
+                    if !isReadOnly || !pairedItems.isEmpty {
+                        Section {
+                            if isSetsExpanded {
+                                pairsSectionContent
+                                    .transition(.opacity.combined(with: .slide))
+                            }
+                        } header: {
                         HStack {
                             Text("PAIRS")
                                 .fontWeight(.semibold)
@@ -237,30 +374,19 @@ struct ItemDetailView: View {
                         }
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            withAnimation {
-                                isSetsExpanded.toggle()
-                            }
+                            handlePairsSectionHeaderTap()
                         }
                     }
                     .listRowInsets(EdgeInsets(.zero))
                     .listSectionSpacing(0)
                     .padding(.horizontal)
-                    
-                    Section {
+                    }
+
+                    if !isReadOnly || !outfits.isEmpty {
+                        Section {
                         if isOutfitsExpanded {
-                            FeaturedOutfitsSection(
-                                outfits: outfits,
-                                onSelectOutfit: { outfit in
-                                    selectedOutfitURIForNavigation = outfit.objectID.uriRepresentation().absoluteString
-                                },
-                                onViewAllOutfits: { showViewAllOutfitsSheet = true }
-                            ) {
-                                let uri = item.objectID.uriRepresentation().absoluteString
-                                createOutfitSessionID = UUID()
-                                print("🧭 [ItemDetailView] Create Outfit tapped. itemURI=\(uri) sessionID=\(createOutfitSessionID.uuidString)")
-                                createOutfitNavigation = .create
-                            }
-                            .transition(.opacity.combined(with: .slide))
+                            outfitsSectionContent
+                                .transition(.opacity.combined(with: .slide))
                         }
                     } header: {
                         HStack {
@@ -273,25 +399,78 @@ struct ItemDetailView: View {
                         }
                         .contentShape(Rectangle())
                         .onTapGesture {
+                            handleOutfitsSectionHeaderTap()
+                        }
+                    }
+                    .listRowInsets(EdgeInsets(.zero))
+                    .listSectionSpacing(0)
+                    .padding(.horizontal)
+                    }
+
+                    if !isReadOnly || !itemHistoryEntries.isEmpty {
+                        Section {
+                        if isHistoryExpanded {
+                            historyRows
+                                .transition(.opacity.combined(with: .slide))
+                        }
+                    } header: {
+                        HStack {
+                            Text("HISTORY")
+                                .fontWeight(.semibold)
+                            Spacer()
+                            Image(systemName: historySectionHeaderIconName)
+                                .foregroundColor(.gray)
+                                .font(.caption)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
                             withAnimation {
-                                isOutfitsExpanded.toggle()
+                                isHistoryExpanded.toggle()
                             }
                         }
                     }
                     .listRowInsets(EdgeInsets(.zero))
                     .listSectionSpacing(0)
                     .padding(.horizontal)
+                    }
                 }
                 .listStyle(.plain)
                // .listSectionSpacing(.compact)
             }
         }
-        .sheet(item: $attributesSheet) { $0.destination(for: item) }
+        .sheet(item: $attributesSheet) { sheet in
+            sheet.destination(for: item, isReadOnly: isReadOnly)
+        }
         .onAppear {
             fetchOutfits()
-            if pairedItems.isEmpty {
-                isSetsExpanded = false
+            if !isReadOnly {
+                viewContext.refresh(item, mergeChanges: true)
             }
+            // Always land on front first; a pending worn selection re-applies after (and async).
+            heroCarouselPage = 0
+            selectedImageType = .front
+            applyPendingWornHeroSelectionIfNeeded(clearAfterApplying: true)
+            if isReadOnly {
+                // Match ReadOnlyItemDetailView: attributes expanded; secondary sections collapsed.
+                isSetsExpanded = false
+                isOutfitsExpanded = false
+                isHistoryExpanded = false
+            } else {
+                isSetsExpanded = !pairedItems.isEmpty
+                if outfits.isEmpty {
+                    isOutfitsExpanded = false
+                }
+            }
+        }
+        .task(id: item.id) {
+            guard isReadOnly, let itemId = item.id else { return }
+            await refreshSocialLikeState(itemId: itemId)
+        }
+        .onDisappear {
+            guard !isCoveringModalPresented else { return }
+            pendingSelectWornHero = false
+            heroCarouselPage = 0
+            selectedImageType = .front
         }
         .onChange(of: authSession.userId) { _, _ in
             fetchOutfits()
@@ -310,27 +489,28 @@ struct ItemDetailView: View {
                 isOutfitsExpanded = true
             }
         }
-
         .toolbar {
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
-                if getImage(for: .front) != nil {
-                    Button {
-                        let available = getAvailableAttributes()
-                        let defaults = DefaultShareAttributes.load().intersection(available)
-                        selectedShareAttributes = defaults.isEmpty ? available : defaults
-                        showShareSelectionSheet = true
-                    } label: {
-                        Image(systemName: "square.and.arrow.up")
+            if !isReadOnly {
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    if getImage(for: .front) != nil {
+                        Button {
+                            let available = getAvailableAttributes()
+                            let defaults = DefaultShareAttributes.load().intersection(available)
+                            selectedShareAttributes = defaults.isEmpty ? available : defaults
+                            showShareSelectionSheet = true
+                        } label: {
+                            Image(systemName: "square.and.arrow.up")
+                        }
+                        .accessibilityLabel("Share item")
                     }
-                    .accessibilityLabel("Share item")
+                    Button(role: .destructive) {
+                        showDeleteConfirmation = true
+                    } label: {
+                        Image(systemName: "trash")
+                            .foregroundStyle(.red)
+                    }
+                    .accessibilityLabel("Delete item")
                 }
-                Button(role: .destructive) {
-                    showDeleteConfirmation = true
-                } label: {
-                    Image(systemName: "trash")
-                        .foregroundStyle(.red)
-                }
-                .accessibilityLabel("Delete item")
             }
         }
         .navigationDestination(item: $createOutfitNavigation) { _ in
@@ -352,7 +532,7 @@ struct ItemDetailView: View {
             }
         }
         .navigationDestination(item: $selectedPairedItemForNavigation) { pairedItem in
-            ItemDetailView(item: pairedItem)
+            ItemDetailView(item: pairedItem, isReadOnly: isReadOnly)
                 .onAppear {
                     // Prevent SwiftUI from repeatedly re-triggering this navigation.
                     let uri = pairedItem.objectID.uriRepresentation().absoluteString
@@ -379,7 +559,13 @@ struct ItemDetailView: View {
                 }
             }
         }
-        .sheet(isPresented: $isImagePickerPresented) {
+    }
+
+    private var itemDetailWithSheets: some View {
+        itemDetailMainContent
+        .sheet(isPresented: $isImagePickerPresented, onDismiss: {
+            applyPendingWornHeroSelectionIfNeeded(clearAfterApplying: false)
+        }) {
             ImagePicker(
                 image: $selectedUIImage,
                 sourceType: $imagePickerSource,
@@ -399,7 +585,9 @@ struct ItemDetailView: View {
                 isImagePickerPresented = false
             }
         }
-        .sheet(isPresented: $isCropperPresented) {
+        .sheet(isPresented: $isCropperPresented, onDismiss: {
+            applyPendingWornHeroSelectionIfNeeded(clearAfterApplying: false)
+        }) {
             Group {
                 if let imageType = pendingImageType, let image = imageToEdit {
                     NavigationView {
@@ -427,45 +615,13 @@ struct ItemDetailView: View {
                 }
             }
         }
-        .sheet(isPresented: $showShareSelectionSheet, onDismiss: {
-            // When selection sheet dismisses, check if we should show share sheet
-            if let image = pendingShareImage {
-                if let shareText = pendingShareText?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   !shareText.isEmpty {
-                    shareItems = [shareText, image]
-                } else {
-                    shareItems = [image]
-                }
-                pendingShareText = nil
-                pendingShareImage = nil
-                // Small delay to ensure sheet is fully dismissed
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
-                    showShareSheet = true
-                }
-            }
-        }) {
-            if let frontImage = getImage(for: .front) {
-                ShareSelectionView(
-                    item: item,
-                    selectedAttributes: $selectedShareAttributes,
-                    onShare: { shareText in
-                        pendingShareText = shareText
-                        pendingShareImage = frontImage
-                        showShareSelectionSheet = false
-                    }
-                )
-            }
+        .sheet(isPresented: $showShareSelectionSheet, onDismiss: handleShareSelectionSheetDismissed) {
+            shareSelectionSheetContent
         }
-        .safeAreaInset(edge: .bottom) {
-            if appCapabilities.showsWishlistTab {
-                let isWishlist = (item.wardrobes as? Set<Wardrobe>)?.contains { $0.type?.lowercased() == "wishlist" } ?? false
-                if isWishlist {
-                    moveToClosetButton()
-                        .background(Color(UIColor.systemBackground))
-                }
-            }
-        }
+    }
+
+    private var itemDetailWithPresentation: some View {
+        itemDetailWithSheets
         .navigationTitle("Item Details")
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(isPresented: $isImageFullScreen) {
@@ -476,39 +632,127 @@ struct ItemDetailView: View {
                 syncHeroCarouselAfterFullscreenOrBackSelection()
             }
         }
+        .onChange(of: showShareSheet) { _, isShowing in
+            if !isShowing {
+                isPreparingShareSheet = false
+            }
+        }
+    }
+
+    private var itemDetailWithShareOverlays: some View {
+        itemDetailWithPresentation
         .overlay {
             if showShareSheet {
-                ActivityViewController(activityItems: shareItems, isPresented: $showShareSheet)
+                ActivityViewController(
+                    activityItems: shareItems,
+                    isPresented: $showShareSheet,
+                    onShareSheetPresented: { isPreparingShareSheet = false }
+                )
                     .frame(width: 0, height: 0)
             }
         }
+        .overlay {
+            if isPreparingShareSheet {
+                ZStack {
+                    Color.black.opacity(0.2)
+                        .ignoresSafeArea()
+                    ProgressView()
+                        .controlSize(.large)
+                }
+                .allowsHitTesting(true)
+            }
+        }
+        .overlay(alignment: .top) {
+            if showAddToClosetToast {
+                Text(addToClosetToastMessage)
+                    .font(.subheadline)
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(.black.opacity(0.8))
+                    .clipShape(Capsule())
+                    .padding(.top, 10)
+                    .padding(.horizontal, 16)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+    }
+
+    private var itemDetailWithAlerts: some View {
+        itemDetailWithShareOverlays
         .alert("Delete Item", isPresented: $showDeleteConfirmation) {
+            if outfitCountForItemActions > 0 {
+                Button(deleteItemAndOutfitsButtonTitle, role: .destructive) {
+                    deleteItemAndOutfits()
+                }
+            }
+            Button(deleteItemOnlyButtonTitle, role: .destructive) {
+                deleteItemOnly()
+            }
+            .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) { }
-            Button("Delete", role: .destructive) {
-                deleteItem()
+        } message: {
+            Text("Deleting this item removes it from all wardrobes. This action cannot be undone.")
+        }
+        .alert("Remove Photo", isPresented: $showRemoveWornImageConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Remove", role: .destructive) {
+                deleteImage(type: .worn)
             }
         } message: {
-            Text("Delete this item from all wardrobes? This action cannot be undone.")
+            Text("Remove this worn photo? This action cannot be undone.")
+        }
+        .alert("Add to Closet?", isPresented: $showAddToClosetConfirmation) {
+            if outfitCountForItemActions > 0 {
+                Button(addItemAndOutfitsButtonTitle) {
+                    addItemAndOutfitsToCloset()
+                }
+                .keyboardShortcut(.defaultAction)
+                Button(addItemOnlyButtonTitle) {
+                    addItemOnlyToCloset()
+                }
+            } else {
+                Button(addItemOnlyButtonTitle) {
+                    addItemOnlyToCloset()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This item will be removed from your wishlist and added to your closet.")
         }
         .sheet(isPresented: $showPairItemSelection) {
-            PairItemSelectionView(item: item)
+            PairItemSelectionView(
+                item: item,
+                pairSourceSegment: $pairSelectionInitialSegment,
+                onPairSuccess: { showPairItemSelection = false }
+            )
+            .id(item.objectID)
         }
-        .sheet(isPresented: $showViewAllPairsSheet) {
-            NavigationView {
-                PairsViewAllSheet(
-                    pairedItems: pairedItems,
-                    onSelect: { selected in
-                        selectedPairedItemForNavigation = selected
-                        showViewAllPairsSheet = false
-                    }
-                )
-            }
+        .sheet(isPresented: $showViewAllPairsSheet, onDismiss: handleViewAllPairsSheetDismissed) {
+            PairsViewAllSheet(
+                sourceItem: item,
+                showsWardrobePicker: isWishlistItem,
+                initialSegment: viewAllPairsInitialSegment,
+                allowsUnpair: !isReadOnly,
+                onSelect: { selected in
+                    pendingPairedItemForNavigation = selected
+                    showViewAllPairsSheet = false
+                }
+            )
+            .id(viewAllPairsInitialSegment)
             .presentationDetents(pairedItems.count > 6 ? [.medium, .large] : [.medium])
+            .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $showViewAllOutfitsSheet) {
+        .sheet(isPresented: $showViewAllOutfitsSheet, onDismiss: handleViewAllOutfitsSheetDismissed) {
             NavigationView {
                 OutfitsViewAllSheet(
                     outfits: outfits,
+                    onCreateOutfit: isReadOnly ? nil : {
+                        pendingCreateOutfitAfterSheetDismiss = true
+                        showViewAllOutfitsSheet = false
+                    },
                     onSelect: { outfit in
                         selectedOutfitURIForNavigation = outfit.objectID.uriRepresentation().absoluteString
                         showViewAllOutfitsSheet = false
@@ -516,6 +760,7 @@ struct ItemDetailView: View {
                 )
             }
             .presentationDetents(outfits.count > 6 ? [.medium, .large] : [.medium])
+            .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: Binding(
             get: { appCapabilities.enablesFriendsAndSharing && showShareFriendsSheet },
@@ -530,26 +775,66 @@ struct ItemDetailView: View {
 
 
     // MARK: - Replace Image Functions
-    private func replaceFrontImage(with image: UIImage) {
-        // Remove existing front photo (either type="front" or isPrimary with no type)
-        let photos = item.photos as? Set<Photo> ?? []
-        if let existingFront = photos.first(where: { $0.type == "front" || ($0.isPrimary && $0.type == nil) }) {
-            viewContext.delete(existingFront)
-        }
 
-        // Process and compress image
-        let processedData = image.processForStorage()
-        
-        // Create and assign new photo
-        let newPhoto = Photo(context: viewContext)
+    /// Normalized photo slot (`front` / `back` / `worn` / empty).
+    private func normalizedPhotoType(_ photo: Photo) -> String {
+        (photo.type ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    /// Photos to remove when replacing/deleting a slot. Front also clears legacy primary /
+    /// empty-type slots so Profile/read-only detail cannot keep serving a deleted image.
+    private func photosMatchingSlot(_ photos: Set<Photo>, slot type: String) -> [Photo] {
+        let target = type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return photos.filter { photo in
+            let t = normalizedPhotoType(photo)
+            if t == target { return true }
+            if target == "front", photo.isPrimary, t.isEmpty { return true }
+            return false
+        }
+    }
+
+    private func demoteOtherPrimaryPhotos(keeping kept: Photo?) {
+        let photos = (item.photos as? Set<Photo>) ?? []
+        for photo in photos where photo.isPrimary && photo.objectID != kept?.objectID {
+            photo.isPrimary = false
+        }
+    }
+
+    private func configureReplacedPhoto(
+        _ newPhoto: Photo,
+        with image: UIImage,
+        processedData: Data?,
+        type: String,
+        asPrimary: Bool
+    ) {
+        let now = Date()
         newPhoto.id = UUID()
         PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: newPhoto)
         newPhoto.thumbnailData = image.generateThumbnail()
-        newPhoto.type = "front"
-        newPhoto.isPrimary = true // Front images are primary by default
+        newPhoto.type = type
+        newPhoto.isPrimary = asPrimary
+        newPhoto.createdAt = now
+        newPhoto.timestamp = now
+        // Drop stale remote URLs until upload finishes — avoids read-only detail
+        // briefly resolving the previous CDN object via leftover metadata.
+        newPhoto.imageUrl = nil
+        newPhoto.thumbnailUrl = nil
         newPhoto.item = item
-        
-        // Set updatedAt on item since we're modifying it
+        if asPrimary {
+            demoteOtherPrimaryPhotos(keeping: newPhoto)
+        }
+    }
+
+    private func replaceFrontImage(with image: UIImage) {
+        let photos = item.photos as? Set<Photo> ?? []
+        for existing in photosMatchingSlot(photos, slot: "front") {
+            viewContext.delete(existing)
+        }
+
+        let processedData = image.processForStorage()
+        let newPhoto = Photo(context: viewContext)
+        configureReplacedPhoto(newPhoto, with: image, processedData: processedData, type: "front", asPrimary: true)
+
         setUpdatedAt(item)
 
         let outfitsToSync = OutfitSanitizer.regenerateCollagesForOutfitsContaining(item: item, in: viewContext)
@@ -563,7 +848,6 @@ struct ItemDetailView: View {
             for outfit in outfitsToSync {
                 SyncService.shared.syncOutfitIfNeeded(outfit)
             }
-            // Trigger automatic sync for the modified item
             SyncService.shared.syncItemIfNeeded(item)
         } catch {
             print("❌ Failed to save new photo: \(error.localizedDescription)")
@@ -571,34 +855,22 @@ struct ItemDetailView: View {
     }
     
     private func replaceBackImage(with image: UIImage) {
-        // Remove existing back photo
-        if let existingBack = (item.photos as? Set<Photo>)?.first(where: { $0.type == "back" }) {
-            viewContext.delete(existingBack)
+        let photos = item.photos as? Set<Photo> ?? []
+        for existing in photosMatchingSlot(photos, slot: "back") {
+            viewContext.delete(existing)
         }
 
-        // Process and compress image
         let processedData = image.processForStorage()
-        
-        // Create and assign new photo
         let newPhoto = Photo(context: viewContext)
-        newPhoto.id = UUID()
-        PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: newPhoto)
-        newPhoto.thumbnailData = image.generateThumbnail()
-        newPhoto.type = "back"
-        newPhoto.isPrimary = false
-        newPhoto.item = item
-        
-        // Set updatedAt on item since we're modifying it
+        configureReplacedPhoto(newPhoto, with: image, processedData: processedData, type: "back", asPrimary: false)
+
         setUpdatedAt(item)
 
         do {
             try viewContext.save()
             print("✅ Replaced back photo.")
-            // Back is not shown in the hero carousel (front + worn only).
             selectedImageType = .front
             heroCarouselPage = 0
-            
-            // Trigger automatic sync for the modified item
             SyncService.shared.syncItemIfNeeded(item)
         } catch {
             print("❌ Failed to save new photo: \(error.localizedDescription)")
@@ -606,80 +878,99 @@ struct ItemDetailView: View {
     }
     
     private func replaceWornImage(with image: UIImage) {
-        // Remove existing worn photo
-        if let existingWorn = (item.photos as? Set<Photo>)?.first(where: { $0.type == "worn" }) {
-            viewContext.delete(existingWorn)
+        let photos = item.photos as? Set<Photo> ?? []
+        for existing in photosMatchingSlot(photos, slot: "worn") {
+            viewContext.delete(existing)
         }
 
-        // Process and compress image
         let processedData = image.processForStorage()
-        
-        // Create and assign new photo
         let newPhoto = Photo(context: viewContext)
-        newPhoto.id = UUID()
-        PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: newPhoto)
-        newPhoto.thumbnailData = image.generateThumbnail()
-        newPhoto.type = "worn"
-        newPhoto.isPrimary = false
-        newPhoto.item = item
-        
-        // Set updatedAt on item since we're modifying it
+        configureReplacedPhoto(newPhoto, with: image, processedData: processedData, type: "worn", asPrimary: false)
+
         setUpdatedAt(item)
 
         do {
             try viewContext.save()
             print("✅ Replaced worn photo.")
+            pendingSelectWornHero = true
             selectHeroImageSlot(.worn)
-            // TabView can reset selection when page content updates; re-apply after layout.
-            DispatchQueue.main.async {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                guard pendingSelectWornHero else { return }
                 selectHeroImageSlot(.worn)
+                pendingSelectWornHero = false
             }
-
-            // Trigger automatic sync for the modified item
             SyncService.shared.syncItemIfNeeded(item)
         } catch {
             print("❌ Failed to save new photo: \(error.localizedDescription)")
         }
     }
 
+    /// Re-selects Worn after a front reset when `pendingSelectWornHero` is set.
+    /// - Parameter clearAfterApplying: When true (onAppear), clear the flag on the next turn
+    ///   after re-asserting Worn so late resets still lose.
+    private func applyPendingWornHeroSelectionIfNeeded(clearAfterApplying: Bool) {
+        guard pendingSelectWornHero else { return }
+        withAnimation {
+            selectHeroImageSlot(.worn)
+        }
+        guard clearAfterApplying else { return }
+        DispatchQueue.main.async {
+            guard pendingSelectWornHero else { return }
+            withAnimation {
+                selectHeroImageSlot(.worn)
+            }
+            pendingSelectWornHero = false
+        }
+    }
+
+    /// Sheets / covers that can re-fire `onAppear` without leaving the detail screen.
+    private var isCoveringModalPresented: Bool {
+        isImagePickerPresented
+            || isCropperPresented
+            || isImageFullScreen
+            || showShareSelectionSheet
+            || showPairItemSelection
+            || showViewAllPairsSheet
+            || showViewAllOutfitsSheet
+            || attributesSheet != nil
+    }
+
     private func deleteImage(type: ImageType) {
         let photos = item.photos as? Set<Photo> ?? []
-        let photoToDelete: Photo?
-        
+        let slot: String
         switch type {
-        case .front:
-            photoToDelete = photos.first(where: { $0.type == "front" || ($0.isPrimary && $0.type == nil) })
-        case .back:
-            photoToDelete = photos.first(where: { $0.type == "back" })
-        case .worn:
-            photoToDelete = photos.first(where: { $0.type == "worn" })
+        case .front: slot = "front"
+        case .back: slot = "back"
+        case .worn: slot = "worn"
         }
-        
-        if let photo = photoToDelete {
+        let toDelete = photosMatchingSlot(photos, slot: slot)
+        guard !toDelete.isEmpty else { return }
+
+        for photo in toDelete {
             viewContext.delete(photo)
-            
-            // Set updatedAt on item since we're modifying it
-            setUpdatedAt(item)
+        }
+        if type == .front {
+            demoteOtherPrimaryPhotos(keeping: nil)
+        }
 
-            let outfitsToSync = OutfitSanitizer.regenerateCollagesForOutfitsContaining(item: item, in: viewContext)
+        setUpdatedAt(item)
 
-            do {
-                try viewContext.save()
-                print("✅ Deleted \(placeholderText(for: type)) photo.")
-                // Reset to front if we deleted the currently selected image
-                if selectedImageType == type {
-                    selectedImageType = .front
-                    heroCarouselPage = 0
-                }
+        let outfitsToSync = OutfitSanitizer.regenerateCollagesForOutfitsContaining(item: item, in: viewContext)
 
-                for outfit in outfitsToSync {
-                    SyncService.shared.syncOutfitIfNeeded(outfit)
-                }
-                // Trigger automatic sync for the modified item
-                SyncService.shared.syncItemIfNeeded(item)
-            } catch {
-                print("❌ Failed to delete photo: \(error.localizedDescription)")
+        do {
+            try viewContext.save()
+            print("✅ Deleted \(placeholderText(for: type)) photo.")
+            if selectedImageType == type {
+                selectedImageType = .front
+                heroCarouselPage = 0
             }
+
+            for outfit in outfitsToSync {
+                SyncService.shared.syncOutfitIfNeeded(outfit)
+            }
+            SyncService.shared.syncItemIfNeeded(item)
+        } catch {
+            print("❌ Failed to delete photo: \(error.localizedDescription)")
         }
     }
 
@@ -739,43 +1030,61 @@ struct ItemDetailView: View {
     private func itemImageDisplay() -> some View {
         let frontImage = getImage(for: .front)
         let wornImage = getImage(for: .worn)
+        let allowsHeroSwipe = !isReadOnly || wornImage != nil
 
         return ZStack(alignment: .topTrailing) {
-            TabView(selection: $heroCarouselPage) {
-                Group {
-                    if let uiImage = frontImage {
-                        Image(uiImage: uiImage)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: screenWidth, height: screenWidth)
-                            .clipped()
-                            .onTapGesture { isImageFullScreen = true }
-                    } else {
-                        heroImagePlaceholder(for: .front)
-                    }
-                }
-                .tag(0)
+            Group {
+                if allowsHeroSwipe {
+                    TabView(selection: $heroCarouselPage) {
+                        Group {
+                            if let uiImage = frontImage {
+                                Image(uiImage: uiImage)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(width: screenWidth, height: screenWidth)
+                                    .clipped()
+                                    .onTapGesture { isImageFullScreen = true }
+                            } else {
+                                heroImagePlaceholder(for: .front)
+                            }
+                        }
+                        .tag(0)
 
-                Group {
-                    if let uiImage = wornImage {
-                        Image(uiImage: uiImage)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: screenWidth, height: screenWidth)
-                            .clipped()
-                            .onTapGesture { isImageFullScreen = true }
-                    } else {
-                        heroImagePlaceholder(for: .worn)
+                        Group {
+                            if let uiImage = wornImage {
+                                Image(uiImage: uiImage)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(width: screenWidth, height: screenWidth)
+                                    .clipped()
+                                    .onTapGesture { isImageFullScreen = true }
+                            } else {
+                                heroImagePlaceholder(for: .worn)
+                            }
+                        }
+                        .tag(1)
+                    }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
+                } else {
+                    Group {
+                        if let uiImage = frontImage {
+                            Image(uiImage: uiImage)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: screenWidth, height: screenWidth)
+                                .clipped()
+                                .onTapGesture { isImageFullScreen = true }
+                        } else {
+                            heroImagePlaceholder(for: .front)
+                        }
                     }
                 }
-                .tag(1)
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
             .frame(width: screenWidth, height: screenWidth)
 
-            if heroCarouselPage == 0, frontImage != nil {
+            if heroCarouselPage == 0, frontImage != nil, !isReadOnly {
                 heroDisplayAreaOptionsButton
-            } else if heroCarouselPage == 1, wornImage != nil {
+            } else if heroCarouselPage == 1, wornImage != nil, !isReadOnly {
                 heroDisplayAreaOptionsButton
             }
         }
@@ -804,12 +1113,18 @@ struct ItemDetailView: View {
                     presentCropperForImage(type: selectedImageType)
                 }
                 Button("Share Image") {
-                    shareImage(type: selectedImageType)
+                    beginShareImage(type: selectedImageType)
                 }
             }
             if (selectedImageType == .back || selectedImageType == .worn), getImage(for: selectedImageType) != nil {
                 Button("Remove Image", role: .destructive) {
-                    deleteImage(type: selectedImageType)
+                    if selectedImageType == .worn {
+                        DispatchQueue.main.async {
+                            showRemoveWornImageConfirmation = true
+                        }
+                    } else {
+                        deleteImage(type: selectedImageType)
+                    }
                 }
             }
             Button("Cancel", role: .cancel) {}
@@ -822,6 +1137,7 @@ struct ItemDetailView: View {
             showHeroDisplayOptionsDialog = true
         } label: {
             Image(systemName: "ellipsis")
+                .rotationEffect(.degrees(90))
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(.primary)
                 .frame(width: 36, height: 36)
@@ -850,6 +1166,7 @@ struct ItemDetailView: View {
             }
             .contentShape(Rectangle())
             .onTapGesture {
+                guard !isReadOnly else { return }
                 presentImagePicker(for: type)
             }
     }
@@ -868,17 +1185,71 @@ struct ItemDetailView: View {
         case .front:
             return "Tap to add a photo of the front of the item"
         case .worn:
-            return "Tap to add a photo of you wearing this item"
+            return isReadOnly
+                ? "No image available"
+                : "Tap to add a photo of you wearing this item"
         case .back:
             return "Tap to add a photo of the back of the item"
         }
     }
     
     private func shareActiveImage() {
-        shareImage(type: selectedImageType)
+        beginShareImage(type: selectedImageType)
     }
-    
-    private func shareImage(type: ImageType) {
+
+    @ViewBuilder
+    private var shareSelectionSheetContent: some View {
+        if let frontImage = getImage(for: .front) {
+            ShareSelectionView(
+                item: item,
+                selectedAttributes: $selectedShareAttributes,
+                onShare: { shareText in
+                    pendingShareText = shareText
+                    pendingShareImage = frontImage
+                    showShareSelectionSheet = false
+                }
+            )
+        }
+    }
+
+    private func handleShareSelectionSheetDismissed() {
+        guard let image = pendingShareImage else { return }
+
+        if let shareText = pendingShareText?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !shareText.isEmpty {
+            shareItems = [shareText, image]
+        } else {
+            shareItems = [image]
+        }
+        pendingShareText = nil
+        pendingShareImage = nil
+        presentShareSheetAfterSelectionSheetDismissed()
+    }
+
+    private func presentShareSheetAfterSelectionSheetDismissed() {
+        isPreparingShareSheet = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            showShareSheet = true
+        }
+    }
+
+    private func beginShareImage(type: ImageType, afterConfirmationDialog: Bool = true) {
+        guard getImage(for: type) != nil else { return }
+        isPreparingShareSheet = true
+        if afterConfirmationDialog {
+            showHeroDisplayOptionsDialog = false
+        }
+        let delayNanoseconds: UInt64 = afterConfirmationDialog ? 350_000_000 : 0
+        Task { @MainActor in
+            if delayNanoseconds > 0 {
+                try? await Task.sleep(nanoseconds: delayNanoseconds)
+            }
+            presentShareImage(type: type)
+        }
+    }
+
+    private func presentShareImage(type: ImageType) {
         let image = getImage(for: type)
         if let image = image {
             // Create share text: item name, or brand + category if name is nil
@@ -910,6 +1281,8 @@ struct ItemDetailView: View {
                 shareItems = [image]
             }
             showShareSheet = true
+        } else {
+            isPreparingShareSheet = false
         }
     }
     
@@ -1036,14 +1409,20 @@ struct ItemDetailView: View {
             
             // Share Image option (only if image exists)
             alert.addAction(UIAlertAction(title: "Share Image", style: .default) { _ in
-                shareImage(type: type)
+                beginShareImage(type: type, afterConfirmationDialog: false)
             })
         }
         
         // Remove Image option (only for back and worn, not front)
         if (type == .back || type == .worn) && getImage(for: type) != nil {
             alert.addAction(UIAlertAction(title: "Remove Image", style: .destructive) { _ in
-                deleteImage(type: type)
+                if type == .worn {
+                    DispatchQueue.main.async {
+                        showRemoveWornImageConfirmation = true
+                    }
+                } else {
+                    deleteImage(type: type)
+                }
             })
         }
         
@@ -1108,6 +1487,102 @@ struct ItemDetailView: View {
         }
     }
 
+    // MARK: - History
+
+    private struct ItemHistoryEntry: Identifiable {
+        let id: String
+        let label: String
+        let date: Date
+        let caption: String?
+        /// When set, the row shows "Worn to" plus this name (truncated).
+        let eventName: String?
+    }
+
+    private var displayWishedDate: Date? {
+        if let wishedAt = item.wishedAt { return wishedAt }
+        guard isWishlistItem else { return nil }
+        return item.createdAt ?? item.timestamp
+    }
+
+    private var displayPurchasedDate: Date? {
+        if let purchasedAt = item.purchasedAt { return purchasedAt }
+        guard !isWishlistItem else { return nil }
+        return item.createdAt ?? item.timestamp
+    }
+
+    private var itemHistoryEntries: [ItemHistoryEntry] {
+        var entries: [ItemHistoryEntry] = []
+
+        if let date = displayWishedDate {
+            entries.append(ItemHistoryEntry(id: "wishlist", label: "Added to Wishlist", date: date, caption: nil, eventName: nil))
+        }
+        if let date = displayPurchasedDate {
+            entries.append(ItemHistoryEntry(id: "closet", label: "Added to Closet", date: date, caption: nil, eventName: nil))
+        }
+
+        for event in pastWornEvents(for: item) {
+            guard let sortDate = eventEffectiveEndDate(event) else { continue }
+            let entryID = event.id?.uuidString ?? String(ObjectIdentifier(event).hashValue)
+            let trimmedName = event.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            entries.append(ItemHistoryEntry(
+                id: "event-\(entryID)",
+                label: wornEventHistoryLabel(for: event),
+                date: sortDate,
+                caption: wornEventHistoryLocationCaption(for: event),
+                eventName: trimmedName.isEmpty ? "Event" : trimmedName
+            ))
+        }
+
+        return entries.sorted { $0.date > $1.date }
+    }
+
+    @ViewBuilder
+    private var historyRows: some View {
+        ForEach(itemHistoryEntries) { entry in
+            historyDateRow(
+                label: entry.label,
+                date: entry.date,
+                caption: entry.caption,
+                eventName: entry.eventName
+            )
+        }
+    }
+
+    private func historyDateRow(label: String, date: Date, caption: String? = nil, eventName: String? = nil) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                historyRowLabel(label: label, eventName: eventName)
+                if let caption {
+                    Text(caption)
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                        .padding(.leading, 12)
+                }
+            }
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+
+            Text(date, style: .date)
+                .foregroundColor(.gray)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    @ViewBuilder
+    private func historyRowLabel(label: String, eventName: String?) -> some View {
+        if let eventName {
+            HStack(spacing: 0) {
+                Text("Worn to ")
+                Text(eventName)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .foregroundColor(.gray)
+        } else {
+            Text(label)
+                .foregroundColor(.gray)
+        }
+    }
+
     // MARK: - Helper Functions
     
     private func getImage(for type: ImageType) -> UIImage? {
@@ -1126,9 +1601,13 @@ struct ItemDetailView: View {
         switch type {
         case .front:
             // Look for type="front" first, then fall back to isPrimary (for backward compatibility)
-            if let frontPhoto = photos.first(where: { $0.type == "front" }) {
+            if let frontPhoto = photos.first(where: {
+                ($0.type ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "front"
+            }) {
                 return UIImage(data: frontPhoto.data ?? Data())
-            } else if let primaryPhoto = photos.first(where: { $0.isPrimary && ($0.type == nil || $0.type == "") }) {
+            } else if let primaryPhoto = photos.first(where: {
+                $0.isPrimary && ($0.type ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }) {
                     return UIImage(data: primaryPhoto.data ?? Data())
                 }
                 return nil
@@ -1174,28 +1653,78 @@ struct ItemDetailView: View {
     }
 
     
-    // MARK: - Move to Closet Button
-    private func moveToClosetButton() -> some View {
-        SlideToConfirmButton {
-            if let closetWardrobe = fetchWardrobe(type: "closet") {
-                // Safely cast wardrobes to a mutable set
-                var currentWardrobes = item.wardrobes as? Set<Wardrobe> ?? []
-                currentWardrobes.insert(closetWardrobe)
-                item.wardrobes = currentWardrobes as NSSet
-                
-                let now = Date()
-                item.timestamp = now
-                item.createdAt = now
-                
-                do {
-                    try viewContext.save()
-                } catch {
-                    print("Failed to save item: \(error)")
-                }
+    // MARK: - Add to Closet (wishlist items)
+
+    private var addItemAndOutfitsButtonTitle: String {
+        let count = outfitCountForItemActions
+        return "Add Item + \(count) Outfit\(count == 1 ? "" : "s")"
+    }
+
+    /// Removes wishlist wardrobe links and attaches the user's primary closet wardrobe.
+    private func applyAddItemToClosetWardrobes() -> Bool {
+        guard let closetWardrobe = fetchWardrobe(type: "closet") else { return false }
+
+        let wardrobes = item.wardrobes as? Set<Wardrobe> ?? []
+        for wardrobe in wardrobes where wardrobe.type?.lowercased() == "wishlist" {
+            item.removeFromWardrobes(wardrobe)
+        }
+        item.addToWardrobes(closetWardrobe)
+
+        ItemLifecycleDates.stampPurchasedOnMoveToCloset(for: item)
+        setUpdatedAt(item)
+        return true
+    }
+
+    /// Keeps the item in all containing outfits; outfit tabs rebucket by item wardrobes after save.
+    private func addItemAndOutfitsToCloset() {
+        guard applyAddItemToClosetWardrobes() else { return }
+
+        do {
+            try viewContext.save()
+            SyncService.shared.syncItemIfNeeded(item)
+            fetchOutfits()
+            showAddToClosetToast(message: "Added to closet.")
+        } catch {
+            print("Failed to add item to closet: \(error)")
+        }
+    }
+
+    /// Adds the item to closet and removes it from every outfit (including drafts).
+    private func addItemOnlyToCloset() {
+        guard applyAddItemToClosetWardrobes() else { return }
+
+        let sanitizerResult = OutfitSanitizer.sanitizeOutfitsAfterDeleting(deletedItems: [item], in: viewContext)
+        let removedFromOutfitsCount = sanitizerResult.affectedOutfits.count
+
+        do {
+            try viewContext.save()
+            SyncService.shared.syncItemIfNeeded(item)
+            for outfit in sanitizerResult.affectedOutfits {
+                SyncService.shared.syncOutfitIfNeeded(outfit)
+            }
+            let message: String
+            if removedFromOutfitsCount == 0 {
+                message = "Added to closet."
+            } else {
+                message = "Added to closet. Removed from \(removedFromOutfitsCount) outfit\(removedFromOutfitsCount == 1 ? "" : "s")."
+            }
+            fetchOutfits()
+            showAddToClosetToast(message: message)
+        } catch {
+            print("Failed to add item to closet: \(error)")
+        }
+    }
+
+    private func showAddToClosetToast(message: String) {
+        addToClosetToastMessage = message
+        withAnimation(.easeInOut(duration: 0.18)) {
+            showAddToClosetToast = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+            withAnimation(.easeInOut(duration: 0.22)) {
+                showAddToClosetToast = false
             }
         }
-        .transition(.move(edge: .bottom))
-        .padding(.horizontal)
     }
 
     
@@ -1231,84 +1760,43 @@ struct ItemDetailView: View {
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Outfit.createdAt, ascending: false)]
 
         do {
-            outfits = try viewContext.fetch(request)
+            let fetched = try viewContext.fetch(request)
+            outfits = fetched
+            Task { await excludePendingRedressSuggestions(from: fetched) }
         } catch {
             print("❌ Failed to fetch outfits: \(error.localizedDescription)")
             outfits = []
         }
     }
-    
-    
-    struct SlideToConfirmButton: View {
-        var action: () -> Void
-        var labelText: String = "Swipe to Move to Closet"
-        
-        @State private var dragOffset: CGFloat = 0
-        @State private var completed: Bool = false
-        
-        let thumbSize = CGSize(width: 60, height: 40)
-        let trackHeight: CGFloat = 50
-        
-        var body: some View {
-            GeometryReader { geometry in
-                let trackWidth = geometry.size.width
-                
-                ZStack {
-                    // Background track
-                    Capsule()
-                        .fill(Color.gray.opacity(0.2))
-                        .frame(height: trackHeight)
-                    
-                    // Instruction Text
-                    Text(completed ? "Moved!" : labelText)
-                        .foregroundColor(.blue)
-                        .font(.footnote)
-                        .opacity(Double(1.0 - (dragOffset / (trackWidth - thumbSize.width))))
-                        .animation(.easeInOut, value: dragOffset)
-                    
-                    // Draggable Thumb
-                    HStack {
-                        ZStack {
-                            Capsule()
-                                .fill(Color.white)
-                                .frame(width: thumbSize.width, height: thumbSize.height)
-                                .shadow(radius: 2)
-                            
-                            Image(systemName: completed ? "checkmark" : "arrow.right")
-                                .foregroundColor(.blue)
-                        }
-                        .offset(x: dragOffset)
-                        .gesture(
-                            DragGesture()
-                                .onChanged { gesture in
-                                    if !completed {
-                                        let maxOffset = trackWidth - thumbSize.width
-                                        dragOffset = min(max(0, gesture.translation.width), maxOffset)
-                                    }
-                                }
-                                .onEnded { _ in
-                                    let maxOffset = trackWidth - thumbSize.width
-                                    if dragOffset > maxOffset * 0.85 {
-                                        // Confirmed
-                                        dragOffset = maxOffset
-                                        completed = true
-                                        action()
-                                    } else {
-                                        // Reset
-                                        dragOffset = 0
-                                    }
-                                }
-                        )
-                        
-                        Spacer()
-                    }
-                }
-            }
-            .frame(height: trackHeight)
-            .padding(.horizontal)
+
+    /// Hides still-pending Redress suggestions from the outfits section (same rule as ItemGridView).
+    @MainActor
+    private func excludePendingRedressSuggestions(from fetched: [Outfit]) async {
+        guard appCapabilities.enablesFriendsAndSharing else { return }
+        let pendingIds = await pendingRedressSuggestionIdsForItem()
+        guard !pendingIds.isEmpty else { return }
+        outfits = fetched.filter { outfit in
+            guard let outfitId = outfit.id else { return true }
+            return !pendingIds.contains(outfitId)
         }
     }
 
+    private func pendingRedressSuggestionIdsForItem() async -> Set<UUID> {
+        let wardrobeIds = ((item.wardrobes as? Set<Wardrobe>) ?? []).compactMap(\.id)
+        guard !wardrobeIds.isEmpty else { return [] }
+
+        var pendingIds = Set<UUID>()
+        for wardrobeId in wardrobeIds {
+            if let suggestions = try? await supabaseService.fetchRecipientOutfitSuggestions(
+                wardrobeId: wardrobeId
+            ) {
+                pendingIds.formUnion(suggestions.map(\.id))
+            }
+        }
+        return pendingIds
+    }
+    
+    
     func toggleFavorite() {
         item.isFavorite.toggle()
         
@@ -1321,16 +1809,95 @@ struct ItemDetailView: View {
             print("Failed to toggle favorite: \(error.localizedDescription)")
         }
     }
+
+    private var canToggleSocialLike: Bool {
+        guard isReadOnly, !isLikeBusy, let viewerId = authSession.userId else { return false }
+        let ownerId = item.userId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !ownerId.isEmpty, let ownerUUID = UUID(uuidString: ownerId) else { return false }
+        return viewerId != ownerUUID
+    }
+
+    private func refreshSocialLikeState(itemId: UUID) async {
+        do {
+            let state = try await supabaseService.fetchContentLikeState(targetType: .item, targetId: itemId)
+            likeCount = state.likeCount
+            isLikedByMe = state.likedByMe
+        } catch {}
+    }
+
+    private func toggleSocialLike() {
+        guard canToggleSocialLike, let itemId = item.id else { return }
+        isLikeBusy = true
+        let previousCount = likeCount
+        let previousLiked = isLikedByMe
+        if isLikedByMe {
+            isLikedByMe = false
+            likeCount = max(0, likeCount - 1)
+        } else {
+            isLikedByMe = true
+            likeCount += 1
+        }
+        Task {
+            defer { isLikeBusy = false }
+            do {
+                let state = try await supabaseService.toggleContentLike(targetType: .item, targetId: itemId)
+                likeCount = state.likeCount
+                isLikedByMe = state.likedByMe
+            } catch {
+                likeCount = previousCount
+                isLikedByMe = previousLiked
+            }
+        }
+    }
     
-    func deleteItem() {
-        // Store the brand before deletion to check if cleanup is needed
-        let itemBrand = item.brand
+    private var outfitCountForItemActions: Int {
+        outfitsContainingItem(includeDrafts: true).count
+    }
 
-        let sanitizerResult = OutfitSanitizer.sanitizeOutfitsAfterDeleting(deletedItems: [item], in: viewContext)
-        let removedFromOutfitsCount = sanitizerResult.affectedOutfits.count
+    private var deleteItemAndOutfitsButtonTitle: String {
+        let count = outfitCountForItemActions
+        return "Delete Item + \(count) Outfit\(count == 1 ? "" : "s")"
+    }
 
-        // Sanitize pairs before soft-delete (soft delete won't trigger Core Data delete rules).
-        // Remove this item from other items' pairedItems, and clear its own pairedItems.
+    private var deleteItemOnlyButtonTitle: String {
+        outfitCountForItemActions > 0 ? "Delete Item Only" : "Delete Item"
+    }
+
+    private var addItemOnlyButtonTitle: String {
+        outfitCountForItemActions > 0 ? "Add Item Only" : "Add Item"
+    }
+
+    private func outfitsContainingItem(includeDrafts: Bool) -> [Outfit] {
+        guard !item.objectID.isTemporaryID else { return [] }
+
+        guard let userId = effectiveReferenceDataUserId(
+            signedInUserId: authSession.userId,
+            entityUserId: item.userId
+        ), !userId.isEmpty else {
+            return []
+        }
+
+        var subpredicates: [NSPredicate] = [
+            NSPredicate(format: "ANY items == %@", item),
+            NSPredicate(format: "userId == %@", userId),
+            NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil"),
+        ]
+        if !includeDrafts {
+            subpredicates.append(NSPredicate(format: "isDraft != YES"))
+        }
+
+        let request: NSFetchRequest<Outfit> = Outfit.fetchRequest()
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: subpredicates)
+
+        do {
+            return try viewContext.fetch(request)
+        } catch {
+            print("❌ Failed to fetch outfits containing item: \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    private func sanitizePairsBeforeDeletingItem() -> Set<Item> {
         let paired = (item.pairedItems as? Set<Item>) ?? []
         var modifiedPairedItems: Set<Item> = []
         for other in paired {
@@ -1345,22 +1912,28 @@ struct ItemDetailView: View {
             item.pairedItems = NSSet()
             setUpdatedAt(item)
         }
-        
-        // Soft delete the item (for sync)
+        return modifiedPairedItems
+    }
+
+    private func deleteItemOnly() {
+        let itemBrand = item.brand
+
+        let sanitizerResult = OutfitSanitizer.sanitizeOutfitsAfterDeleting(deletedItems: [item], in: viewContext)
+        let removedFromOutfitsCount = sanitizerResult.affectedOutfits.count
+
+        let modifiedPairedItems = sanitizePairsBeforeDeletingItem()
+
         softDelete(item)
 
         do {
             try viewContext.save()
-            
-            // Trigger sync for the soft-deleted item
+
             SyncService.shared.syncItemIfNeeded(item)
 
-            // Sync any items whose pair relationships were updated
             for pairedItem in modifiedPairedItems {
                 SyncService.shared.syncItemIfNeeded(pairedItem)
             }
 
-            // Sync outfits that were sanitized (after the single save)
             for outfit in sanitizerResult.affectedOutfits {
                 SyncService.shared.syncOutfitIfNeeded(outfit)
             }
@@ -1372,19 +1945,67 @@ struct ItemDetailView: View {
                     "message": "Deleted item. Removed from \(removedFromOutfitsCount) outfit\(removedFromOutfitsCount == 1 ? "" : "s")."
                 ]
             )
-            
-            // Cleanup brand if it's now orphaned (has 0 items)
+
             if let brand = itemBrand {
                 cleanupBrandIfOrphaned(brand)
             }
-            
-            dismiss() // Go back after deletion
+
+            dismiss()
         } catch {
-            // Handle the error (e.g., log it or show alert)
             print("Failed to delete item: \(error.localizedDescription)")
         }
     }
-    // Outfit sanitation is handled by `OutfitSanitizer` at delete-time.
+
+    private func deleteItemAndOutfits() {
+        let itemBrand = item.brand
+        let outfitsToDelete = outfitsContainingItem(includeDrafts: true)
+        let deletedOutfitsCount = outfitsToDelete.count
+
+        for outfit in outfitsToDelete {
+            softDelete(outfit)
+        }
+
+        let modifiedPairedItems = sanitizePairsBeforeDeletingItem()
+
+        softDelete(item)
+
+        do {
+            try viewContext.save()
+
+            SyncService.shared.syncItemIfNeeded(item)
+
+            for pairedItem in modifiedPairedItems {
+                SyncService.shared.syncItemIfNeeded(pairedItem)
+            }
+
+            for outfit in outfitsToDelete {
+                SyncService.shared.syncOutfitIfNeeded(outfit)
+            }
+
+            let message: String
+            if deletedOutfitsCount == 0 {
+                message = "Deleted item."
+            } else {
+                message = "Deleted item and \(deletedOutfitsCount) outfit\(deletedOutfitsCount == 1 ? "" : "s")."
+            }
+
+            NotificationCenter.default.post(
+                name: Notification.Name("Closet.ItemDeletionToast"),
+                object: nil,
+                userInfo: ["message": message]
+            )
+
+            if let brand = itemBrand {
+                cleanupBrandIfOrphaned(brand)
+            }
+
+            dismiss()
+        } catch {
+            print("Failed to delete item and outfits: \(error.localizedDescription)")
+        }
+    }
+
+    // Outfit sanitation for delete-item-only is handled by `OutfitSanitizer`.
     
     // MARK: - Cleanup Orphaned Brand
     private func cleanupBrandIfOrphaned(_ brand: Brand) {
@@ -1461,7 +2082,7 @@ struct ItemDetailView: View {
         if item.brand != nil {
             available.insert(.brand)
         }
-        if item.size != nil {
+        if item.itemSize != nil {
             available.insert(.size)
         }
         if let colors = item.colors as? Set<AppColor>, !colors.isEmpty {
@@ -1581,7 +2202,7 @@ struct ShareSelectionView: View {
         if item.brand != nil {
             available.insert(.brand)
         }
-        if item.size != nil {
+        if item.itemSize != nil {
             available.insert(.size)
         }
         if let colors = item.colors as? Set<AppColor>, !colors.isEmpty {
@@ -1775,7 +2396,7 @@ struct ShareSelectionView: View {
             lines.append("Brand: \(brand)")
         }
         
-        if attributes.contains(.size), let size = item.size?.value {
+        if attributes.contains(.size), let size = item.itemSize?.value {
             lines.append("Size: \(size)")
         }
         
@@ -1854,33 +2475,53 @@ struct ActivityViewController: UIViewControllerRepresentable {
     var activityItems: [Any]
     var applicationActivities: [UIActivity]? = nil
     @Binding var isPresented: Bool
-    
+    var onShareSheetPresented: (() -> Void)? = nil
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    final class Coordinator {
+        var hasPresentedShareSheet = false
+    }
+
     func makeUIViewController(context: Context) -> UIViewController {
         UIViewController()
     }
-    
+
     func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
-        if isPresented && uiViewController.presentedViewController == nil {
-            let activityVC = UIActivityViewController(
-                activityItems: activityItems,
-                applicationActivities: applicationActivities
-            )
-            
-            // Configure for iPad
-            if let popover = activityVC.popoverPresentationController {
-                popover.sourceView = uiViewController.view
-                popover.sourceRect = CGRect(x: uiViewController.view.bounds.midX, y: uiViewController.view.bounds.midY, width: 0, height: 0)
-                popover.permittedArrowDirections = []
+        guard isPresented, !context.coordinator.hasPresentedShareSheet, uiViewController.presentedViewController == nil else {
+            if !isPresented {
+                context.coordinator.hasPresentedShareSheet = false
             }
-            
-            // Dismiss handler
-            activityVC.completionWithItemsHandler = { _, _, _, _ in
-                DispatchQueue.main.async {
-                    isPresented = false
-                }
+            return
+        }
+
+        context.coordinator.hasPresentedShareSheet = true
+
+        let activityVC = UIActivityViewController(
+            activityItems: activityItems,
+            applicationActivities: applicationActivities
+        )
+
+        // Configure for iPad
+        if let popover = activityVC.popoverPresentationController {
+            popover.sourceView = uiViewController.view
+            popover.sourceRect = CGRect(x: uiViewController.view.bounds.midX, y: uiViewController.view.bounds.midY, width: 0, height: 0)
+            popover.permittedArrowDirections = []
+        }
+
+        // Dismiss handler
+        activityVC.completionWithItemsHandler = { _, _, _, _ in
+            DispatchQueue.main.async {
+                isPresented = false
             }
-            
-            uiViewController.present(activityVC, animated: true)
+        }
+
+        uiViewController.present(activityVC, animated: true) {
+            DispatchQueue.main.async {
+                onShareSheetPresented?()
+            }
         }
     }
 }

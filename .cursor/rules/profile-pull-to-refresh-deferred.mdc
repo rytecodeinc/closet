@@ -1,0 +1,25 @@
+---
+description: Deferred — Profile pull-to-refresh page-snap / threshold-commit
+globs: closet/Profile View/ProfileNestedScrollContainer.swift,closet/Profile View/ProfileView.swift,closet/Item View/ItemGridView.swift
+alwaysApply: false
+---
+
+# Deferred: Profile pull-to-refresh feel
+
+**Status:** Parked. Revisit later. Do not change pull-to-refresh behavior unless the user asks.
+
+## Desired behavior
+
+Make pull-to-refresh **page-snap / threshold-commit** — content stays pinned on a half-pull (no spinner peek); only engage refresh after a full commit past the threshold.
+
+Reference feel: ItemDetailView Item ↔ Worn hero `TabView` with `.tabViewStyle(.page)`.
+
+## Current baseline
+
+- Own Profile and other-user remote wardrobe grids both use `UIRefreshControl` via `ProfileNestedScrollContainer`.
+- Standard `UIRefreshControl` peeks the spinner during rubber-band overscroll before refresh commits.
+
+## When revisiting
+
+- Hide or suppress the spinner until refresh actually begins (`beginRefreshing` / past commit threshold).
+- Keep nested scroll coordination and `refreshOverscrollLimit` working.
