@@ -248,6 +248,7 @@ struct SyncLinkData: Codable {
   //  let userId: String
     let name: String?
     let url: String?
+    let type: String
     
     enum CodingKeys: String, CodingKey {
         case id
@@ -255,6 +256,7 @@ struct SyncLinkData: Codable {
        // case userId = "user_id"
         case name
         case url
+        case type
     }
 }
 

@@ -1,0 +1,23 @@
+---
+description: Deferred — sync item link section/row visibility to Supabase
+globs: closet/Selection Views/Link Selection/**/*.swift,closet/Services/SyncEngine+Relationships.swift,closet/Item View/Add Item/Set Attributes/SetLinkView.swift
+alwaysApply: false
+---
+
+# Deferred: item link visibility sync
+
+**Status:** `item_links.type` is shipping (see `SUPABASE_ITEM_LINKS_TYPE.sql` + `SyncLinkData.type`). Visibility is still local-only.
+
+## Current baseline
+
+- `Link.visibility` and `Item.linkSectionVisibility` are Core Data only.
+- Section defaults: Affiliate = public, Purchase / Reference = private.
+- Rows may override; mixed sections show `lock.open` locally.
+- `SyncLinkData` upserts `id`, `itemId`, `name`, `url`, `type`.
+
+## When revisiting
+
+1. Add `item_links.visibility` (and item-level section map if needed).
+2. Include visibility in link upsert / pull.
+3. Apply privacy when rendering remote/read-only item detail.
+4. Remove this rule once shipping.

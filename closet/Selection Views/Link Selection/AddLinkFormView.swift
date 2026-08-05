@@ -15,48 +15,81 @@ struct AddLinkFormView: View {
     let item: Item
     let viewContext: NSManagedObjectContext
     let existingLinks: [Link]
-    let linkToEdit: Link? // ✅ renamed from editingLink
+    let linkToEdit: Link?
+    let linkType: ItemLinkType
     let onLinkAdded: (Link) -> Void
 
     @State private var name: String = ""
     @State private var urlString: String = ""
+    @State private var visibility: WardrobeVisibility = .private
 
     var body: some View {
-        NavigationView {
-            Form {
-                Section {
-                    TextField("Link name (e.g. Amazon)", text: $name)
-                        .textInputAutocapitalization(.words)
-
-                    TextField("URL (e.g. amazon.com/product)", text: $urlString)
-                        .keyboardType(.URL)
-                        .autocapitalization(.none)
-                        .autocorrectionDisabled()
-                }
-
-                Button(linkToEdit == nil ? "Save Link" : "Update Link") {
-                    saveLink()
-                }
-                .disabled(!isValidInput)
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .cornerRadius(12)
-                .listRowBackground(isValidInput ? Color.blue : Color.gray)
-            }
-            .navigationTitle(linkToEdit == nil ? "Add Link" : "Edit Link")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
+        VStack(spacing: 0) {
+            SelectionPanelHeader(
+                title: linkType.formTitle,
+                leading: {
+                    Button {
                         dismiss()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 17, weight: .semibold))
+                            Text("Links")
+                        }
+                        .foregroundColor(.blue)
                     }
+                },
+                trailing: { EmptyView() }
+            )
+
+            List {
+                TextField("Link name (e.g. Amazon)", text: $name)
+                    .textInputAutocapitalization(.words)
+
+                TextField("URL (e.g. amazon.com/product)", text: $urlString)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+
+                HStack {
+                    Spacer()
+                    ItemLinkVisibilityLabeledMenu(
+                        visibility: visibility,
+                        accessibilityPrefix: linkType.displayName
+                    ) { visibility = $0 }
                 }
+
+                HStack {
+                    Spacer(minLength: 0)
+                    Button {
+                        saveLink()
+                    } label: {
+                        Text(linkToEdit == nil ? "Add Link" : "Update Link")
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 28)
+                            .padding(.vertical, 12)
+                            .background(.cayenne.gradient)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!isValidInput)
+                    .opacity(isValidInput ? 1 : 0.5)
+                    Spacer(minLength: 0)
+                }
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
             }
-            .onAppear {
-                if let link = linkToEdit {
-                    name = link.name ?? ""
-                    urlString = link.url?.absoluteString ?? ""
-                }
+            .listStyle(.plain)
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .onAppear {
+            if let link = linkToEdit {
+                name = link.name ?? ""
+                urlString = link.url?.absoluteString ?? ""
+                visibility = link.itemLinkVisibility
+            } else {
+                visibility = item.linkSectionVisibility(for: linkType)
             }
         }
     }
@@ -100,26 +133,29 @@ struct AddLinkFormView: View {
         }
 
         if let editing = linkToEdit {
-            // Update existing link
             editing.name = trimmedName
             editing.url = finalURL
+            editing.itemLinkType = linkType
+            editing.itemLinkVisibility = visibility
             onLinkAdded(editing)
         } else {
-            // Check for duplicates
             if let existing = existingLinks.first(where: {
                 ($0.name ?? "").localizedCaseInsensitiveCompare(trimmedName) == .orderedSame &&
-                $0.url == finalURL
+                $0.url == finalURL &&
+                $0.itemLinkType == linkType
             }) {
+                existing.itemLinkVisibility = visibility
                 onLinkAdded(existing)
                 dismiss()
                 return
             }
 
-            // Create new Link
             let newLink = Link(context: viewContext)
             newLink.id = UUID()
             newLink.name = trimmedName
             newLink.url = finalURL
+            newLink.itemLinkType = linkType
+            newLink.itemLinkVisibility = visibility
             newLink.item = item
             onLinkAdded(newLink)
         }
@@ -127,5 +163,3 @@ struct AddLinkFormView: View {
         dismiss()
     }
 }
-
-

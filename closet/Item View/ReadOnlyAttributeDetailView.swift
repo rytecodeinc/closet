@@ -169,8 +169,7 @@ extension AttributesSectionView.Sheet {
         case .color: return "Colors"
         case .season: return "Seasons"
         case .link:
-            let count = (item.links as? Set<Link>)?.count ?? 0
-            return count <= 1 ? "Link" : "Links"
+            return "Links"
         case .tag: return "Tags"
         default: return rawValue.capitalized
         }

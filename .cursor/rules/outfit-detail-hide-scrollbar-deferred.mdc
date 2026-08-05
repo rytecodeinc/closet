@@ -1,0 +1,14 @@
+---
+description: Deferred — hide scrollbar on OutfitDetailView
+globs: closet/Outfit Views/OutfitDetailView.swift
+alwaysApply: false
+---
+
+# Deferred: hide OutfitDetailView scrollbar
+
+**Status:** Parked. `ItemDetailView` hides list scroll indicators with `.scrollIndicators(.hidden)`. Mirror that on `OutfitDetailView` later. Do not change unless the user asks.
+
+## When revisiting
+
+1. Add `.scrollIndicators(.hidden)` to the main detail `List` in `OutfitDetailView` (and read-only outfit detail if it should match).
+2. Remove this rule once shipping.

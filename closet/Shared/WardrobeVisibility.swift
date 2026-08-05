@@ -27,9 +27,21 @@ enum WardrobeVisibility: String, CaseIterable, Identifiable {
 
     var iconName: String {
         switch self {
-        case .public: return "lock.slash"
+        case .public: return "lock.open"
         case .private: return "lock.fill"
         case .friends: return "person.2"
+        }
+    }
+
+    /// Profile / read-only surfaces. Private is never shown; friends-only is shown to friends and the owner.
+    func isVisibleOnPublicProfile(viewerIsOwner: Bool, viewerIsFriend: Bool) -> Bool {
+        switch self {
+        case .public:
+            return true
+        case .friends:
+            return viewerIsOwner || viewerIsFriend
+        case .private:
+            return false
         }
     }
 }
