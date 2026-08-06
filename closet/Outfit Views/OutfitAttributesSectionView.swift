@@ -20,6 +20,8 @@ struct OutfitAttributesSectionView: View {
     /// Redress suggestions: suggester proposes name/notes only (not recipient category/tags).
     var redressSuggestionMode: Bool = false
     var isReadOnly: Bool = false
+    /// Owner outfit detail only — omitted on add/edit and remote read-only profile outfits.
+    var showsCost: Bool = false
 
     var body: some View {
         Section {
@@ -35,6 +37,9 @@ struct OutfitAttributesSectionView: View {
             if showsNotesRow {
                 notesRow()
             }
+            if showsCostRow {
+                costRow()
+            }
         }
     }
 
@@ -49,6 +54,10 @@ struct OutfitAttributesSectionView: View {
     }
 
     private var showsNotesRow: Bool { true }
+
+    private var showsCostRow: Bool {
+        showsCost && outfitItemsCostText != nil
+    }
 
     private var hasName: Bool {
         !(outfit.name?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
@@ -134,9 +143,35 @@ extension OutfitAttributesSectionView {
         }
     }
 
+    /// Sum of item prices that are set; not editable.
+    func costRow() -> some View {
+        HStack {
+            Text("Cost")
+                .foregroundColor(.primary)
+            Spacer()
+            if let formatted = outfitItemsCostText {
+                Text(formatted)
+                    .foregroundColor(.gray)
+                    .multilineTextAlignment(.trailing)
+            }
+        }
+    }
+
     private var tagNamesText: String? {
         guard let tagSet = outfit.tags as? Set<Tag>, !tagSet.isEmpty else { return nil }
         return tagSet.compactMap { $0.name }.sorted().joined(separator: ", ")
+    }
+
+    private var outfitItemsCostText: String? {
+        let prices = (outfit.items as? Set<Item> ?? []).compactMap(\.price)
+        let amounts = prices.compactMap { $0.amount as Decimal? }
+        guard !amounts.isEmpty else { return nil }
+
+        let total = amounts.reduce(Decimal(0), +)
+        let currencyCode = prices.compactMap(\.currency).first { !$0.isEmpty }
+            ?? Locale.current.currency?.identifier
+            ?? "USD"
+        return CurrencyFormatting.displayPrice(amount: total, currencyCode: currencyCode)
     }
 
     private func editableAttributeLabel(title: String, value: String?, truncatePrefix: Int? = nil) -> some View {
@@ -218,6 +253,12 @@ struct ReadOnlyOutfitHistorySection: View {
                     OutfitHistoryDateRow(label: label, date: date, caption: caption)
                         .transition(.opacity.combined(with: .slide))
                 }
+                Color.clear
+                    .frame(height: 4)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                    .environment(\.defaultMinListRowHeight, 1)
             } header: {
                 HStack {
                     Text("HISTORY")

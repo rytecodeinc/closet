@@ -1,0 +1,20 @@
+---
+description: Deferred — tab bar tap pops to tab root
+globs: closet/ContentView.swift,closet/**/*Tab*.swift,closet/Item View/ItemGridView.swift,closet/Profile View/ProfileView.swift,closet/Fitting View/FittingView.swift
+alwaysApply: false
+---
+
+# Deferred: tab bar re-tap pops to tab home
+
+**Status:** Deferred. Deep navigation within a tab does not reset when the user taps that tab’s tab-bar icon again.
+
+## Goal when revisiting
+
+1. When the user has pushed into **subviews of a tab**, tapping that tab’s **tab-bar icon** should **pop back to that tab’s root / home** (standard iOS tab reselect behavior).
+2. Apply across main tabs (closet/items, outfits/fitting, profile, etc. as applicable).
+3. Prefer the platform pattern: only pop when re-selecting the **already selected** tab; selecting a different tab should switch normally.
+4. Preserve nested NavigationStacks / path bindings used for profile and grid detail (see profile-nested-navigation rules) so pops don’t orphan destinations.
+
+## When done
+
+Remove this rule.

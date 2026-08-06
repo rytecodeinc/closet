@@ -1,0 +1,34 @@
+---
+description: Deferred — revise SetPriceView live decimal/comma formatting
+globs: closet/Item View/Add Item/Set Attributes/SetPriceView.swift,closet/Item View/Helpers/PriceAmountTextField.swift,closet/Shared/CurrencyFormatting.swift,closet/Item View/AttributesSectionView.swift
+alwaysApply: false
+---
+
+# Deferred: SetPriceView natural decimal + thousands formatting
+
+**Status:** Deferred. Current behavior is intentional baseline after live-comma experiments caused cursor/order bugs.
+
+## Current baseline
+
+- `PriceAmountTextField`: plain decimal-pad typing (no live thousands separators).
+- Autofocus via UIKit `becomeFirstResponder` (avoids FocusState sheet gesture-gate delay).
+- On open / blur / save: `CurrencyFormatting.finalizeAmountString` / `amountString` forces 2 fraction digits (e.g. `18` → `18.00`).
+- Item detail Price row + outfit Cost use `CurrencyFormatting.displayPrice` (symbol + amount as one string).
+- `amountFormatter.usesGroupingSeparator = false` (no commas in field or display helpers yet).
+
+## Goal when revisiting
+
+1. **Live typing:** decimal point behaves naturally as digits are entered (currency-style / fixed-fraction feel as values grow), not only on blur/save.
+2. **Live grouping:** locale thousands/millions separators appear while typing (e.g. `1234` → `1,234`) without reversing digit order or freezing the field.
+3. **Caret:** preserve cursor across reformats.
+4. **Item detail Price row** (and Cost / share text via `CurrencyFormatting`): show decimal + grouping correctly and consistently with Set Price.
+5. Keep stable currency symbols (`CurrencyFormatting.symbol`) — do not regress `$` vs `US$`.
+
+## Prior art / pitfalls
+
+- Live `formatWhileTyping` + caret math in `PriceAmountTextField` previously produced reverse digit order (`4321`) and then a non-updating field; do not reintroduce without solid caret tests.
+- Prefer one shared formatter path for Set Price field, Price row, and Cost.
+
+## When done
+
+Remove this rule.

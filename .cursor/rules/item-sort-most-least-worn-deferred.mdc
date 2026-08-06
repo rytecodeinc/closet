@@ -1,0 +1,20 @@
+---
+description: Deferred — Most Worn / Least Worn item sort
+globs: closet/Filter/ItemFilterModel.swift,closet/Filter/ItemFilterSortSearchBar.swift,closet/Filter/ItemFilterView.swift,closet/Item View/ItemGridView.swift,closet/Services/CoreDataHelpers.swift
+alwaysApply: false
+---
+
+# Deferred: Most Worn / Least Worn item sort
+
+**Status:** Deferred. Item sort today is date-only (`ItemSortOrder`: New to Old / Old to New) on the filter/sort/search row.
+
+## Goal when revisiting
+
+1. Add **Most Worn** and **Least Worn** sort options to the items filter/sort/search row (and `ItemFilterModel` / grid apply path).
+2. Base ranking on **past worn count** (same notion as calendar/`pastWornEvents` — align with any time-window decisions in `item-calendar-worn-history-deferred.mdc` if that ships first).
+3. Define tie-breakers (e.g. name or newest) and whether outfits-only vs direct event links count the same as the calendar badge.
+4. Confirm whether outfits grids need the same sorts or items-only.
+
+## When done
+
+Remove this rule.

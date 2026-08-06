@@ -21,6 +21,8 @@ struct AttributesSectionView: View {
     // One enum instead of many booleans
     @Binding var activeSheet: Sheet?
     var isReadOnly: Bool = false
+    /// When false, the Links row is omitted (shown as its own detail section instead).
+    var includeLinks: Bool = true
 
     // Currency symbol (display only)
     private let currencySymbol = Locale.current.currencySymbol ?? "$"
@@ -70,7 +72,6 @@ struct AttributesSectionView: View {
         if let size = item.itemSize?.value, !size.isEmpty { return true }
         if let colors = item.colors as? Set<AppColor>, !colors.isEmpty { return true }
         if let seasons = item.seasons as? Set<Season>, !seasons.isEmpty { return true }
-        if let links = item.links as? Set<Link>, links.contains(where: { !($0.name ?? "").isEmpty }) { return true }
         if let tags = item.tags as? Set<Tag>, tags.contains(where: { !($0.name ?? "").isEmpty }) { return true }
         return false
     }
@@ -110,7 +111,7 @@ struct AttributesSectionView: View {
             if !isReadOnly, appCapabilities.showsWeightAttribute {
                 weightRow()
             }
-            if !isReadOnly || hasLinks {
+            if includeLinks, !isReadOnly || hasLinks {
                 linkRow()
             }
             if !isReadOnly || hasTags {
@@ -266,10 +267,6 @@ private struct ReadOnlyLinksRow: View {
         (item.links as? Set<Link>)?.compactMap(\.name).sorted() ?? []
     }
 
-    private var title: String {
-        names.count <= 1 ? "Link" : "Links"
-    }
-
     private var fullText: String {
         names.joined(separator: ", ")
     }
@@ -277,7 +274,7 @@ private struct ReadOnlyLinksRow: View {
     var body: some View {
         if !fullText.isEmpty {
             ReadOnlyTruncatingTextRow(
-                title: title,
+                title: "Links",
                 text: fullText,
                 sheet: .link,
                 activeSheet: $activeSheet
@@ -481,18 +478,14 @@ extension AttributesSectionView {
                 Text("Price").foregroundColor(.primary)
                 Spacer()
                 if let price = item.price, let amount = price.amount {
-                    let currencySymbol = (price.currency != nil)
-                        ? Locale(identifier: Locale.identifier(fromComponents: [NSLocale.Key.currencyCode.rawValue: price.currency!]))
-                            .currencySymbol ?? "$"
-                        : Locale.current.currencySymbol ?? "$"
-                    
-                    HStack(spacing: 2) {
-                        Text(currencySymbol)
-                            .foregroundColor(.gray)
-                        Text(NumberFormatter.currency2.string(from: amount) ?? "0.00")
-                            .foregroundColor(.gray)
-                            .multilineTextAlignment(.trailing)
-                    }
+                    Text(
+                        CurrencyFormatting.displayPrice(
+                            amount: amount,
+                            currencyCode: price.currency ?? Locale.current.currency?.identifier ?? "USD"
+                        )
+                    )
+                    .foregroundColor(.gray)
+                    .multilineTextAlignment(.trailing)
                 }
                 Image(systemName: "chevron.right")
                     .foregroundColor(.gray)
@@ -559,7 +552,7 @@ extension AttributesSectionView {
 
             Button { activeSheet = .link } label: {
                 HStack {
-                    Text(names.count <= 1 ? "Link" : "Links").foregroundColor(.primary)
+                    Text("Links").foregroundColor(.primary)
                     Spacer()
                     if !display.isEmpty {
                         HStack(spacing: 2) {
@@ -635,17 +628,6 @@ extension AttributesSectionView {
     }
 }
 
-// MARK: - Optional local formatter if you do not already have one elsewhere
-extension NumberFormatter {
-    static let currency2: NumberFormatter = {
-        let f = NumberFormatter()
-        f.numberStyle = .decimal
-        f.minimumFractionDigits = 2
-        f.maximumFractionDigits = 2
-        return f
-    }()
-}
-
 // ==============================================================
 // MARK: - Integrations
 // Replace usages in ItemDetailView and ItemAddView
@@ -703,7 +685,9 @@ extension AttributesSectionView.Sheet {
             } else {
                 EmptyView()
             }
-        case .link:      SetLinkView(item: item)
+        case .link:
+            SetLinkView(item: item)
+                .presentationDetents([.medium, .large])
         case .location:  SetLocationView(item: item)
         case .tag:       SetTagView(item: item)
         case .notes:     SetNotesView(item: item)

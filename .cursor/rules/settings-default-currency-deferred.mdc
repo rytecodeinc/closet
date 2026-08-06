@@ -1,0 +1,21 @@
+---
+description: Deferred — default currency setting for item prices
+globs: closet/Selection Views/Settings/SettingsView.swift,closet/Shared/CurrencyFormatting.swift,closet/Item View/Add Item/Set Attributes/SetPriceView.swift,closet/Item View/AttributesSectionView.swift
+alwaysApply: false
+---
+
+# Deferred: default currency for item prices
+
+**Status:** Deferred. New prices default to `Locale.current.currency` in `SetPriceView`; there is no user-configurable default in Settings.
+
+## Goal when revisiting
+
+1. Add a **Settings** control to choose the default currency used when setting/adding item prices.
+2. Persist the preference (UserDefaults / profile / sync — decide when implementing).
+3. Use it as the initial `selectedCurrency` in `SetPriceView` when the item has no price yet; existing prices keep their stored currency.
+4. Keep `CurrencyFormatting.symbol` / display helpers consistent with the chosen default where appropriate.
+5. Align with any later live price-formatting work (`set-price-live-formatting-deferred.mdc`).
+
+## When done
+
+Remove this rule.

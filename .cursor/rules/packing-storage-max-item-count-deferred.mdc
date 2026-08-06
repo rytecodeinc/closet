@@ -1,0 +1,19 @@
+---
+description: Deferred — packing mode storage section max item count
+globs: closet/Item View/TravelPackingView.swift,closet/Item View/PackingChecklistView.swift
+alwaysApply: false
+---
+
+# Deferred: packing storage section max item count
+
+**Status:** Deferred. Packing mode storage sections do not yet expose or enforce a maximum item count.
+
+## Goal when revisiting
+
+1. Add a **max item count** per packing storage section (UI + persistence as needed).
+2. Clarify whether max is soft guidance (display only) or hard limit (block assign/pack over max).
+3. Keep checklist / unpack / move-between-sections behavior consistent with the chosen rule.
+
+## When done
+
+Remove this rule.

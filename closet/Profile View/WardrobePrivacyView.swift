@@ -55,16 +55,19 @@ struct WardrobePrivacyView: View {
                 .padding(.horizontal)
                 .padding(.vertical, 8)
                 .background(Color(UIColor.secondarySystemBackground))
-            }
 
-            Group {
-                if selectedTab == "Wishlist", appCapabilities.showsWishlistTab {
-                    wardrobePage(wardrobes: userWishlists, emptyNoun: "wishlists")
-                } else {
+                TabView(selection: $selectedTab) {
                     wardrobePage(wardrobes: userClosets, emptyNoun: "closets")
+                        .tag("Closet")
+                    wardrobePage(wardrobes: userWishlists, emptyNoun: "wishlists")
+                        .tag("Wishlist")
                 }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .id(visibilityRevision)
+            } else {
+                wardrobePage(wardrobes: userClosets, emptyNoun: "closets")
+                    .id(visibilityRevision)
             }
-            .id(visibilityRevision)
         }
         .navigationTitle("Wardrobe Privacy")
         .navigationBarTitleDisplayMode(.inline)

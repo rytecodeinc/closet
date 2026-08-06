@@ -29,16 +29,20 @@ struct SocialEngagementActionsRow: View {
 
     /// When non-`nil`, the heart reflects liked/favorited on/off (`true` = `heart.fill`). When `nil`, shows outline `heart`.
     var favoriteSelection: Bool?
-    /// When non-`nil`, shows the social like count next to the heart (other-user profiles).
+    /// When non-`nil`, shows the social like count under the heart (other-user profiles).
     var likeCount: Int? = nil
+    /// When non-`nil`, shows completed-calendar count under the calendar icon (owned closet item detail).
+    var calendarCount: Int? = nil
     var showsLikeButton: Bool = true
     var isLikeInteractive: Bool = true
+    var showsCalendarButton: Bool = false
     var showsRedressButton: Bool = false
     var showsShareButton: Bool
     var showsMoveToClosetButton: Bool
     var showsWornSegment: Bool = true
     var disabledSegments: Set<SocialEngagementToolbarSegment> = []
     var onLike: () -> Void
+    var onCalendar: () -> Void
     var onRedress: () -> Void
     var onShare: () -> Void
     var onMoveToCloset: () -> Void
@@ -61,18 +65,32 @@ struct SocialEngagementActionsRow: View {
         return base
     }
 
+    private var calendarAccessibilityLabel: String {
+        if let calendarCount, calendarCount > 0 {
+            return "Calendar, worn \(calendarCount) \(calendarCount == 1 ? "time" : "times")"
+        }
+        return "Calendar"
+    }
+
+    private var showsCountRow: Bool {
+        (showsLikeButton && likeCount != nil) || (showsCalendarButton && calendarCount != nil)
+    }
+
     init(
         segmentSelection: Binding<SocialEngagementToolbarSegment> = .constant(.tshirt),
         favoriteSelection: Bool? = nil,
         likeCount: Int? = nil,
+        calendarCount: Int? = nil,
         showsLikeButton: Bool = true,
         isLikeInteractive: Bool = true,
+        showsCalendarButton: Bool = false,
         showsRedressButton: Bool = false,
         showsShareButton: Bool = true,
         showsMoveToClosetButton: Bool = false,
         showsWornSegment: Bool = true,
         disabledSegments: Set<SocialEngagementToolbarSegment> = [],
         onLike: @escaping () -> Void = {},
+        onCalendar: @escaping () -> Void = {},
         onRedress: @escaping () -> Void = {},
         onShare: @escaping () -> Void = {},
         onMoveToCloset: @escaping () -> Void = {}
@@ -80,14 +98,17 @@ struct SocialEngagementActionsRow: View {
         _segmentSelection = segmentSelection
         self.favoriteSelection = favoriteSelection
         self.likeCount = likeCount
+        self.calendarCount = calendarCount
         self.showsLikeButton = showsLikeButton
         self.isLikeInteractive = isLikeInteractive
+        self.showsCalendarButton = showsCalendarButton
         self.showsRedressButton = showsRedressButton
         self.showsShareButton = showsShareButton
         self.showsMoveToClosetButton = showsMoveToClosetButton
         self.showsWornSegment = showsWornSegment
         self.disabledSegments = disabledSegments
         self.onLike = onLike
+        self.onCalendar = onCalendar
         self.onRedress = onRedress
         self.onShare = onShare
         self.onMoveToCloset = onMoveToCloset
@@ -99,14 +120,26 @@ struct SocialEngagementActionsRow: View {
             : [.tshirt]
     }
 
-    /// Shared column width so the count centers under the heart without shifting the actions row.
-    private let likeColumnWidth: CGFloat = 28
+    /// Shared column width so counts center under icons without shifting the actions row.
+    private let actionColumnWidth: CGFloat = 28
 
     @ViewBuilder
     private var likeControlLabel: some View {
         Image(systemName: heartSystemImage)
             .imageScale(.large)
-            .frame(width: likeColumnWidth, alignment: .center)
+            .frame(width: actionColumnWidth, alignment: .center)
+    }
+
+    @ViewBuilder
+    private func countText(_ count: Int) -> some View {
+        Text(count > 0 ? "\(count)" : "0")
+            .font(.caption.weight(.semibold))
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .opacity(count > 0 ? 1 : 0)
+            .frame(width: actionColumnWidth, alignment: .center)
+            .accessibilityHidden(true)
     }
 
     var body: some View {
@@ -124,6 +157,16 @@ struct SocialEngagementActionsRow: View {
                         }
                     }
                     .accessibilityLabel(heartAccessibilityLabel)
+                }
+
+                if showsCalendarButton {
+                    Button(action: onCalendar) {
+                        Image(systemName: "calendar")
+                            .imageScale(.large)
+                            .frame(width: actionColumnWidth, alignment: .center)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(calendarAccessibilityLabel)
                 }
 
                 if showsRedressButton {
@@ -173,24 +216,33 @@ struct SocialEngagementActionsRow: View {
                 }
             }
 
-            // Always reserve this slot when social likes are enabled (`likeCount != nil`)
-            // so revealing the count after a tap doesn't shift the actions row upward.
-            // Centered in the same column width as the heart.
-            if showsLikeButton, let likeCount {
-                Text(likeCount > 0 ? "\(likeCount)" : "0")
-                    .font(.caption.weight(.semibold))
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .opacity(likeCount > 0 ? 1 : 0)
-                    .frame(width: likeColumnWidth, alignment: .center)
-                    .accessibilityHidden(true)
+            // Counts under like / calendar columns (same spacing as the icon row).
+            // Reserve slots when enabled so revealing a count doesn't shift layout.
+            if showsCountRow {
+                HStack(spacing: 24) {
+                    if showsLikeButton {
+                        if let likeCount {
+                            countText(likeCount)
+                        } else {
+                            Color.clear.frame(width: actionColumnWidth, height: 1)
+                        }
+                    }
+
+                    if showsCalendarButton {
+                        if let calendarCount {
+                            countText(calendarCount)
+                        } else {
+                            Color.clear.frame(width: actionColumnWidth, height: 1)
+                        }
+                    }
+
+                    Spacer(minLength: 0)
+                }
             }
         }
         .foregroundStyle(.primary)
         .padding(.horizontal, 14)
         .padding(.top, 4)
-       // .padding(.vertical, 10)
         .background(Color(.systemBackground))
     }
 }
