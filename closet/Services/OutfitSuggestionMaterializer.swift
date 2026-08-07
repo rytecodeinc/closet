@@ -333,10 +333,15 @@ struct OutfitSuggestionMaterializationRecord: Decodable {
         transformationJSON = try Self.decodeTransformationJSON(from: container)
     }
 
+    func transformationSavedItems() -> [SavedOutfitItem] {
+        transformationJSON ?? []
+    }
+
     func transformationData(fallbackItemIds items: [Item]) -> Data? {
         let encoder = JSONEncoder()
-        if let transformationJSON, !transformationJSON.isEmpty {
-            return try? encoder.encode(transformationJSON)
+        let saved = transformationSavedItems()
+        if !saved.isEmpty {
+            return try? encoder.encode(saved)
         }
 
         let fallback = items.enumerated().compactMap { index, item -> SavedOutfitItem? in
