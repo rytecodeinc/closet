@@ -196,7 +196,7 @@ struct PairItemSelectionView: View {
             }
         } message: {
             if let itemToPair {
-                Text("Pair \"\(itemDisplayName(item))\" with \"\(itemDisplayName(itemToPair))\"?")
+                Text(pairConfirmationMessage(with: itemToPair))
             }
         }
     }
@@ -369,9 +369,26 @@ struct PairItemSelectionView: View {
         isSearchFocused = false
     }
 
-    private func itemDisplayName(_ item: Item) -> String {
-        let trimmed = (item.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "Untitled Item" : trimmed
+    private func trimmedItemName(_ item: Item) -> String {
+        (item.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func pairConfirmationMessage(with other: Item) -> String {
+        let sourceName = trimmedItemName(item)
+        let otherName = trimmedItemName(other)
+        let sourceNamed = !sourceName.isEmpty
+        let otherNamed = !otherName.isEmpty
+
+        switch (sourceNamed, otherNamed) {
+        case (false, false):
+            return "Pair these items?"
+        case (false, true):
+            return "Pair this item with \(otherName)?"
+        case (true, false):
+            return "Pair this item with \(sourceName)?"
+        case (true, true):
+            return "Pair \"\(sourceName)\" with \"\(otherName)\"?"
+        }
     }
 
     private func confirmPair(with pairedItem: Item) {

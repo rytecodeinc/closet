@@ -8,7 +8,7 @@
 import SwiftUI
 
 struct RedressCanvasItem: Identifiable {
-    let id = UUID()
+    let id: UUID
     let item: VisibleWardrobeItem
     let sourceWardrobeType: String
     var position: CGPoint
@@ -16,6 +16,26 @@ struct RedressCanvasItem: Identifiable {
     var scale: CGFloat
     var rotation: Double
     var zIndex: Int
+
+    init(
+        id: UUID = UUID(),
+        item: VisibleWardrobeItem,
+        sourceWardrobeType: String,
+        position: CGPoint,
+        displaySize: CGSize,
+        scale: CGFloat,
+        rotation: Double,
+        zIndex: Int
+    ) {
+        self.id = id
+        self.item = item
+        self.sourceWardrobeType = sourceWardrobeType
+        self.position = position
+        self.displaySize = displaySize
+        self.scale = scale
+        self.rotation = rotation
+        self.zIndex = zIndex
+    }
 
     static func defaultDisplaySize(canvasSize: CGFloat) -> CGSize {
         let side = canvasSize * 0.45
@@ -309,6 +329,7 @@ private struct RedressWardrobeSelectionView: View {
                 }
             }
         }
+        .listStyle(.plain)
         .navigationTitle("Wardrobes")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -361,15 +382,11 @@ struct AdaptiveRedressCanvasItemView: View {
     let onTransformStart: () -> Void
     let onTransformEnd: () -> Void
     let onSelected: () -> Void
-    let onLongPress: () -> Void
     let onDelete: () -> Void
 
     @State private var dragOffset: CGSize = .zero
     @State private var dragCenter: CGPoint
-    @State private var rotation: Double
-    @State private var baseRotation: Double
-    @State private var scaleMultiplier: CGFloat = 1.0
-    @State private var baseScaleMultiplier: CGFloat = 1.0
+    @State private var isDragging = false
 
     private let deleteButtonSize: CGFloat = 24
 
@@ -383,7 +400,6 @@ struct AdaptiveRedressCanvasItemView: View {
         onTransformStart: @escaping () -> Void,
         onTransformEnd: @escaping () -> Void,
         onSelected: @escaping () -> Void,
-        onLongPress: @escaping () -> Void,
         onDelete: @escaping () -> Void
     ) {
         self.canvasItem = canvasItem
@@ -395,25 +411,24 @@ struct AdaptiveRedressCanvasItemView: View {
         self.onTransformStart = onTransformStart
         self.onTransformEnd = onTransformEnd
         self.onSelected = onSelected
-        self.onLongPress = onLongPress
         self.onDelete = onDelete
-        _rotation = State(initialValue: canvasItem.rotation)
-        _baseRotation = State(initialValue: canvasItem.rotation)
         _dragCenter = State(initialValue: canvasItem.position)
-        _scaleMultiplier = State(initialValue: canvasItem.scale)
-        _baseScaleMultiplier = State(initialValue: canvasItem.scale)
     }
 
+    /// Prefer model position when idle so undo/redo animations apply to the view.
     private var effectiveCenter: CGPoint {
-        CGPoint(x: dragCenter.x + dragOffset.width, y: dragCenter.y + dragOffset.height)
+        if isDragging {
+            return CGPoint(x: dragCenter.x + dragOffset.width, y: dragCenter.y + dragOffset.height)
+        }
+        return canvasItem.position
     }
 
     private var itemSize: CGSize { canvasItem.displaySize }
 
     private var deleteButtonPosition: CGPoint {
-        let halfW = (itemSize.width * scaleMultiplier) / 2
-        let halfH = (itemSize.height * scaleMultiplier) / 2
-        let rad = rotation * .pi / 180.0
+        let halfW = (itemSize.width * canvasItem.scale) / 2
+        let halfH = (itemSize.height * canvasItem.scale) / 2
+        let rad = canvasItem.rotation * .pi / 180.0
         let x = halfW * cos(rad) - (-halfH) * sin(rad)
         let y = halfW * sin(rad) + (-halfH) * cos(rad)
         return CGPoint(x: effectiveCenter.x + x, y: effectiveCenter.y + y)
@@ -422,23 +437,11 @@ struct AdaptiveRedressCanvasItemView: View {
     var body: some View {
         ZStack {
             itemImage
-                .scaleEffect(scaleMultiplier)
-                .rotationEffect(Angle.degrees(rotation))
+                .scaleEffect(canvasItem.scale)
+                .rotationEffect(Angle.degrees(canvasItem.rotation))
                 .position(effectiveCenter)
                 .onTapGesture { onSelected() }
-                .onLongPressGesture { onLongPress() }
                 .gesture(dragGesture)
-                .onChange(of: canvasItem.position) { _, newValue in
-                    dragCenter = newValue
-                }
-                .onChange(of: canvasItem.scale) { _, newValue in
-                    scaleMultiplier = newValue
-                    baseScaleMultiplier = newValue
-                }
-                .onChange(of: canvasItem.rotation) { _, newValue in
-                    rotation = newValue
-                    baseRotation = newValue
-                }
 
             if isSelected {
                 Button(action: onDelete) {
@@ -451,6 +454,10 @@ struct AdaptiveRedressCanvasItemView: View {
                 .position(deleteButtonPosition)
             }
         }
+        // Lock layout to the canvas square; parent/stack clipping handles sticker overhang.
+        .frame(width: canvasSize, height: canvasSize)
+        .clipped()
+        .allowsHitTesting(true)
     }
 
     @ViewBuilder
@@ -486,24 +493,49 @@ struct AdaptiveRedressCanvasItemView: View {
             .overlay { if isSelected { selectionOverlay } }
     }
 
+    /// Keeps the item *center* on the canvas. Edges / selection chrome may overhang.
+    private func clampCenter(_ point: CGPoint) -> CGPoint {
+        CGPoint(
+            x: min(max(point.x, 0), canvasSize),
+            y: min(max(point.y, 0), canvasSize)
+        )
+    }
+
     private var dragGesture: some Gesture {
         DragGesture()
             .onChanged { value in
                 guard isSelected else { return }
-                if dragOffset == .zero && value.translation != .zero {
+                if !isDragging {
+                    isDragging = true
+                    dragCenter = canvasItem.position
+                    dragOffset = .zero
                     onTransformStart()
                 }
-                dragOffset = value.translation
+                let clamped = clampCenter(
+                    CGPoint(
+                        x: dragCenter.x + value.translation.width,
+                        y: dragCenter.y + value.translation.height
+                    )
+                )
+                dragOffset = CGSize(
+                    width: clamped.x - dragCenter.x,
+                    height: clamped.y - dragCenter.y
+                )
             }
             .onEnded { value in
                 guard isSelected else { return }
-                let halfW = (itemSize.width * scaleMultiplier) / 2
-                let halfH = (itemSize.height * scaleMultiplier) / 2
-                let newX = max(halfW, min(canvasSize - halfW, dragCenter.x + value.translation.width))
-                let newY = max(halfH, min(canvasSize - halfH, dragCenter.y + value.translation.height))
-                dragCenter = CGPoint(x: newX, y: newY)
+                let newCenter = clampCenter(
+                    CGPoint(
+                        x: dragCenter.x + value.translation.width,
+                        y: dragCenter.y + value.translation.height
+                    )
+                )
+                // Commit parent position before leaving live-drag mode so we don't
+                // flash the pre-drag position (and so undo/redo spring isn't used here).
+                onPositionChanged(newCenter)
+                dragCenter = newCenter
                 dragOffset = .zero
-                onPositionChanged(dragCenter)
+                isDragging = false
                 onTransformEnd()
             }
     }

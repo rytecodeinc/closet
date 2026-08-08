@@ -63,17 +63,26 @@ struct OutfitAddView: View {
 
     /// When set, composes an outfit suggestion for another user (Redress mode).
     let redressRecipient: PublicUserProfile?
+    /// When set with `redressRecipient`, Redress submit updates this pending suggestion.
+    let editingSuggestionId: UUID?
+    /// Wardrobe used to load suggestion detail thumbs while editing a pending Redress.
+    let editingSuggestionWardrobeId: UUID?
+    /// Seeded from pending detail so Edit can push without waiting on network.
+    let editingProposedName: String?
+    let editingProposedNotes: String?
+    let editingItemThumbnails: [VisibleOutfitItemThumb]
     var onRedressSent: (() -> Void)? = nil
 
     /// Forces a unique view identity per creation session (prevents @State reuse).
     let sessionID: UUID
 
     private var isRedressMode: Bool { redressRecipient != nil }
+    private static let redressCanvasScrollID = "redressCanvas"
 
     private var redressRecipientUsernameCaption: String {
-        let raw = (redressRecipient?.username ?? redressRecipient?.displayName ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !raw.isEmpty else { return "user" }
+        let raw = redressRecipient?.username
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !raw.isEmpty else { return "@user" }
         return raw.hasPrefix("@") ? raw : "@\(raw)"
     }
 
@@ -114,6 +123,8 @@ struct OutfitAddView: View {
     @State private var showingSaveDraftConfirmation = false
     @State private var showingDiscardChangesConfirmation = false
     @State private var selectedItemID: UUID?
+    /// Redress: lock list scroll only after scrolling canvas into view on select.
+    @State private var redressScrollLocked = false
 
     // Drafts folder — sheet-based to avoid navigation conflict
     @State private var showingDraftsSheet = false
@@ -126,11 +137,14 @@ struct OutfitAddView: View {
     // Undo/Redo state
     @State private var undoStack: [CanvasState] = []
     @State private var redoStack: [CanvasState] = []
+    @State private var redressUndoStack: [RedressCanvasState] = []
+    @State private var redressRedoStack: [RedressCanvasState] = []
     @State private var transformInProgress = false
     @State private var canvasPinchBaseScale: CGFloat = 1.0
     @State private var canvasRotateBaseRotation: Double = 0.0
 
     @State private var didApplyPreselectedItem = false
+    @State private var didLoadEditingSuggestion = false
 
     @State private var attributeOutfitDraft: Outfit?
     @State private var attributesSheet: OutfitAttributesSectionView.Sheet?
@@ -138,6 +152,8 @@ struct OutfitAddView: View {
     @State private var isAttributesSectionExpanded = true
     @State private var isSendingRedress = false
     @State private var showingRedressSentAlert = false
+    @State private var showingClearRedressConfirm = false
+    @State private var showingSendRedressConfirm = false
     @State private var redressSendError: String?
     @State private var duplicateOutfitConflict: RecipientDuplicateOutfit?
     @State private var localDuplicateOutfit: Outfit?
@@ -154,6 +170,11 @@ struct OutfitAddView: View {
         self.wardrobeType = wardrobeType
         self.lockWardrobeSource = lockWardrobeSource
         self.redressRecipient = nil
+        self.editingSuggestionId = nil
+        self.editingSuggestionWardrobeId = nil
+        self.editingProposedName = nil
+        self.editingProposedNotes = nil
+        self.editingItemThumbnails = []
         _selectedWardrobe = State(initialValue: initialWardrobe)
         self.preselectedItemURI = nil
         self.preselectedRedressItem = nil
@@ -173,6 +194,11 @@ struct OutfitAddView: View {
         self.wardrobeType = wardrobeType
         self.lockWardrobeSource = lockWardrobeSource
         self.redressRecipient = nil
+        self.editingSuggestionId = nil
+        self.editingSuggestionWardrobeId = nil
+        self.editingProposedName = nil
+        self.editingProposedNotes = nil
+        self.editingItemThumbnails = []
         _selectedWardrobe = State(initialValue: initialWardrobe)
         self.preselectedItemURI = preselectedItemURI
         self.preselectedRedressItem = nil
@@ -184,6 +210,11 @@ struct OutfitAddView: View {
         redressRecipient: PublicUserProfile,
         preselectedItem: VisibleWardrobeItem? = nil,
         preselectedWardrobeType: String = "closet",
+        editingSuggestionId: UUID? = nil,
+        editingSuggestionWardrobeId: UUID? = nil,
+        editingProposedName: String? = nil,
+        editingProposedNotes: String? = nil,
+        editingItemThumbnails: [VisibleOutfitItemThumb] = [],
         sessionID: UUID = UUID(),
         onRedressSent: (() -> Void)? = nil
     ) {
@@ -191,6 +222,11 @@ struct OutfitAddView: View {
         self.wardrobeType = "closet"
         self.lockWardrobeSource = true
         self.redressRecipient = redressRecipient
+        self.editingSuggestionId = editingSuggestionId
+        self.editingSuggestionWardrobeId = editingSuggestionWardrobeId
+        self.editingProposedName = editingProposedName
+        self.editingProposedNotes = editingProposedNotes
+        self.editingItemThumbnails = editingItemThumbnails
         self.onRedressSent = onRedressSent
         _selectedWardrobe = State(initialValue: nil)
         self.preselectedItemURI = nil
@@ -245,12 +281,22 @@ struct OutfitAddView: View {
                 print("👗 [OutfitAddView] onAppear. sessionID=\(sessionID.uuidString) outfitToEdit=\(outfitToEdit != nil) wardrobeType=\(wardrobeType) preselectedItemURI=\(preselectedItemURI ?? "nil") redress=\(isRedressMode)")
 
                 guard !isRedressMode else {
-                    ensureAttributeOutfitDraft()
-                    isItemsSectionExpanded = false
-                    if !didApplyPreselectedItem, let item = preselectedRedressItem {
-                        didApplyPreselectedItem = true
-                        itemsSheetItemTypeSegment = preselectedRedressWardrobeType == "wishlist" ? .wishlist : .closet
-                        addRedressItemToCanvas(item)
+                    // Defer Core Data / network work until after the navigation push finishes.
+                    Task { @MainActor in
+                        if editingSuggestionId != nil, !didLoadEditingSuggestion {
+                            didLoadEditingSuggestion = true
+                            applyEditingSuggestionSeed()
+                            await refineEditingSuggestionTransforms()
+                        } else if !didApplyPreselectedItem, let item = preselectedRedressItem {
+                            ensureAttributeOutfitDraft()
+                            isItemsSectionExpanded = false
+                            didApplyPreselectedItem = true
+                            itemsSheetItemTypeSegment = preselectedRedressWardrobeType == "wishlist" ? .wishlist : .closet
+                            addRedressItemToCanvas(item)
+                        } else {
+                            ensureAttributeOutfitDraft()
+                            isItemsSectionExpanded = false
+                        }
                     }
                     return
                 }
@@ -394,71 +440,240 @@ struct OutfitAddView: View {
     }
 
     private var alertsContent: some View {
-        VStack(spacing: 0) {
-            outfitCollageArea
-                .frame(maxWidth: .infinity)
-                .background(Color(.systemGray6))
-            draftAndClearButtons
-                .background(Color(.systemGray6))
-            outfitDetailsList
-        }
-        .background(Color(.systemGray6))
-        .navigationTitle(isRedressMode ? "" : "Outfit")
-        .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(true)
-        .toolbarBackground(Color(.systemBackground), for: .navigationBar)
-        .toolbarBackground(.visible, for: .navigationBar)
-        .toolbar {
-            ToolbarItemGroup(placement: .navigationBarLeading) {
-                leadingToolbarItems
-            }
-            if isRedressMode {
-                ToolbarItem(placement: .principal) {
-                    VStack(spacing: 1) {
-                        Text("Redress")
-                            .font(.headline)
-                        Text(redressRecipientUsernameCaption)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .accessibilityElement(children: .combine)
+        outfitAddWithAlertsAndSheets
+    }
+
+    private var outfitAddMainColumn: some View {
+        ScrollViewReader { proxy in
+            List {
+                Section {
+                    outfitCollageArea
+                        .frame(width: squareSize, height: squareSize)
+                        .frame(maxWidth: .infinity)
+                        .id(Self.redressCanvasScrollID)
                 }
-            }
-            if !isRedressMode {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack(spacing: 16) {
-                        if outfitToEdit == nil {
-                            Button {
-                                showingDraftsSheet = true
-                            } label: {
-                                Image(systemName: "folder")
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color(.systemGray6))
+                .listSectionSpacing(0)
+
+                Section {
+                    draftAndClearButtons
+                }
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color(.systemBackground))
+                .listSectionSpacing(0)
+
+                Section {
+                    if isItemsSectionExpanded {
+                        if isRedressMode {
+                            redressFeaturedItemsSectionContent
+                                .transition(.opacity.combined(with: .slide))
+                        } else {
+                            featuredItemsSectionContent
+                                .transition(.opacity.combined(with: .slide))
+                        }
+                    }
+                } header: {
+                    HStack {
+                        Text("ITEMS")
+                            .fontWeight(.semibold)
+                        Spacer()
+                        Image(systemName: itemsSectionHeaderIconName)
+                            .foregroundColor(.gray)
+                            .font(.caption)
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        handleItemsSectionHeaderTap()
+                    }
+                }
+                .listRowInsets(EdgeInsets(.zero))
+                .listSectionSpacing(0)
+                .padding(.horizontal)
+
+                if let outfit = activeOutfitForAttributes {
+                    Section {
+                        if isAttributesSectionExpanded {
+                            OutfitAttributesSectionView(
+                                outfit: outfit,
+                                activeSheet: $attributesSheet,
+                                redressSuggestionMode: isRedressMode
+                            )
+                                .transition(.opacity.combined(with: .slide))
+                                .listRowInsets(EdgeInsets(top: 5, leading: 20, bottom: 5, trailing: 20))
+                        }
+                        attributesSectionBottomPad
+                    } header: {
+                        HStack {
+                            Text("ATTRIBUTES")
+                                .fontWeight(.semibold)
+                            Spacer()
+                            Image(systemName: isAttributesSectionExpanded ? "minus" : "plus")
+                                .foregroundColor(.gray)
+                                .font(.caption)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation {
+                                isAttributesSectionExpanded.toggle()
                             }
                         }
-                        Button("Save") {
-                            saveOutfit()
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .scrollDisabled(isRedressMode && redressScrollLocked)
+            .scrollContentBackground(.hidden)
+            .background(Color(.systemBackground))
+            .onChange(of: selectedItemID) { _, newValue in
+                handleRedressCanvasSelectionScroll(newValue, proxy: proxy)
+            }
+        }
+    }
+
+    private func handleRedressCanvasSelectionScroll(
+        _ newValue: UUID?,
+        proxy: ScrollViewProxy
+    ) {
+        guard isRedressMode else {
+            redressScrollLocked = false
+            return
+        }
+        if newValue != nil {
+            // Keep scrolling enabled briefly so scrollTo can run, then lock.
+            redressScrollLocked = false
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                proxy.scrollTo(Self.redressCanvasScrollID, anchor: .top)
+            }
+            DispatchQueue.main.async {
+                if isRedressMode, selectedItemID != nil {
+                    redressScrollLocked = true
+                }
+            }
+        } else {
+            redressScrollLocked = false
+        }
+    }
+
+    /// Matches ItemDetailView history section bottom pad.
+    private var attributesSectionBottomPad: some View {
+        Color.clear
+            .frame(height: 4)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
+            .environment(\.defaultMinListRowHeight, 1)
+    }
+
+    private var outfitAddWithNavigationChrome: some View {
+        outfitAddMainColumn
+            .navigationTitle(isRedressMode ? "" : "Outfit")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarBackButtonHidden(true)
+            .toolbarBackground(Color(.systemBackground), for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    leadingToolbarBackButton
+                }
+                if isRedressMode {
+                    ToolbarItem(placement: .principal) {
+                        redressPrincipalTitle
+                    }
+                    if !redressCanvasItems.isEmpty {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            sendRedressToolbarButton
                         }
-                        .disabled(outfitItems.isEmpty)
+                    }
+                } else {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        outfitSaveToolbarButtons
                     }
                 }
-            } else {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Send") {
-                        submitRedressSuggestion()
+            }
+            .overlay {
+                if isSendingRedress {
+                    redressSendingOverlay
+                }
+            }
+    }
+
+    private var redressPrincipalTitle: some View {
+        VStack(spacing: 1) {
+            Text("Redress")
+                .font(.headline)
+            Text(redressRecipientUsernameCaption)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var outfitSaveToolbarButtons: some View {
+        HStack(spacing: 16) {
+            if outfitToEdit == nil {
+                Button {
+                    showingDraftsSheet = true
+                } label: {
+                    Image(systemName: "folder")
+                }
+            }
+            Button("Save") {
+                saveOutfit()
+            }
+            .disabled(outfitItems.isEmpty)
+        }
+    }
+
+    private var redressSendingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.2).ignoresSafeArea()
+            ProgressView("Sending…")
+                .padding()
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        }
+    }
+
+    private var outfitAddWithAlertsAndSheets: some View {
+        outfitAddWithDraftAndDiscardAlerts
+            .alert("Duplicate Outfit", isPresented: localDuplicateAlertPresented) {
+                Button("View Existing") {
+                    if let outfit = localDuplicateOutfit {
+                        existingDuplicateOutfitURI = outfit.objectID.uriRepresentation().absoluteString
                     }
-                    .disabled(redressCanvasItems.isEmpty || isSendingRedress)
+                    localDuplicateOutfit = nil
                 }
-            }
-        }
-        .overlay {
-            if isSendingRedress {
-                ZStack {
-                    Color.black.opacity(0.2).ignoresSafeArea()
-                    ProgressView("Sending…")
-                        .padding()
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                Button("OK", role: .cancel) {
+                    localDuplicateOutfit = nil
                 }
+            } message: {
+                Text("You already have an outfit with this combination of items.")
             }
-        }
+            .navigationDestination(item: $existingDuplicateOutfitURI) { uriString in
+                duplicateOutfitDestination(uriString: uriString)
+            }
+    }
+
+    private var outfitAddWithRedressAlerts: some View {
+        outfitAddWithNavigationChrome
+            .alert("Clear Canvas?", isPresented: $showingClearRedressConfirm) {
+                Button("Cancel", role: .cancel) {}
+                Button("Clear", role: .destructive) {
+                    clearRedressItems()
+                }
+            } message: {
+                Text("Remove all items from this Redress?")
+            }
+            .alert("Send Redress?", isPresented: $showingSendRedressConfirm) {
+                Button("Cancel", role: .cancel) {}
+                Button("Send") {
+                    submitRedressSuggestion()
+                }
+            } message: {
+                Text(sendRedressConfirmMessage)
+            }
         .alert("Redress Sent", isPresented: $showingRedressSentAlert) {
             Button("OK") {
                 onRedressSent?()
@@ -466,78 +681,73 @@ struct OutfitAddView: View {
                 dismiss()
             }
         } message: {
-            Text("Your outfit suggestion was sent to \(redressRecipient?.username ?? redressRecipient?.displayName ?? "this user").")
+            Text(
+                editingSuggestionId == nil
+                    ? "Your outfit suggestion was sent to \(redressRecipient?.username ?? redressRecipient?.displayName ?? "this user")."
+                    : "Your outfit suggestion was updated for \(redressRecipient?.username ?? redressRecipient?.displayName ?? "this user")."
+            )
         }
-        .alert("Couldn't Send Suggestion", isPresented: redressSendErrorPresented) {
-            Button("OK", role: .cancel) { redressSendError = nil }
-        } message: {
-            Text(redressSendError ?? "")
-        }
-        .sheet(item: $duplicateOutfitConflict) { duplicate in
-            if let recipient = redressRecipient {
-                RedressDuplicateOutfitSheet(
-                    recipient: recipient,
-                    duplicate: duplicate,
-                    onDismiss: { duplicateOutfitConflict = nil }
-                )
-                .environmentObject(supabaseService)
+            .alert("Couldn't Send Suggestion", isPresented: redressSendErrorPresented) {
+                Button("OK", role: .cancel) { redressSendError = nil }
+            } message: {
+                Text(redressSendError ?? "")
             }
-        }
-        .alert("Outfit Saved", isPresented: $showingSaveAlert) {
-            Button("OK") { dismiss() }
-        }
-        .alert("Draft Saved", isPresented: $showingDraftSaveAlert) {
-            Button("OK") { dismiss() }
-        }
-        .alert("Save draft?", isPresented: $showingSaveDraftConfirmation) {
-            Button("Yes") { saveDraft() }
-            Button("No", role: .cancel) {
-                discardAttributeOutfitDraftIfNeeded()
-                dismiss()
+            .sheet(item: $duplicateOutfitConflict) { duplicate in
+                if let recipient = redressRecipient {
+                    RedressDuplicateOutfitSheet(
+                        recipient: recipient,
+                        duplicate: duplicate,
+                        onDismiss: { duplicateOutfitConflict = nil }
+                    )
+                    .environmentObject(supabaseService)
+                }
             }
-        } message: {
-            Text("Saving this outfit to drafts will allow you to finish editing it later.")
-        }
-        .alert("Discard Changes?", isPresented: $showingDiscardChangesConfirmation) {
-            Button("Discard", role: .destructive) {
-                if isRedressMode {
-                    clearRedressItems()
-                    discardAttributeOutfitDraftIfNeeded()
-                    dismiss()
-                } else {
+    }
+
+    private var outfitAddWithDraftAndDiscardAlerts: some View {
+        outfitAddWithRedressAlerts
+            .alert("Outfit Saved", isPresented: $showingSaveAlert) {
+                Button("OK") { dismiss() }
+            }
+            .alert("Draft Saved", isPresented: $showingDraftSaveAlert) {
+                Button("OK") { dismiss() }
+            }
+            .alert("Save draft?", isPresented: $showingSaveDraftConfirmation) {
+                Button("Yes") { saveDraft() }
+                Button("No", role: .cancel) {
                     discardAttributeOutfitDraftIfNeeded()
                     dismiss()
                 }
+            } message: {
+                Text("Saving this outfit to drafts will allow you to finish editing it later.")
             }
-            Button("Keep Editing", role: .cancel) { }
-        } message: {
-            Text("Your changes to this outfit will not be saved.")
-        }
-        .alert("Duplicate Outfit", isPresented: localDuplicateAlertPresented) {
-            Button("View Existing") {
-                if let outfit = localDuplicateOutfit {
-                    existingDuplicateOutfitURI = outfit.objectID.uriRepresentation().absoluteString
+            .alert("Discard Changes?", isPresented: $showingDiscardChangesConfirmation) {
+                Button("Discard", role: .destructive) {
+                    if isRedressMode {
+                        clearRedressItems(recordHistory: false)
+                        discardAttributeOutfitDraftIfNeeded()
+                        dismiss()
+                    } else {
+                        discardAttributeOutfitDraftIfNeeded()
+                        dismiss()
+                    }
                 }
-                localDuplicateOutfit = nil
+                Button("Keep Editing", role: .cancel) { }
+            } message: {
+                Text("Your changes to this outfit will not be saved.")
             }
-            Button("OK", role: .cancel) {
-                localDuplicateOutfit = nil
-            }
-        } message: {
-            Text("You already have an outfit with this combination of items.")
-        }
-        .navigationDestination(item: $existingDuplicateOutfitURI) { uriString in
-            Group {
-                if let url = URL(string: uriString),
-                   let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url),
-                   let outfit = try? viewContext.existingObject(with: objectID) as? Outfit {
-                    OutfitDetailView(outfit: outfit)
-                        .onAppear { existingDuplicateOutfitURI = nil }
-                } else {
-                    EmptyView()
-                        .onAppear { existingDuplicateOutfitURI = nil }
-                }
-            }
+    }
+
+    @ViewBuilder
+    private func duplicateOutfitDestination(uriString: String) -> some View {
+        if let url = URL(string: uriString),
+           let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url),
+           let outfit = try? viewContext.existingObject(with: objectID) as? Outfit {
+            OutfitDetailView(outfit: outfit)
+                .onAppear { existingDuplicateOutfitURI = nil }
+        } else {
+            EmptyView()
+                .onAppear { existingDuplicateOutfitURI = nil }
         }
     }
 
@@ -549,29 +759,33 @@ struct OutfitAddView: View {
     }
 
     // MARK: - Toolbar Items
-    @ViewBuilder
-    private var leadingToolbarItems: some View {
+    private var leadingToolbarBackButton: some View {
         Button {
-            if isRedressMode {
-                if !redressCanvasItems.isEmpty {
-                    showingDiscardChangesConfirmation = true
-                } else {
-                    discardAttributeOutfitDraftIfNeeded()
-                    dismiss()
-                }
-            } else if outfitToEdit != nil && !undoStack.isEmpty {
-                showingDiscardChangesConfirmation = true
-            } else if !outfitItems.isEmpty && outfitToEdit == nil {
-                showingSaveDraftConfirmation = true
-            } else {
-                discardAttributeOutfitDraftIfNeeded()
-                dismiss()
-            }
+            handleLeadingToolbarBack()
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: "chevron.left")
                 Text(outfitToEdit != nil ? "Cancel" : "Back")
             }
+        }
+        .accessibilityLabel(outfitToEdit != nil ? "Cancel" : "Back")
+    }
+
+    private func handleLeadingToolbarBack() {
+        if isRedressMode {
+            if !redressCanvasItems.isEmpty {
+                showingDiscardChangesConfirmation = true
+            } else {
+                discardAttributeOutfitDraftIfNeeded()
+                dismiss()
+            }
+        } else if outfitToEdit != nil && !undoStack.isEmpty {
+            showingDiscardChangesConfirmation = true
+        } else if !outfitItems.isEmpty && outfitToEdit == nil {
+            showingSaveDraftConfirmation = true
+        } else {
+            discardAttributeOutfitDraftIfNeeded()
+            dismiss()
         }
     }
 
@@ -661,26 +875,156 @@ struct OutfitAddView: View {
         }
     }
 
+    private var collageEmptyPlaceholder: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "plus")
+                .font(.system(size: 40))
+                .foregroundColor(.secondary)
+            (
+                Text("Tap ")
+                    + Text("ITEMS").fontWeight(.bold)
+                    + Text(" + to add items to canvas")
+            )
+            .font(.caption)
+            .foregroundColor(.secondary)
+            .multilineTextAlignment(.center)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            openItemsSheet()
+        }
+        .accessibilityLabel("Add items")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private var collageBackground: some View {
+        RoundedRectangle(cornerRadius: 0)
+            .fill(Color(.systemBackground))
+            .frame(width: squareSize, height: squareSize)
+            .onTapGesture {
+                handleBlankCanvasTap()
+            }
+    }
+
+    private var isCanvasEmpty: Bool {
+        isRedressMode ? redressCanvasItems.isEmpty : outfitItems.isEmpty
+    }
+
+    private func handleBlankCanvasTap() {
+        if selectedItemID != nil {
+            selectedItemID = nil
+            return
+        }
+        if isCanvasEmpty {
+            openItemsSheet()
+        }
+    }
+
     @ViewBuilder
     private var redressCollageArea: some View {
-        let canvas = ZStack {
-            RoundedRectangle(cornerRadius: 0)
-                .fill(Color(.systemBackground))
-                .frame(width: squareSize, height: squareSize)
-                .onTapGesture { selectedItemID = nil }
-
-            if redressCanvasItems.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "plus.circle.dashed")
-                        .font(.system(size: 40))
-                        .foregroundColor(.secondary)
-                    Text("Tap Items below to add to your outfit")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
+        // Layout size is locked to the square; sticker content is clipped so
+        // selected overhang never expands the List row.
+        let canvas = Color.clear
+            .frame(width: squareSize, height: squareSize)
+            .overlay {
+                redressCanvasStack
+            }
+            .clipped()
+            .contentShape(Rectangle())
+            .overlay(alignment: .trailing) {
+                if selectedItemID != nil {
+                    VStack(spacing: 0) {
+                        redressCanvasSelectionMenu
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.top, 10)
+                    .padding(.trailing, 10)
                 }
             }
 
+        if selectedItemID != nil {
+            canvas
+                .simultaneousGesture(canvasTransformGesture)
+        } else {
+            canvas
+        }
+    }
+
+    private var redressCanvasSelectionMenu: some View {
+        VStack(spacing: 4) {
+            redressCanvasMenuButton(
+                systemName: "square.filled.on.square",
+                accessibilityLabel: "Bring to front"
+            ) {
+                guard let item = selectedRedressCanvasItem else { return }
+                bringRedressItemToFront(item)
+            }
+            redressCanvasMenuButton(
+                systemName: "square.on.square",
+                accessibilityLabel: "Push to back"
+            ) {
+                guard let item = selectedRedressCanvasItem else { return }
+                pushRedressItemToBack(item)
+            }
+            redressCanvasMenuButton(
+                systemName: "plus.magnifyingglass",
+                accessibilityLabel: "Scale larger"
+            ) {
+                guard let item = selectedRedressCanvasItem else { return }
+                scaleRedressItem(item, by: 1.15)
+            }
+            redressCanvasMenuButton(
+                systemName: "minus.magnifyingglass",
+                accessibilityLabel: "Scale smaller"
+            ) {
+                guard let item = selectedRedressCanvasItem else { return }
+                scaleRedressItem(item, by: 1 / 1.15)
+            }
+            redressCanvasMenuButton(
+                systemName: "trash",
+                accessibilityLabel: "Remove from canvas",
+                tint: .red
+            ) {
+                guard let item = selectedRedressCanvasItem else { return }
+                removeRedressItem(item)
+            }
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 4)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        }
+    }
+
+    private var selectedRedressCanvasItem: RedressCanvasItem? {
+        guard let selectedItemID else { return nil }
+        return redressCanvasItems.first(where: { $0.id == selectedItemID })
+    }
+
+    private func redressCanvasMenuButton(
+        systemName: String,
+        accessibilityLabel: String,
+        tint: Color = .primary,
+        action: @escaping () -> Void
+    ) -> some View {
+        Image(systemName: systemName)
+            .font(.body.weight(.medium))
+            .foregroundStyle(tint)
+            .frame(width: 36, height: 36)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: action)
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityAddTraits(.isButton)
+    }
+
+    private var redressCanvasStack: some View {
+        ZStack {
+            collageBackground
+            if redressCanvasItems.isEmpty {
+                collageEmptyPlaceholder
+            }
             ForEach(redressCanvasItems.sorted(by: { $0.zIndex < $1.zIndex })) { canvasItem in
                 AdaptiveRedressCanvasItemView(
                     canvasItem: canvasItem,
@@ -698,40 +1042,33 @@ struct OutfitAddView: View {
                     onTransformStart: { onTransformStart() },
                     onTransformEnd: { onTransformEnd() },
                     onSelected: { selectedItemID = canvasItem.id },
-                    onLongPress: { bringRedressItemToFront(canvasItem) },
                     onDelete: { removeRedressItem(canvasItem) }
                 )
             }
         }
         .frame(width: squareSize, height: squareSize)
-
-        if selectedItemID != nil {
-            canvas.simultaneousGesture(canvasTransformGesture)
-        } else {
-            canvas
-        }
+        .clipped()
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder
     private var standardOutfitCollageArea: some View {
-        let canvas = ZStack {
-            RoundedRectangle(cornerRadius: 0)
-                .fill(Color(.systemBackground))
+        if selectedItemID != nil {
+            standardOutfitCanvasStack
                 .frame(width: squareSize, height: squareSize)
-                .onTapGesture { selectedItemID = nil }
+                .simultaneousGesture(canvasTransformGesture)
+        } else {
+            standardOutfitCanvasStack
+                .frame(width: squareSize, height: squareSize)
+        }
+    }
 
+    private var standardOutfitCanvasStack: some View {
+        ZStack {
+            collageBackground
             if outfitItems.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "plus.circle.dashed")
-                        .font(.system(size: 40))
-                        .foregroundColor(.secondary)
-                    Text("Tap Items below to add to your outfit")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                }
+                collageEmptyPlaceholder
             }
-
             ForEach(outfitItems.sorted(by: { $0.zIndex < $1.zIndex })) { outfitItem in
                 AdaptiveOutfitItemView(
                     outfitItem: outfitItem,
@@ -754,71 +1091,147 @@ struct OutfitAddView: View {
                 )
             }
         }
-        .frame(width: squareSize, height: squareSize)
-
-        if selectedItemID != nil {
-            canvas.simultaneousGesture(canvasTransformGesture)
-        } else {
-            canvas
-        }
     }
 
     // MARK: - Canvas Controls Bar
     private var draftAndClearButtons: some View {
-        ZStack {
-            HStack(spacing: 16) {
-                Button {
-                    if isRedressMode {
-                        autoGridRedressLayout()
-                    } else {
-                        autoGridLayout()
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "square.grid.2x2")
-                        Text("Auto-Grid")
-                    }
-                }
-                .disabled(isRedressMode ? redressCanvasItems.isEmpty : outfitItems.isEmpty)
-
-                Spacer()
-
-                if !isRedressMode {
-                    HStack(spacing: 16) {
-                        Button {
-                            undo()
-                        } label: {
-                            Image(systemName: "arrow.uturn.backward")
-                                .foregroundColor(undoStack.isEmpty ? .gray : .primary)
-                        }
-                        .disabled(undoStack.isEmpty)
-
-                        Button {
-                            redo()
-                        } label: {
-                            Image(systemName: "arrow.uturn.forward")
-                                .foregroundColor(redoStack.isEmpty ? .gray : .primary)
-                        }
-                        .disabled(redoStack.isEmpty)
-                    }
-                }
+        Group {
+            if isRedressMode {
+                redressCanvasControls
+            } else {
+                standardCanvasControls
             }
-
-            Button {
-                if isRedressMode {
-                    clearRedressItems()
-                } else {
-                    clearAllItems()
-                }
-            } label: {
-                Text("Clear")
-                    .foregroundColor(.red)
-            }
-            .disabled(isRedressMode ? redressCanvasItems.isEmpty : outfitItems.isEmpty)
         }
         .padding(.horizontal, 16)
-        .frame(height: 15)
         .padding(.vertical)
+    }
+
+    private var redressCanvasControls: some View {
+        ZStack {
+            HStack(spacing: 16) {
+                autoGridControl
+                Spacer()
+                undoRedoButtons
+            }
+            redressClearControl
+        }
+        .frame(height: 15)
+    }
+
+    private var standardCanvasControls: some View {
+        ZStack {
+            HStack(spacing: 16) {
+                autoGridControl
+                Spacer()
+                undoRedoButtons
+            }
+
+            clearOutfitItemsControl
+        }
+        .frame(height: 15)
+    }
+
+    private var isAutoGridDisabled: Bool {
+        isRedressMode ? redressCanvasItems.isEmpty : outfitItems.isEmpty
+    }
+
+    /// Tap controls (not `Button`) avoid SwiftUI List/toolbar action mix-ups.
+    private var autoGridControl: some View {
+        Image(systemName: "square.grid.2x2")
+            .foregroundStyle(isAutoGridDisabled ? Color.secondary : Color.accentColor)
+            .opacity(isAutoGridDisabled ? 0.45 : 1)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard !isAutoGridDisabled else { return }
+                if isRedressMode {
+                    autoGridRedressLayout()
+                } else {
+                    autoGridLayout()
+                }
+            }
+            .accessibilityLabel("Auto-Grid")
+            .accessibilityAddTraits(.isButton)
+            .disabled(isAutoGridDisabled)
+    }
+
+    private var redressClearControl: some View {
+        Text("Clear")
+            .foregroundStyle(redressCanvasItems.isEmpty || isSendingRedress ? Color.secondary : Color.red)
+            .opacity(redressCanvasItems.isEmpty || isSendingRedress ? 0.45 : 1)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard !redressCanvasItems.isEmpty, !isSendingRedress else { return }
+                showingClearRedressConfirm = true
+            }
+            .accessibilityLabel("Clear")
+            .accessibilityAddTraits(.isButton)
+    }
+
+    private var sendRedressConfirmMessage: String {
+        let name = redressRecipient?.username
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? ""
+        let display = name.isEmpty
+            ? (redressRecipient?.displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "this user")
+            : name
+        if editingSuggestionId == nil {
+            return "Send this outfit suggestion to \(display)?"
+        }
+        return "Update your pending outfit suggestion for \(display)?"
+    }
+
+    private var sendRedressToolbarButton: some View {
+        Button("Send") {
+            showingSendRedressConfirm = true
+        }
+        .disabled(redressCanvasItems.isEmpty || isSendingRedress)
+        .opacity(redressCanvasItems.isEmpty || isSendingRedress ? 0.5 : 1)
+        .accessibilityLabel("Send Redress")
+    }
+
+    private var canUndoCanvas: Bool {
+        isRedressMode ? !redressUndoStack.isEmpty : !undoStack.isEmpty
+    }
+
+    private var canRedoCanvas: Bool {
+        isRedressMode ? !redressRedoStack.isEmpty : !redoStack.isEmpty
+    }
+
+    private var undoRedoButtons: some View {
+        HStack(spacing: 16) {
+            Image(systemName: "arrow.uturn.backward")
+                .foregroundColor(canUndoCanvas ? .primary : .gray)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard canUndoCanvas else { return }
+                    undo()
+                }
+                .accessibilityLabel("Undo")
+                .accessibilityAddTraits(.isButton)
+
+            Image(systemName: "arrow.uturn.forward")
+                .foregroundColor(canRedoCanvas ? .primary : .gray)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard canRedoCanvas else { return }
+                    redo()
+                }
+                .accessibilityLabel("Redo")
+                .accessibilityAddTraits(.isButton)
+        }
+    }
+
+    private var clearOutfitItemsControl: some View {
+        Text("Clear")
+            .foregroundColor(outfitItems.isEmpty ? .secondary : .red)
+            .opacity(outfitItems.isEmpty ? 0.45 : 1)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard !outfitItems.isEmpty else { return }
+                clearAllItems()
+            }
+            .accessibilityLabel("Clear")
+            .accessibilityAddTraits(.isButton)
     }
 
     private var activeOutfitForAttributes: Outfit? {
@@ -887,71 +1300,6 @@ struct OutfitAddView: View {
         }
     }
 
-    private var outfitDetailsList: some View {
-        List {
-            Section {
-                if isItemsSectionExpanded {
-                    if isRedressMode {
-                        redressFeaturedItemsSectionContent
-                            .transition(.opacity.combined(with: .slide))
-                    } else {
-                        featuredItemsSectionContent
-                            .transition(.opacity.combined(with: .slide))
-                    }
-                }
-            } header: {
-                HStack {
-                    Text("ITEMS")
-                        .fontWeight(.semibold)
-                    Spacer()
-                    Image(systemName: itemsSectionHeaderIconName)
-                        .foregroundColor(.gray)
-                        .font(.caption)
-                }
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    handleItemsSectionHeaderTap()
-                }
-            }
-            .listRowInsets(EdgeInsets(.zero))
-            .listSectionSpacing(0)
-            .padding(.horizontal)
-
-            if let outfit = activeOutfitForAttributes {
-                Section {
-                    if isAttributesSectionExpanded {
-                        OutfitAttributesSectionView(
-                            outfit: outfit,
-                            activeSheet: $attributesSheet,
-                            redressSuggestionMode: isRedressMode
-                        )
-                            .transition(.opacity.combined(with: .slide))
-                            .listRowInsets(EdgeInsets(top: 5, leading: 20, bottom: 5, trailing: 20))
-                    }
-                } header: {
-                    HStack {
-                        Text("ATTRIBUTES")
-                            .fontWeight(.semibold)
-                        Spacer()
-                        Image(systemName: isAttributesSectionExpanded ? "minus" : "plus")
-                            .foregroundColor(.gray)
-                            .font(.caption)
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        withAnimation {
-                            isAttributesSectionExpanded.toggle()
-                        }
-                    }
-                }
-            }
-        }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .background(Color(.systemBackground))
-        .frame(maxHeight: .infinity)
-    }
-
     @ViewBuilder
     private var redressFeaturedItemsSectionContent: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -970,22 +1318,19 @@ struct OutfitAddView: View {
     }
 
     private var redressCanvasItemsOrdered: [VisibleWardrobeItem] {
-        redressCanvasItems
-            .sorted { $0.zIndex < $1.zIndex }
-            .map(\.item)
+        // Insertion order — independent of canvas z-order (bring front / send back).
+        redressCanvasItems.map(\.item)
     }
 
     private var redressWishlistCanvasItems: [VisibleWardrobeItem] {
         redressCanvasItems
             .filter { $0.sourceWardrobeType == "wishlist" }
-            .sorted { $0.zIndex < $1.zIndex }
             .map(\.item)
     }
 
     private var redressClosetCanvasItems: [VisibleWardrobeItem] {
         redressCanvasItems
             .filter { $0.sourceWardrobeType != "wishlist" }
-            .sorted { $0.zIndex < $1.zIndex }
             .map(\.item)
     }
 
@@ -1106,6 +1451,10 @@ struct OutfitAddView: View {
 
     // MARK: - Undo/Redo Functions
     private func saveState() {
+        if isRedressMode {
+            saveRedressState()
+            return
+        }
         let snapshots = outfitItems.map { outfitItem -> CanvasStateSnapshot in
             return CanvasStateSnapshot(
                 itemID: outfitItem.item.objectID.uriRepresentation().absoluteString,
@@ -1121,7 +1470,53 @@ struct OutfitAddView: View {
         redoStack.removeAll()
     }
 
+    private func saveRedressState() {
+        let snapshots = redressCanvasItems.map { canvasItem -> RedressCanvasStateSnapshot in
+            RedressCanvasStateSnapshot(
+                canvasItemID: canvasItem.id,
+                itemID: canvasItem.item.id,
+                sourceWardrobeType: canvasItem.sourceWardrobeType,
+                name: canvasItem.item.name,
+                thumbnailUrl: canvasItem.item.thumbnailUrl,
+                imageUrl: canvasItem.item.imageUrl,
+                positionX: canvasItem.position.x,
+                positionY: canvasItem.position.y,
+                displayWidth: canvasItem.displaySize.width,
+                displayHeight: canvasItem.displaySize.height,
+                scale: canvasItem.scale,
+                rotation: canvasItem.rotation,
+                zIndex: canvasItem.zIndex
+            )
+        }
+        redressUndoStack.append(RedressCanvasState(snapshots: snapshots))
+        redressRedoStack.removeAll()
+    }
+
+    private func currentRedressSnapshots() -> [RedressCanvasStateSnapshot] {
+        redressCanvasItems.map { canvasItem in
+            RedressCanvasStateSnapshot(
+                canvasItemID: canvasItem.id,
+                itemID: canvasItem.item.id,
+                sourceWardrobeType: canvasItem.sourceWardrobeType,
+                name: canvasItem.item.name,
+                thumbnailUrl: canvasItem.item.thumbnailUrl,
+                imageUrl: canvasItem.item.imageUrl,
+                positionX: canvasItem.position.x,
+                positionY: canvasItem.position.y,
+                displayWidth: canvasItem.displaySize.width,
+                displayHeight: canvasItem.displaySize.height,
+                scale: canvasItem.scale,
+                rotation: canvasItem.rotation,
+                zIndex: canvasItem.zIndex
+            )
+        }
+    }
+
     private func undo() {
+        if isRedressMode {
+            undoRedress()
+            return
+        }
         guard !undoStack.isEmpty else { return }
         let currentSnapshots = outfitItems.map { outfitItem -> CanvasStateSnapshot in
             return CanvasStateSnapshot(
@@ -1139,7 +1534,18 @@ struct OutfitAddView: View {
         restoreState(previousState)
     }
 
+    private func undoRedress() {
+        guard !redressUndoStack.isEmpty else { return }
+        redressRedoStack.append(RedressCanvasState(snapshots: currentRedressSnapshots()))
+        let previousState = redressUndoStack.removeLast()
+        restoreRedressState(previousState)
+    }
+
     private func redo() {
+        if isRedressMode {
+            redoRedress()
+            return
+        }
         guard !redoStack.isEmpty else { return }
         let currentSnapshots = outfitItems.map { outfitItem -> CanvasStateSnapshot in
             return CanvasStateSnapshot(
@@ -1155,6 +1561,13 @@ struct OutfitAddView: View {
         undoStack.append(CanvasState(snapshots: currentSnapshots))
         let nextState = redoStack.removeLast()
         restoreState(nextState)
+    }
+
+    private func redoRedress() {
+        guard !redressRedoStack.isEmpty else { return }
+        redressUndoStack.append(RedressCanvasState(snapshots: currentRedressSnapshots()))
+        let nextState = redressRedoStack.removeLast()
+        restoreRedressState(nextState)
     }
 
     private func restoreState(_ state: CanvasState) {
@@ -1173,6 +1586,47 @@ struct OutfitAddView: View {
                 zIndex: snapshot.zIndex,
                 contentBounds: bounds
             )
+        }
+    }
+
+    private func restoreRedressState(_ state: RedressCanvasState) {
+        let previousSelection = selectedItemID
+        let existingByCanvasID = Dictionary(
+            uniqueKeysWithValues: redressCanvasItems.map { ($0.id, $0) }
+        )
+        let existingByItemID = Dictionary(
+            uniqueKeysWithValues: redressCanvasItems.map { ($0.item.id, $0) }
+        )
+
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+            redressCanvasItems = state.snapshots.map { snapshot in
+                let reused = existingByCanvasID[snapshot.canvasItemID]
+                    ?? existingByItemID[snapshot.itemID]
+                return RedressCanvasItem(
+                    id: snapshot.canvasItemID,
+                    item: reused?.item ?? VisibleWardrobeItem(
+                        id: snapshot.itemID,
+                        name: snapshot.name,
+                        thumbnailUrl: snapshot.thumbnailUrl,
+                        imageUrl: snapshot.imageUrl
+                    ),
+                    sourceWardrobeType: snapshot.sourceWardrobeType,
+                    position: CGPoint(x: snapshot.positionX, y: snapshot.positionY),
+                    displaySize: reused.map(\.displaySize)
+                        ?? CGSize(width: snapshot.displayWidth, height: snapshot.displayHeight),
+                    scale: snapshot.scale,
+                    rotation: snapshot.rotation,
+                    zIndex: snapshot.zIndex
+                )
+            }
+
+            if let previousSelection,
+               redressCanvasItems.contains(where: { $0.id == previousSelection }) {
+                selectedItemID = previousSelection
+            } else {
+                selectedItemID = nil
+            }
+            isItemsSectionExpanded = !redressCanvasItems.isEmpty
         }
     }
 
@@ -1205,9 +1659,113 @@ struct OutfitAddView: View {
 
     // MARK: - Redress canvas
 
+    /// Places seeded pending-detail thumbs on the canvas immediately (no network).
+    @MainActor
+    private func applyEditingSuggestionSeed() {
+        ensureAttributeOutfitDraft()
+        if let name = editingProposedName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            attributeOutfitDraft?.name = name
+        }
+        if let notes = editingProposedNotes?.trimmingCharacters(in: .whitespacesAndNewlines), !notes.isEmpty {
+            attributeOutfitDraft?.notes = notes
+        }
+
+        guard redressCanvasItems.isEmpty else {
+            isItemsSectionExpanded = !redressCanvasItems.isEmpty
+            return
+        }
+
+        let center = CGPoint(x: squareSize / 2, y: squareSize / 2)
+        let thumbs = editingItemThumbnails
+        if thumbs.isEmpty {
+            isItemsSectionExpanded = false
+            return
+        }
+
+        redressCanvasItems = thumbs.enumerated().map { index, thumb in
+            RedressCanvasItem(
+                item: VisibleWardrobeItem(
+                    id: thumb.id,
+                    name: thumb.name,
+                    thumbnailUrl: thumb.thumbnailUrl,
+                    imageUrl: thumb.thumbnailUrl
+                ),
+                sourceWardrobeType: "closet",
+                position: center,
+                displaySize: RedressCanvasItem.defaultDisplaySize(canvasSize: squareSize),
+                scale: 1,
+                rotation: 0,
+                zIndex: index
+            )
+        }
+        isItemsSectionExpanded = true
+    }
+
+    /// Applies saved canvas transforms after seed is visible.
+    private func refineEditingSuggestionTransforms() async {
+        guard let suggestionId = editingSuggestionId else { return }
+
+        do {
+            let record = try await supabaseService.fetchOutfitSuggestionForMaterialization(
+                suggestionId: suggestionId
+            )
+            var transformsByItemId: [UUID: SavedOutfitItem] = [:]
+            for saved in record.transformationSavedItems() {
+                guard let id = UUID(uuidString: saved.itemID) else { continue }
+                transformsByItemId[id] = saved
+            }
+            guard !transformsByItemId.isEmpty else { return }
+
+            await MainActor.run {
+                let center = CGPoint(x: squareSize / 2, y: squareSize / 2)
+                for index in redressCanvasItems.indices {
+                    let itemId = redressCanvasItems[index].item.id
+                    guard let saved = transformsByItemId[itemId] else { continue }
+                    redressCanvasItems[index].position = CGPoint(
+                        x: saved.positionX,
+                        y: saved.positionY
+                    )
+                    redressCanvasItems[index].scale = saved.scale
+                    redressCanvasItems[index].rotation = saved.rotation
+                    redressCanvasItems[index].zIndex = saved.zIndex
+                }
+
+                // If seed was empty, build from transforms + record item ids.
+                if redressCanvasItems.isEmpty {
+                    let fromTransforms = record.transformationSavedItems().compactMap { UUID(uuidString: $0.itemID) }
+                    let orderedIds = fromTransforms.isEmpty ? record.itemIds : fromTransforms
+                    redressCanvasItems = orderedIds.enumerated().map { index, itemId in
+                        let saved = transformsByItemId[itemId]
+                        return RedressCanvasItem(
+                            item: VisibleWardrobeItem(
+                                id: itemId,
+                                name: nil,
+                                thumbnailUrl: nil,
+                                imageUrl: nil
+                            ),
+                            sourceWardrobeType: "closet",
+                            position: CGPoint(
+                                x: saved?.positionX ?? center.x,
+                                y: saved?.positionY ?? center.y
+                            ),
+                            displaySize: RedressCanvasItem.defaultDisplaySize(canvasSize: squareSize),
+                            scale: saved?.scale ?? 1,
+                            rotation: saved?.rotation ?? 0,
+                            zIndex: saved?.zIndex ?? index
+                        )
+                    }
+                    isItemsSectionExpanded = !redressCanvasItems.isEmpty
+                }
+            }
+        } catch {
+            print("❌ [OutfitAddView] Failed to refine edit transforms: \(error.localizedDescription)")
+        }
+    }
+
     private func addRedressItemToCanvas(_ item: VisibleWardrobeItem) {
         guard isRedressMode else { return }
         guard !redressCanvasItems.contains(where: { $0.item.id == item.id }) else { return }
+        saveState()
 
         let center = CGPoint(x: squareSize / 2, y: squareSize / 2)
         let sourceType = itemsSheetItemTypeSegment == .wishlist ? "wishlist" : "closet"
@@ -1230,37 +1788,54 @@ struct OutfitAddView: View {
     }
 
     private func applyRedressScale(_ scale: CGFloat, at index: Int) {
-        var item = redressCanvasItems[index]
-        item.scale = scale
-        redressCanvasItems[index] = item
+        updateRedressCanvasWithoutAnimation {
+            var item = redressCanvasItems[index]
+            item.scale = scale
+            redressCanvasItems[index] = item
+        }
     }
 
     private func applyRedressRotation(_ rotation: Double, at index: Int) {
-        var item = redressCanvasItems[index]
-        item.rotation = rotation
-        redressCanvasItems[index] = item
+        updateRedressCanvasWithoutAnimation {
+            var item = redressCanvasItems[index]
+            item.rotation = rotation
+            redressCanvasItems[index] = item
+        }
     }
 
     private func updateRedressItemPosition(_ canvasItem: RedressCanvasItem, _ newPosition: CGPoint) {
-        if let index = redressCanvasItems.firstIndex(where: { $0.id == canvasItem.id }) {
-            redressCanvasItems[index].position = newPosition
+        updateRedressCanvasWithoutAnimation {
+            if let index = redressCanvasItems.firstIndex(where: { $0.id == canvasItem.id }) {
+                redressCanvasItems[index].position = newPosition
+            }
         }
     }
 
     private func updateRedressItemScale(_ canvasItem: RedressCanvasItem, _ newScale: CGFloat) {
-        if let index = redressCanvasItems.firstIndex(where: { $0.id == canvasItem.id }) {
-            redressCanvasItems[index].scale = newScale
+        updateRedressCanvasWithoutAnimation {
+            if let index = redressCanvasItems.firstIndex(where: { $0.id == canvasItem.id }) {
+                redressCanvasItems[index].scale = newScale
+            }
         }
     }
 
     private func updateRedressItemRotation(_ canvasItem: RedressCanvasItem, _ newRotation: Double) {
-        if let index = redressCanvasItems.firstIndex(where: { $0.id == canvasItem.id }) {
-            redressCanvasItems[index].rotation = newRotation
+        updateRedressCanvasWithoutAnimation {
+            if let index = redressCanvasItems.firstIndex(where: { $0.id == canvasItem.id }) {
+                redressCanvasItems[index].rotation = newRotation
+            }
         }
     }
 
+    /// Gesture-driven canvas edits should snap immediately; spring is reserved for undo/redo.
+    private func updateRedressCanvasWithoutAnimation(_ updates: () -> Void) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction, updates)
+    }
+
     private func bringRedressItemToFront(_ canvasItem: RedressCanvasItem) {
-        selectedItemID = nil
+        saveState()
         let maxZIndex = redressCanvasItems.map(\.zIndex).max() ?? 0
         if let index = redressCanvasItems.firstIndex(where: { $0.id == canvasItem.id }) {
             redressCanvasItems[index].zIndex = maxZIndex + 1
@@ -1268,14 +1843,38 @@ struct OutfitAddView: View {
         selectedItemID = canvasItem.id
     }
 
+    private func pushRedressItemToBack(_ canvasItem: RedressCanvasItem) {
+        saveState()
+        let minZIndex = redressCanvasItems.map(\.zIndex).min() ?? 0
+        if let index = redressCanvasItems.firstIndex(where: { $0.id == canvasItem.id }) {
+            redressCanvasItems[index].zIndex = minZIndex - 1
+        }
+        selectedItemID = canvasItem.id
+    }
+
+    private func scaleRedressItem(_ canvasItem: RedressCanvasItem, by factor: CGFloat) {
+        guard let index = redressCanvasItems.firstIndex(where: { $0.id == canvasItem.id }) else { return }
+        let next = max(0.3, min(4.0, redressCanvasItems[index].scale * factor))
+        guard abs(next - redressCanvasItems[index].scale) > 0.0001 else { return }
+        saveState()
+        updateRedressCanvasWithoutAnimation {
+            redressCanvasItems[index].scale = next
+        }
+        selectedItemID = canvasItem.id
+    }
+
     private func removeRedressItem(_ canvasItem: RedressCanvasItem) {
+        saveState()
         redressCanvasItems.removeAll { $0.id == canvasItem.id }
         if selectedItemID == canvasItem.id {
             selectedItemID = nil
         }
     }
 
-    private func clearRedressItems() {
+    private func clearRedressItems(recordHistory: Bool = true) {
+        if recordHistory {
+            saveState()
+        }
         selectedItemID = nil
         withAnimation(.spring()) {
             redressCanvasItems.removeAll()
@@ -1284,6 +1883,7 @@ struct OutfitAddView: View {
 
     private func autoGridRedressLayout() {
         guard !redressCanvasItems.isEmpty else { return }
+        saveState()
         selectedItemID = nil
 
         let count = redressCanvasItems.count
@@ -1612,7 +2212,8 @@ struct OutfitAddView: View {
                     )
                 }
                 let transformationJSON = String(data: try JSONEncoder().encode(savedItems), encoding: .utf8) ?? "[]"
-                let suggestionId = UUID()
+                let suggestionId = editingSuggestionId ?? UUID()
+                let isEditingExisting = editingSuggestionId != nil
 
                 let imageURL = try await supabaseService.uploadOutfitSuggestionImage(
                     imageData: imageData,
@@ -1620,20 +2221,23 @@ struct OutfitAddView: View {
                     userId: suggesterId
                 )
 
-                _ = try await supabaseService.createOutfitSuggestion(
-                    SupabaseService.CreateOutfitSuggestionPayload(
-                        suggestionId: suggestionId,
-                        recipientId: recipient.userId,
-                        proposedName: proposedName?.isEmpty == true ? nil : proposedName,
-                        proposedNotes: proposedNotes?.isEmpty == true ? nil : proposedNotes,
-                        imageURL: imageURL,
-                        transformationJSON: transformationJSON,
-                        itemIds: itemIds
-                    )
+                let payload = SupabaseService.CreateOutfitSuggestionPayload(
+                    suggestionId: suggestionId,
+                    recipientId: recipient.userId,
+                    proposedName: proposedName?.isEmpty == true ? nil : proposedName,
+                    proposedNotes: proposedNotes?.isEmpty == true ? nil : proposedNotes,
+                    imageURL: imageURL,
+                    transformationJSON: transformationJSON,
+                    itemIds: itemIds
                 )
+                if isEditingExisting {
+                    _ = try await supabaseService.updatePendingOutfitSuggestion(payload)
+                } else {
+                    _ = try await supabaseService.createOutfitSuggestion(payload)
+                }
 
                 await MainActor.run {
-                    clearRedressItems()
+                    clearRedressItems(recordHistory: false)
                     showingRedressSentAlert = true
                 }
             } catch {
@@ -1754,6 +2358,27 @@ struct CanvasStateSnapshot: Codable {
 
 struct CanvasState {
     let snapshots: [CanvasStateSnapshot]
+}
+
+// MARK: - Redress Canvas State Snapshot (for undo/redo)
+struct RedressCanvasStateSnapshot {
+    let canvasItemID: UUID
+    let itemID: UUID
+    let sourceWardrobeType: String
+    let name: String?
+    let thumbnailUrl: String?
+    let imageUrl: String?
+    let positionX: CGFloat
+    let positionY: CGFloat
+    let displayWidth: CGFloat
+    let displayHeight: CGFloat
+    let scale: CGFloat
+    let rotation: Double
+    let zIndex: Int
+}
+
+struct RedressCanvasState {
+    let snapshots: [RedressCanvasStateSnapshot]
 }
 
 // MARK: - OutfitItem Model
