@@ -40,8 +40,6 @@ enum MessageStatus {
 }
 
 struct FittingView: View {
-    @Environment(\.appCapabilities) private var appCapabilities
-
     // Placeholder chat data
     @State private var chats: [Chat] = [
         Chat(userName: "Alex", profileImageName: "person.circle.fill", lastMessageStatus: .sent, timeAgo: "2s"),
@@ -60,11 +58,6 @@ struct FittingView: View {
     @State private var isImagePickerPresented = false
     @State private var imagePickerSource: UIImagePickerController.SourceType = .camera
     @State private var selectedUIImage: UIImage?
-    @State private var isNotificationsPresented = false
-
-    private var shouldHideTabBar: Bool {
-        isNotificationsPresented
-    }
 
     var body: some View {
         List {
@@ -75,9 +68,6 @@ struct FittingView: View {
         .listStyle(.plain)
         .navigationTitle("Fitting")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(isPresented: $isNotificationsPresented) {
-            UserNotificationsView()
-        }
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 HStack(spacing: 16) {
@@ -95,12 +85,7 @@ struct FittingView: View {
             }
             
             ToolbarItem(placement: .navigationBarTrailing) {
-                HStack(spacing: 16) {
-                    if appCapabilities.enablesFriendsAndSharing {
-                        UserNotificationsBellButton(isPresented: $isNotificationsPresented)
-                    }
-
-                    Menu {
+                Menu {
                     Button {
                         if UIImagePickerController.isSourceTypeAvailable(.camera) {
                             imagePickerSource = .camera
@@ -124,10 +109,8 @@ struct FittingView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                }
             }
         }
-        .toolbar(shouldHideTabBar ? .hidden : .automatic, for: .tabBar)
         .fullScreenCover(isPresented: $isImagePickerPresented) {
             ImagePicker(
                 image: $selectedUIImage,
