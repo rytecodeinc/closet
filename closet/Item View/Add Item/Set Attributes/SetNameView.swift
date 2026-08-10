@@ -59,7 +59,7 @@ struct SetNameView: View {
         pendingNameValue() != storedNameValue()
     }
 
-    /// Writes the name to the item when it changed; persists and syncs in Item Detail context.
+    /// Writes the name to the item when it changed; Item Detail saves locally (cloud sync on leave).
     private func persistNameIfChanged() {
         guard nameHasChanged else { return }
 
@@ -69,7 +69,6 @@ struct SetNameView: View {
         if viewContext.parent == nil {
             do {
                 try viewContext.save()
-                SyncService.shared.syncItemIfNeeded(item)
             } catch {
                 print("❌ Failed to save name: \(error.localizedDescription)")
             }

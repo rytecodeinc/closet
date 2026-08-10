@@ -441,8 +441,6 @@ struct SetWeatherView: View {
                 
                 try viewContext.save()
                 
-                // Trigger automatic sync for the modified item
-                SyncService.shared.syncItemIfNeeded(item)
                 
                 // Verify the save by reading back the values
                 viewContext.refresh(item, mergeChanges: false)

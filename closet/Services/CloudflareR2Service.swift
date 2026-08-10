@@ -255,6 +255,37 @@ class CloudflareR2Service {
         return imageURL
     }
 
+    /// Deletes a Redress suggestion collage from R2.
+    /// Path format: `ownerUserId/outfit-suggestions/suggestionId.jpg` (suggester's prefix).
+    func deleteOutfitSuggestionImage(suggestionId: UUID, ownerUserId: UUID) async throws {
+        let (accessToken, _) = try await authenticatedUploadContext()
+
+        let fileName = "\(ownerUserId.uuidString)/outfit-suggestions/\(suggestionId.uuidString).jpg"
+        let url = URL(string: "\(CloudflareR2Config.workerURL)/\(fileName)")!
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+
+        print("🗑️ Deleting outfit suggestion image from R2: \(fileName)")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw R2Error.invalidResponse
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            if let errorData = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let errorMessage = errorData["error"] as? String {
+                throw R2Error.deleteFailed(errorMessage)
+            }
+            throw R2Error.deleteFailed("HTTP \(httpResponse.statusCode)")
+        }
+
+        print("✅ Outfit suggestion image deleted from R2: \(fileName)")
+    }
+
     /// Uploads a Redress outfit suggestion collage to R2.
     /// Path format: userId/outfit-suggestions/suggestionId.jpg
     func uploadOutfitSuggestionImage(imageData: Data, suggestionId: UUID, userId: UUID) async throws -> String {
@@ -367,16 +398,68 @@ class CloudflareR2Service {
     }
 
     func deleteOutfitWornImage(outfitId: UUID, userId: UUID) async throws {
-        let (accessToken, supabaseUserId) = try await authenticatedUploadContext()
+        let (_, supabaseUserId) = try await authenticatedUploadContext()
 
-        let fileName = "\(supabaseUserId.uuidString)/outfits/\(outfitId.uuidString)_worn.jpg"
+        // R2 keys are case-sensitive; historical uploads may use either UUID casing.
+        let candidates = [
+            "\(supabaseUserId.uuidString)/outfits/\(outfitId.uuidString)_worn.jpg",
+            "\(supabaseUserId.uuidString.lowercased())/outfits/\(outfitId.uuidString.lowercased())_worn.jpg",
+        ]
+        var uniquePaths = [String]()
+        for path in candidates where !uniquePaths.contains(path) {
+            uniquePaths.append(path)
+        }
+
+        var lastError: Error?
+        var deletedAny = false
+        for fileName in uniquePaths {
+            do {
+                try await deleteWorkerObject(atPath: fileName)
+                deletedAny = true
+            } catch {
+                lastError = error
+                print("⚠️ Outfit worn R2 delete attempt failed for \(fileName): \(error.localizedDescription)")
+            }
+        }
+
+        if !deletedAny, let lastError {
+            throw lastError
+        }
+    }
+
+    /// Deletes an R2 object using a stored public/worker URL (path after host).
+    func deleteObject(atStoredURL urlString: String) async throws {
+        guard let path = Self.workerObjectPath(fromStoredURL: urlString), !path.isEmpty else {
+            print("⚠️ Could not derive R2 path from URL: \(urlString)")
+            return
+        }
+        try await deleteWorkerObject(atPath: path)
+        let lowered = path.lowercased()
+        if lowered != path {
+            try? await deleteWorkerObject(atPath: lowered)
+        }
+    }
+
+    nonisolated static func workerObjectPath(fromStoredURL urlString: String) -> String? {
+        let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard let url = URL(string: trimmed) else {
+            // Already a bare object key
+            return trimmed.split(separator: "?").first.map(String.init)
+        }
+        let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return path.isEmpty ? nil : path
+    }
+
+    private func deleteWorkerObject(atPath fileName: String) async throws {
+        let (accessToken, _) = try await authenticatedUploadContext()
         let url = URL(string: "\(CloudflareR2Config.workerURL)/\(fileName)")!
 
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
-        print("🗑️ Deleting outfit worn image from R2: \(fileName)")
+        print("🗑️ Deleting R2 object via Worker: \(fileName)")
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
@@ -392,7 +475,7 @@ class CloudflareR2Service {
             throw R2Error.deleteFailed("HTTP \(httpResponse.statusCode)")
         }
 
-        print("✅ Outfit worn image deleted from R2: \(fileName)")
+        print("✅ R2 object deleted: \(fileName)")
     }
 
     /// Profile avatar uses exactly **one** object per user: `userId/profile/avatar.jpg`.

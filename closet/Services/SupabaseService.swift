@@ -475,6 +475,38 @@ class SupabaseService: ObservableObject {
         return profiles
     }
 
+    /// Public profile fields for arbitrary user IDs (avatar + names).
+    /// Requires `get_public_profiles(uuid[])` — see `SUPABASE_GET_PUBLIC_PROFILES.sql`.
+    func fetchPublicProfiles(userIds: [UUID]) async throws -> [PublicUserProfile] {
+        let uniqueIds = Array(Set(userIds))
+        guard !uniqueIds.isEmpty else { return [] }
+        guard currentUser != nil else {
+            throw NSError(domain: "SupabaseService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+
+        let response = try await client
+            .rpc("get_public_profiles", params: ["p_user_ids": uniqueIds.map(\.uuidString)])
+            .execute()
+
+        struct ProfileRow: Decodable {
+            let user_id: UUID
+            let username: String
+            let display_name: String?
+            let avatar_url: String?
+        }
+
+        let rows = try JSONDecoder().decode([ProfileRow].self, from: response.data)
+        return rows.map { row in
+            PublicUserProfile(
+                userId: row.user_id,
+                username: row.username,
+                displayName: row.display_name,
+                avatarUrl: row.avatar_url
+            )
+        }
+    }
+
     /// Profiles the current user has sent a pending friend request to.
     func fetchOutgoingPendingFriendRequests(forceRefresh: Bool = false) async throws -> [PublicUserProfile] {
         guard currentUser != nil else {
@@ -747,6 +779,34 @@ class SupabaseService: ObservableObject {
 
         let response = try await client.rpc(
             "create_outfit_suggestion",
+            params: [
+                "p_suggestion_id": payload.suggestionId.uuidString,
+                "p_recipient_id": payload.recipientId.uuidString,
+                "p_proposed_name": payload.proposedName ?? "",
+                "p_proposed_notes": payload.proposedNotes ?? "",
+                "p_image_url": payload.imageURL,
+                "p_transformation_json": payload.transformationJSON,
+                "p_item_ids": itemIdsJSON
+            ]
+        ).execute()
+
+        let suggestionId = try JSONDecoder().decode(UUID.self, from: response.data)
+        invalidateWardrobeGridOutfitsCache(forUserId: payload.recipientId)
+        return suggestionId
+    }
+
+    /// Updates an existing pending Redress suggestion owned by the current user.
+    func updatePendingOutfitSuggestion(_ payload: CreateOutfitSuggestionPayload) async throws -> UUID {
+        try requireCloudSyncEnabled()
+        guard currentUser != nil else {
+            throw NSError(domain: "SupabaseService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+
+        let itemIdsJSON = String(data: try JSONEncoder().encode(payload.itemIds.map(\.uuidString)), encoding: .utf8) ?? "[]"
+
+        let response = try await client.rpc(
+            "update_pending_outfit_suggestion",
             params: [
                 "p_suggestion_id": payload.suggestionId.uuidString,
                 "p_recipient_id": payload.recipientId.uuidString,
@@ -1186,6 +1246,46 @@ class SupabaseService: ObservableObject {
             .update(["is_read": true])
             .eq("id", value: id.uuidString)
             .execute()
+    }
+
+    /// Notifies a friend that the signed-in user shared an item or outfit with them.
+    /// Requires `share_content_with_friend` — see `SUPABASE_SHARE_CONTENT_WITH_FRIEND.sql`.
+    @discardableResult
+    func shareContentWithFriend(
+        recipientUserId: UUID,
+        targetType: String,
+        targetId: UUID
+    ) async throws -> UUID {
+        guard currentUser != nil else {
+            throw NSError(domain: "SupabaseService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+
+        let response = try await client
+            .rpc(
+                "share_content_with_friend",
+                params: [
+                    "p_recipient_id": recipientUserId.uuidString,
+                    "p_target_type": targetType,
+                    "p_target_id": targetId.uuidString
+                ]
+            )
+            .execute()
+
+        if let id = try? JSONDecoder().decode(UUID.self, from: response.data) {
+            return id
+        }
+        // Some PostgREST configs wrap scalar uuid as a JSON string.
+        if let raw = String(data: response.data, encoding: .utf8)?
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\" \n")),
+           let id = UUID(uuidString: raw) {
+            return id
+        }
+        throw NSError(
+            domain: "SupabaseService",
+            code: -1,
+            userInfo: [NSLocalizedDescriptionKey: "Could not share content"]
+        )
     }
 
     // MARK: - Device tokens (APNs)
@@ -1878,7 +1978,7 @@ class SupabaseService: ObservableObject {
     }
     
     /// Uploads a photo to Cloudflare R2 via Worker and returns the public URL
-    /// Each photo (front, back, worn) has a unique photoId, so they won't conflict
+    /// Each photo (front, worn) has a unique photoId, so they won't conflict
     /// - Parameters:
     ///   - imageData: The image data to upload (should be compressed JPEG)
     ///   - itemId: The ID of the item this photo belongs to
@@ -1954,6 +2054,15 @@ class SupabaseService: ObservableObject {
         )
     }
 
+    /// Deletes a Redress suggestion collage — path `ownerUserId/outfit-suggestions/suggestionId.jpg`
+    func deleteOutfitSuggestionImage(suggestionId: UUID, ownerUserId: UUID) async throws {
+        try requireCloudSyncEnabled()
+        try await CloudflareR2Service.shared.deleteOutfitSuggestionImage(
+            suggestionId: suggestionId,
+            ownerUserId: ownerUserId
+        )
+    }
+
     /// Deletes an outfit collage image from Cloudflare R2
     func deleteOutfitImage(outfitId: UUID, userId: UUID) async throws {
         try requireCloudSyncEnabled()
@@ -1979,6 +2088,72 @@ class SupabaseService: ObservableObject {
             outfitId: outfitId,
             userId: userId
         )
+    }
+
+    /// Uploads worn image and patches only `worn_image_url` (no full outfit metadata upsert).
+    func setOutfitWornImage(imageData: Data, outfitId: UUID, userId: UUID) async throws -> String {
+        try requireCloudSyncEnabled()
+        let url = try await CloudflareR2Service.shared.uploadOutfitWornImage(
+            imageData: imageData,
+            outfitId: outfitId,
+            userId: userId
+        )
+        try await supabaseClient.from("outfits")
+            .update(["worn_image_url": url])
+            .eq("id", value: outfitId.uuidString)
+            .execute()
+        print("✅ Set outfit worn_image_url in Supabase: \(outfitId.uuidString)")
+        await invalidateWardrobeGridOutfitsCache(forUserId: userId)
+        return url
+    }
+
+    /// Clears outfit worn like item photo orphan delete: R2 object(s) + `worn_image_url` null.
+    /// Codable upserts omit nil optionals, so an explicit null update is required.
+    func clearOutfitWornImage(outfitId: UUID, userId: UUID) async throws {
+        try requireCloudSyncEnabled()
+
+        struct WornURLRow: Decodable {
+            let worn_image_url: String?
+        }
+
+        var storedURL: String?
+        do {
+            let response = try await supabaseClient.from("outfits")
+                .select("worn_image_url")
+                .eq("id", value: outfitId.uuidString)
+                .limit(1)
+                .execute()
+            if let row = try? JSONDecoder().decode([WornURLRow].self, from: response.data).first {
+                storedURL = row.worn_image_url
+            }
+        } catch {
+            print("⚠️ Failed to fetch outfit worn_image_url before clear: \(error.localizedDescription)")
+        }
+
+        do {
+            try await CloudflareR2Service.shared.deleteOutfitWornImage(
+                outfitId: outfitId,
+                userId: userId
+            )
+        } catch {
+            print("⚠️ Canonical outfit worn R2 delete failed: \(error.localizedDescription)")
+        }
+
+        if let storedURL, !storedURL.isEmpty {
+            do {
+                try await CloudflareR2Service.shared.deleteObject(atStoredURL: storedURL)
+            } catch {
+                print("⚠️ Stored-URL outfit worn R2 delete failed: \(error.localizedDescription)")
+            }
+        }
+
+        try await supabaseClient.from("outfits")
+            .update(["worn_image_url": AnyJSON.null])
+            .eq("id", value: outfitId.uuidString)
+            .execute()
+        print("✅ Cleared outfit worn_image_url in Supabase: \(outfitId.uuidString)")
+
+        await invalidateWardrobeGridOutfitsCache(forUserId: userId)
     }
 
     func uploadProfileAvatar(imageData: Data, userId: UUID) async throws -> String {

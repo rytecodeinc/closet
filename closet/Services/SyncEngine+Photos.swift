@@ -13,12 +13,22 @@ extension SyncEngine {
     func syncItemPhotos(itemObjectID: NSManagedObjectID, itemId: UUID, userId: UUID) async throws {
         let itemName = try await withSyncItem(itemObjectID) { $0.name ?? "unnamed" }
         print("📸 Starting photo sync for item: \(itemName) (ID: \(itemId.uuidString))")
+
+        // Drop retired item-back photos so orphan cleanup removes them from R2.
+        try await performOnSyncContext { ctx in
+            guard let item = try ctx.existingObject(with: itemObjectID) as? Item else { return }
+            if ItemPhotoSlot.purgeRetiredBackPhotos(in: item, context: ctx) {
+                setUpdatedAt(item)
+                try ctx.save()
+                print("🧹 Purged retired back photo(s) before sync for item \(itemId.uuidString)")
+            }
+        }
         
         // STEP 1: Get what photos SHOULD exist (from Core Data)
         let currentPhotoIds = try await withSyncItem(itemObjectID) { item -> Set<String> in
             if let photos = item.photos as? Set<Photo> {
                 print("📸 Core Data shows \(photos.count) photos for this item")
-                return Set(photos.compactMap { $0.id?.uuidString })
+                return Self.normalizedUUIDStringSet(photos.compactMap { $0.id?.uuidString })
             }
             print("📸 Core Data shows 0 photos for this item")
             return Set()
@@ -33,7 +43,7 @@ extension SyncEngine {
         let data: Data = existingPhotosResponse.data
         let existingPhotoIds: Set<String>
         if let existingPhotos = try? JSONDecoder().decode([ItemPhotoResponse].self, from: data) {
-            existingPhotoIds = Set(existingPhotos.compactMap { $0.id })
+            existingPhotoIds = Self.normalizedUUIDStringSet(existingPhotos.map(\.id))
             print("📸 Supabase shows \(existingPhotoIds.count) existing photos")
         } else {
             existingPhotoIds = Set()
@@ -65,7 +75,7 @@ extension SyncEngine {
                 
                 // Delete thumbnail from R2 (thumbnails use _thumb suffix)
                 do {
-                    let thumbnailFileName = "\(userId.uuidString)/\(itemId.uuidString)/\(photoIdToDelete)_thumb.jpg"
+                    let thumbnailFileName = "\(userId.uuidString)/\(itemId.uuidString)/\(photoUUID.uuidString)_thumb.jpg"
                     let thumbnailUrl = URL(string: "\(CloudflareR2Config.workerURL)/\(thumbnailFileName)")!
                     
                     guard let session = await getSupabase().currentSession else {
@@ -91,7 +101,7 @@ extension SyncEngine {
                 do {
                     try await (await getSupabase()).supabaseClient.from("item_photos")
                         .delete()
-                        .eq("id", value: photoIdToDelete)
+                        .eq("id", value: photoUUID.uuidString)
                         .execute()
                     print("✅ Deleted photo metadata from Supabase: \(photoIdToDelete)")
                 } catch {
@@ -102,18 +112,32 @@ extension SyncEngine {
             print("📸 No orphaned photos to delete")
         }
         
-        // STEP 4: Now sync current photos (upsert new/existing)
-        let photoObjectIDs = try await withSyncItem(itemObjectID) { item in
-            (item.photos as? Set<Photo>)?.map { $0.objectID } ?? []
+        // STEP 4: Sync only photos that are new remotely or missing R2 URLs
+        let photoObjectIDs = try await withSyncItem(itemObjectID) { item -> [NSManagedObjectID] in
+            let photos = (item.photos as? Set<Photo>) ?? []
+            return photos.compactMap { photo in
+                guard let id = photo.id?.uuidString.lowercased() else { return photo.objectID }
+                let alreadyRemote = existingPhotoIds.contains(id)
+                let imageUrl = photo.imageUrl ?? ""
+                let thumbUrl = photo.thumbnailUrl ?? ""
+                let hasValidImageUrl = !imageUrl.isEmpty && !imageUrl.hasPrefix("data:")
+                let hasValidThumbnailUrl = !thumbUrl.isEmpty && !thumbUrl.hasPrefix("data:")
+                if alreadyRemote && hasValidImageUrl && hasValidThumbnailUrl {
+                    return nil
+                }
+                return photo.objectID
+            }
         }
         if !photoObjectIDs.isEmpty {
-            print("📸 Upserting \(photoObjectIDs.count) current photos to Supabase")
+            print("📸 Syncing \(photoObjectIDs.count) photo(s) that need upload/metadata")
             for photoObjectID in photoObjectIDs {
                 try await syncPhoto(objectID: photoObjectID, itemId: itemId, userId: userId)
             }
             print("✅ Finished syncing \(photoObjectIDs.count) photos")
-        } else {
+        } else if currentPhotoIds.isEmpty {
             print("📸 No photos in Core Data")
+        } else {
+            print("📸 Photos already in sync (\(currentPhotoIds.count)); skipped re-upload")
         }
 
         await (await getSupabase()).invalidateWardrobeGridItemsCache(forUserId: userId)
@@ -159,7 +183,7 @@ extension SyncEngine {
     }
 
     /// Syncs a photo to Cloudflare R2 via Worker and stores URL
-    /// Each photo (front, back, worn) has a unique photoId, ensuring they don't conflict
+    /// Each photo (front, worn) has a unique photoId, ensuring they don't conflict
     /// Uploads both full image and thumbnail to R2 for storage efficiency
     /// Handles migration from base64 thumbnails to R2 URLs
     func syncPhoto(objectID: NSManagedObjectID, itemId: UUID, userId: UUID) async throws {
@@ -193,15 +217,24 @@ extension SyncEngine {
         var imageUrl: String? = nil
         var thumbnailUrl: String? = nil
         
-        // Check if we have existing R2 URLs (not base64)
+        // Check if we have existing R2 URLs (not base64). Prefer reuse over re-upload —
+        // e.g. deleting worn must not re-PUT an unchanged front photo.
         let existingImageUrl = try await photo({ $0.imageUrl })
         let hasValidImageUrl = existingImageUrl != nil && !existingImageUrl!.isEmpty && !existingImageUrl!.starts(with: "data:")
         
         let existingThumbnailUrl = try await photo({ $0.thumbnailUrl })
         let hasValidThumbnailUrl = existingThumbnailUrl != nil && !existingThumbnailUrl!.isEmpty && !existingThumbnailUrl!.starts(with: "data:")
+
+        if hasValidImageUrl && hasValidThumbnailUrl {
+            print("✅ Photo \(photoId.uuidString) already on R2; skipping re-upload")
+            return
+        }
         
-        // STEP 1: Upload full image if needed
-        if let imageData = try await photo({ $0.data }), !imageData.isEmpty {
+        // STEP 1: Upload full image only when we do not already have an R2 URL
+        if hasValidImageUrl {
+            imageUrl = existingImageUrl
+            print("✅ Skipping image upload; using existing R2 URL for photo \(photoId.uuidString)")
+        } else if let imageData = try await photo({ $0.data }), !imageData.isEmpty {
             let payload = try await performOnSyncContext { ctx -> Data in
                 guard let p = try ctx.existingObject(with: objectID) as? Photo else { throw SyncError.noContext }
                 return try Self.imageDataPreparedForR2Upload(original: imageData, photo: p)
@@ -214,15 +247,15 @@ extension SyncEngine {
             )
             try await mutatePhoto { $0.imageUrl = imageUrl }
             print("✅ Uploaded new image to R2: \(imageUrl ?? "nil")")
-        } else if hasValidImageUrl {
-            imageUrl = existingImageUrl
-            print("✅ Using existing image URL: \(imageUrl ?? "nil")")
         } else {
             print("⚠️ No image data and no valid R2 URL for photo \(photoId)")
         }
         
-        // STEP 2: Upload thumbnail
-        if let thumbnailData = try await photo({ $0.thumbnailData }), !thumbnailData.isEmpty {
+        // STEP 2: Upload thumbnail only when we do not already have an R2 URL
+        if hasValidThumbnailUrl {
+            thumbnailUrl = existingThumbnailUrl
+            print("✅ Skipping thumbnail upload; using existing R2 URL for photo \(photoId.uuidString)")
+        } else if let thumbnailData = try await photo({ $0.thumbnailData }), !thumbnailData.isEmpty {
             thumbnailUrl = try await (await getSupabase()).uploadThumbnail(
                 imageData: thumbnailData,
                 itemId: itemId,
@@ -231,9 +264,6 @@ extension SyncEngine {
             )
             try await mutatePhoto { $0.thumbnailUrl = thumbnailUrl }
             print("✅ Uploaded new thumbnail to R2: \(thumbnailUrl ?? "nil")")
-        } else if hasValidThumbnailUrl {
-            thumbnailUrl = existingThumbnailUrl
-            print("✅ Using existing thumbnail URL: \(thumbnailUrl ?? "nil")")
         } else {
             // MIGRATION: If we have base64 thumbnail, re-generate from image
             if let existingThumb = try await photo({ $0.thumbnailUrl }), existingThumb.starts(with: "data:") {

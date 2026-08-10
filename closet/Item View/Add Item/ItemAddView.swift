@@ -63,7 +63,6 @@ struct ItemAddView: View {
 
     enum ImageType: Hashable {
         case front
-        case back
         case worn
     }
 
@@ -158,6 +157,8 @@ struct ItemAddView: View {
                     // Load the selected draft directly into the current VM and dismiss the sheet.
                     // This repopulates ItemAddView in place — no second sheet needed.
                     vm.loadExistingDraft(selectedDraft)
+                    purgeRetiredBackPhotosIfNeeded()
+                    initializeSelectedImageType()
                     showingDraftsSheet = false
                 })
             }
@@ -178,7 +179,6 @@ struct ItemAddView: View {
                         Task { @MainActor in
                             switch imageType {
                             case .front:  await replaceFrontImageSync(with: croppedImage)
-                            case .back:   await replaceBackImageSync(with: croppedImage)
                             case .worn:   await replaceWornImageSync(with: croppedImage)
                             }
                             pendingImageType = nil
@@ -234,7 +234,6 @@ struct ItemAddView: View {
                         if let imageType = pendingImageType {
                             switch imageType {
                             case .front: replaceFrontImage(with: newImage)
-                            case .back:  replaceBackImage(with: newImage)
                             case .worn:  replaceWornImage(with: newImage)
                             }
                             pendingImageType = nil
@@ -255,7 +254,6 @@ struct ItemAddView: View {
                     if let newImage = image, let imageType = pendingImageType {
                         switch imageType {
                         case .front: replaceFrontImage(with: newImage)
-                        case .back:  replaceBackImage(with: newImage)
                         case .worn:  replaceWornImage(with: newImage)
                         }
                         pendingImageType = nil
@@ -310,6 +308,7 @@ struct ItemAddView: View {
             Text("Saving this item to drafts will allow you to finish editing it later.")
         }
         .onAppear {
+            purgeRetiredBackPhotosIfNeeded()
             initializeSelectedImageType()
             if let initialImage = vm.initialImage {
                 print("📸 ItemAddView: Received initial cropped image from queue")
@@ -338,17 +337,19 @@ struct ItemAddView: View {
         let photos = vm.draftItem.photos as? Set<Photo> ?? []
         if photos.contains(where: { $0.type == "front" || ($0.isPrimary && $0.type == nil) }) {
             selectedImageType = .front
-        } else if photos.contains(where: { $0.type == "back" }) {
-            selectedImageType = .back
         } else if photos.contains(where: { $0.type == "worn" }) {
             selectedImageType = .worn
         } else {
             selectedImageType = .front
         }
-
-        // Keep hero + segmented picker in sync (hero only supports front + worn like ItemDetailView).
-        if selectedImageType == .back { selectedImageType = .front }
         heroCarouselPage = (selectedImageType == .worn) ? 1 : 0
+    }
+
+    private func purgeRetiredBackPhotosIfNeeded() {
+        guard ItemPhotoSlot.purgeRetiredBackPhotos(in: vm.draftItem, context: vm.childContext) else { return }
+        setUpdatedAt(vm.draftItem)
+        vm.photoRefreshToken = UUID()
+        print("🧹 Purged retired item back photo(s) from draft")
     }
 
     /// Hero carousel + segmented picker only use front/worn slots (page 0 / 1).
@@ -503,8 +504,6 @@ struct ItemAddView: View {
             return "Add a photo of the front of the item"
         case .worn:
             return "Add a photo of you wearing this item"
-        case .back:
-            return "Add a photo of the back of the item"
         }
     }
 
@@ -512,7 +511,7 @@ struct ItemAddView: View {
         switch type {
         case .worn:
             return "person.crop.square.badge.camera"
-        case .front, .back:
+        case .front:
             return "photo"
         }
     }
@@ -523,17 +522,14 @@ struct ItemAddView: View {
             return "Tap to add a photo of the front of the item"
         case .worn:
             return "Tap to add a photo of you wearing this item"
-        case .back:
-            return "Tap to add a photo of the back of the item"
         }
     }
     
     private func imageThumbnailRow() -> some View {
-        let size: CGFloat = (UIScreen.main.bounds.width - 6) / 3
+        let size: CGFloat = (UIScreen.main.bounds.width - 4) / 2
         
         return HStack(spacing: 2) {
             imageThumbnail(type: .front, image: getImage(for: .front), size: size).contentShape(Rectangle())
-            imageThumbnail(type: .back,  image: getImage(for: .back),  size: size).contentShape(Rectangle())
             imageThumbnail(type: .worn,  image: getImage(for: .worn),  size: size).contentShape(Rectangle())
         }
     }
@@ -588,7 +584,6 @@ struct ItemAddView: View {
     private func placeholderText(for type: ImageType) -> String {
         switch type {
         case .front: return "Front"
-        case .back:  return "Back"
         case .worn:  return "Worn"
         }
     }
@@ -613,7 +608,7 @@ struct ItemAddView: View {
                 presentCropperForImage(type: type)
             })
         }
-        if (type == .back || type == .worn) && getImage(for: type) != nil {
+        if type == .worn && getImage(for: type) != nil {
             alert.addAction(UIAlertAction(title: "Remove Image", style: .destructive) { _ in
                 deleteImage(type: type)
             })
@@ -674,10 +669,7 @@ struct ItemAddView: View {
     // MARK: - Replace Image Functions
 
     private func replaceFrontImage(with image: UIImage) {
-        let photos = vm.draftItem.photos as? Set<Photo> ?? []
-        if let existingFront = photos.first(where: { $0.type == "front" || ($0.isPrimary && $0.type == nil) }) {
-            vm.childContext.delete(existingFront)
-        }
+        ItemPhotoSlot.deleteMatching(in: vm.draftItem, slot: "front", context: vm.childContext)
         Task {
             let processedData = await processImageForStorage(image)
             if vm.draftItem.category == nil {
@@ -696,12 +688,14 @@ struct ItemAddView: View {
             }
             await MainActor.run {
                 let newPhoto = Photo(context: vm.childContext)
-                newPhoto.id = UUID()
-                PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: newPhoto)
-                newPhoto.thumbnailData = image.generateThumbnail()
-                newPhoto.type = "front"
-                newPhoto.isPrimary = true
-                newPhoto.item = vm.draftItem
+                ItemPhotoSlot.configureReplacedPhoto(
+                    newPhoto,
+                    on: vm.draftItem,
+                    image: image,
+                    processedData: processedData,
+                    type: "front",
+                    asPrimary: true
+                )
                 setUpdatedAt(vm.draftItem)
                 vm.photoRefreshToken = UUID()
                 selectedImageType = .front
@@ -709,43 +703,20 @@ struct ItemAddView: View {
         }
     }
     
-    private func replaceBackImage(with image: UIImage) {
-        let photos = vm.draftItem.photos as? Set<Photo> ?? []
-        if let existingBack = photos.first(where: { $0.type == "back" }) {
-            vm.childContext.delete(existingBack)
-        }
-        Task {
-            let processedData = await processImageForStorage(image)
-            await MainActor.run {
-                let newPhoto = Photo(context: vm.childContext)
-                newPhoto.id = UUID()
-                PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: newPhoto)
-                newPhoto.thumbnailData = image.generateThumbnail()
-                newPhoto.type = "back"
-                newPhoto.isPrimary = false
-                newPhoto.item = vm.draftItem
-                setUpdatedAt(vm.draftItem)
-                vm.photoRefreshToken = UUID()
-                selectedImageType = .back
-            }
-        }
-    }
-    
     private func replaceWornImage(with image: UIImage) {
-        let photos = vm.draftItem.photos as? Set<Photo> ?? []
-        if let existingWorn = photos.first(where: { $0.type == "worn" }) {
-            vm.childContext.delete(existingWorn)
-        }
+        ItemPhotoSlot.deleteMatching(in: vm.draftItem, slot: "worn", context: vm.childContext)
         Task {
-            let processedData = await processImageForStorage(image)
+            let processedData = await processWornImageForStorage(image)
             await MainActor.run {
                 let newPhoto = Photo(context: vm.childContext)
-                newPhoto.id = UUID()
-                PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: newPhoto)
-                newPhoto.thumbnailData = image.generateThumbnail()
-                newPhoto.type = "worn"
-                newPhoto.isPrimary = false
-                newPhoto.item = vm.draftItem
+                ItemPhotoSlot.configureReplacedPhoto(
+                    newPhoto,
+                    on: vm.draftItem,
+                    image: image,
+                    processedData: processedData,
+                    type: "worn",
+                    asPrimary: false
+                )
                 setUpdatedAt(vm.draftItem)
                 vm.photoRefreshToken = UUID()
                 selectedImageType = .worn
@@ -758,12 +729,7 @@ struct ItemAddView: View {
 
     private func replaceFrontImageSync(with image: UIImage) async {
         await MainActor.run {
-            let photos = vm.draftItem.photos as? Set<Photo> ?? []
-            let photosToDelete = photos.filter { $0.type == "front" || ($0.isPrimary && ($0.type == nil || $0.type == "")) }
-            for photo in photosToDelete {
-                vm.draftItem.removeFromPhotos(photo)
-                vm.childContext.delete(photo)
-            }
+            ItemPhotoSlot.deleteMatching(in: vm.draftItem, slot: "front", context: vm.childContext)
         }
         let processedData = await processImageForStorage(image)
         if vm.draftItem.category == nil {
@@ -778,60 +744,35 @@ struct ItemAddView: View {
         }
         await MainActor.run {
             let newPhoto = Photo(context: vm.childContext)
-            newPhoto.id = UUID()
-            PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: newPhoto)
-            newPhoto.thumbnailData = image.generateThumbnail()
-            newPhoto.type = "front"
-            newPhoto.isPrimary = true
-            newPhoto.item = vm.draftItem
+            ItemPhotoSlot.configureReplacedPhoto(
+                newPhoto,
+                on: vm.draftItem,
+                image: image,
+                processedData: processedData,
+                type: "front",
+                asPrimary: true
+            )
             setUpdatedAt(vm.draftItem)
             vm.photoRefreshToken = UUID()
             selectedImageType = .front
         }
     }
     
-    private func replaceBackImageSync(with image: UIImage) async {
-        await MainActor.run {
-            let photos = vm.draftItem.photos as? Set<Photo> ?? []
-            let photosToDelete = photos.filter { $0.type == "back" }
-            for photo in photosToDelete {
-                vm.draftItem.removeFromPhotos(photo)
-                vm.childContext.delete(photo)
-            }
-        }
-        let processedData = await processImageForStorage(image)
-        await MainActor.run {
-            let newPhoto = Photo(context: vm.childContext)
-            newPhoto.id = UUID()
-            PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: newPhoto)
-            newPhoto.thumbnailData = image.generateThumbnail()
-            newPhoto.type = "back"
-            newPhoto.isPrimary = false
-            newPhoto.item = vm.draftItem
-            setUpdatedAt(vm.draftItem)
-            vm.photoRefreshToken = UUID()
-            selectedImageType = .back
-        }
-    }
-    
     private func replaceWornImageSync(with image: UIImage) async {
         await MainActor.run {
-            let photos = vm.draftItem.photos as? Set<Photo> ?? []
-            let photosToDelete = photos.filter { $0.type == "worn" }
-            for photo in photosToDelete {
-                vm.draftItem.removeFromPhotos(photo)
-                vm.childContext.delete(photo)
-            }
+            ItemPhotoSlot.deleteMatching(in: vm.draftItem, slot: "worn", context: vm.childContext)
         }
-        let processedData = await processImageForStorage(image)
+        let processedData = await processWornImageForStorage(image)
         await MainActor.run {
             let newPhoto = Photo(context: vm.childContext)
-            newPhoto.id = UUID()
-            PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: newPhoto)
-            newPhoto.thumbnailData = image.generateThumbnail()
-            newPhoto.type = "worn"
-            newPhoto.isPrimary = false
-            newPhoto.item = vm.draftItem
+            ItemPhotoSlot.configureReplacedPhoto(
+                newPhoto,
+                on: vm.draftItem,
+                image: image,
+                processedData: processedData,
+                type: "worn",
+                asPrimary: false
+            )
             setUpdatedAt(vm.draftItem)
             vm.photoRefreshToken = UUID()
             selectedImageType = .worn
@@ -840,20 +781,19 @@ struct ItemAddView: View {
     }
 
     private func deleteImage(type: ImageType) {
-        let photos = vm.draftItem.photos as? Set<Photo> ?? []
-        let photoToDelete: Photo?
+        let slot: String
         switch type {
-        case .front: photoToDelete = photos.first(where: { $0.type == "front" || ($0.isPrimary && $0.type == nil) })
-        case .back:  photoToDelete = photos.first(where: { $0.type == "back" })
-        case .worn:  photoToDelete = photos.first(where: { $0.type == "worn" })
+        case .front: slot = "front"
+        case .worn: slot = "worn"
         }
-        if let photo = photoToDelete {
-            vm.childContext.delete(photo)
-            vm.photoRefreshToken = UUID()
-            if selectedImageType == type {
-                selectedImageType = .front
-                syncHeroCarouselWithSelectedImageType()
-            }
+        let before = (vm.draftItem.photos as? Set<Photo>) ?? []
+        guard !ItemPhotoSlot.photosMatching(before, slot: slot).isEmpty else { return }
+
+        ItemPhotoSlot.deleteMatching(in: vm.draftItem, slot: slot, context: vm.childContext)
+        vm.photoRefreshToken = UUID()
+        if selectedImageType == type {
+            selectedImageType = .front
+            syncHeroCarouselWithSelectedImageType()
         }
     }
     
@@ -865,19 +805,18 @@ struct ItemAddView: View {
         _ = photos.compactMap { $0.type }
         switch type {
         case .front:
-            if let frontPhoto = photos.first(where: { $0.type == "front" }) {
+            if let frontPhoto = photos.first(where: {
+                ItemPhotoSlot.normalizedType($0) == "front"
+            }) {
                 return UIImage(data: frontPhoto.data ?? Data())
-            } else if let primaryPhoto = photos.first(where: { $0.isPrimary && ($0.type == nil || $0.type == "") }) {
+            } else if let primaryPhoto = photos.first(where: {
+                $0.isPrimary && ItemPhotoSlot.normalizedType($0).isEmpty
+            }) {
                 return UIImage(data: primaryPhoto.data ?? Data())
             }
             return nil
-        case .back:
-            if let backPhoto = photos.first(where: { $0.type == "back" }) {
-                return UIImage(data: backPhoto.data ?? Data())
-            }
-            return nil
         case .worn:
-            if let wornPhoto = photos.first(where: { $0.type == "worn" }) {
+            if let wornPhoto = photos.first(where: { ItemPhotoSlot.normalizedType($0) == "worn" }) {
                 return UIImage(data: wornPhoto.data ?? Data())
             }
             return nil
@@ -886,6 +825,7 @@ struct ItemAddView: View {
 
     // MARK: - Image Processing
     
+    /// Front path (unchanged): large PNG for cutout alpha.
     private func processImageForStorage(_ image: UIImage) async -> Data? {
         return await Task.detached(priority: .userInitiated) {
             let maxDimension: CGFloat = 4096
@@ -909,6 +849,13 @@ struct ItemAddView: View {
         }.value
     }
 
+    /// Worn photos only: shared JPEG pipeline (opaque flatten, ≤2048, q~0.8, ~1 MB).
+    private func processWornImageForStorage(_ image: UIImage) async -> Data? {
+        return await Task.detached(priority: .userInitiated) {
+            WornImageCompression.encode(image, logLabel: "Worn")
+        }.value
+    }
+
     // MARK: - Save flow
 
     private func handleSaveTapped() {
@@ -923,6 +870,7 @@ struct ItemAddView: View {
 
     private func persistAndDismiss() {
         do {
+            purgeRetiredBackPhotosIfNeeded()
             try vm.persistToParent()
             print("✅ Item saved successfully")
             if queueCoordinator.isQueueActive && queueCoordinator.hasMore {
@@ -974,9 +922,8 @@ struct ItemAddView: View {
     private func hasItemChanges() -> Bool {
         let item = vm.draftItem
 
-        // Photos (front, back, worn)
+        // Photos (front, worn)
         if getImage(for: .front) != nil { return true }
-        if getImage(for: .back) != nil { return true }
         if getImage(for: .worn) != nil { return true }
 
         // AttributesSectionView fields
@@ -1015,6 +962,7 @@ struct ItemAddView: View {
     
     private func saveDraft() {
         do {
+            purgeRetiredBackPhotosIfNeeded()
             try vm.persistDraftToParent()
             if queueCoordinator.isQueueActive && queueCoordinator.hasMore {
                 print("📸 Draft saved, moving to next image in queue")
@@ -1475,6 +1423,7 @@ final class ItemAddViewModel: ObservableObject {
         link.id = UUID()
         link.url = metadata.sourceURL
         link.name = extractWebsiteName(from: metadata.sourceURL)
+        link.itemLinkType = .purchase
         link.item = draftItem
     }
     
@@ -1516,18 +1465,17 @@ final class ItemAddViewModel: ObservableObject {
     }
     
     func setPrimaryImageFromURL(image: UIImage, originalData: Data) {
-        let photos = draftItem.photos as? Set<Photo> ?? []
-        if let existingFront = photos.first(where: { $0.type == "front" || ($0.isPrimary && ($0.type == nil || $0.type == "")) }) {
-            childContext.delete(existingFront)
-        }
+        ItemPhotoSlot.deleteMatching(in: draftItem, slot: "front", context: childContext)
         let processedData = image.processForStorage()
         let photo = Photo(context: childContext)
-        photo.id = UUID()
-        photo.isPrimary = true
-        photo.type = "front"
-        PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: photo)
-        photo.thumbnailData = image.generateThumbnail()
-        photo.item = draftItem
+        ItemPhotoSlot.configureReplacedPhoto(
+            photo,
+            on: draftItem,
+            image: image,
+            processedData: processedData,
+            type: "front",
+            asPrimary: true
+        )
         photoRefreshToken = UUID()
     }
     
@@ -1535,15 +1483,16 @@ final class ItemAddViewModel: ObservableObject {
         Task {
             let processedData = await processImageForStorage(image)
             await MainActor.run {
-                if let existing = (draftItem.photos as? Set<Photo>)?.first(where: { $0.isPrimary }) {
-                    childContext.delete(existing)
-                }
+                ItemPhotoSlot.deleteMatching(in: draftItem, slot: "front", context: childContext)
                 let photo = Photo(context: childContext)
-                photo.id = UUID()
-                photo.isPrimary = true
-                PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: photo)
-                photo.thumbnailData = image.generateThumbnail()
-                photo.item = draftItem
+                ItemPhotoSlot.configureReplacedPhoto(
+                    photo,
+                    on: draftItem,
+                    image: image,
+                    processedData: processedData,
+                    type: "front",
+                    asPrimary: true
+                )
                 photoRefreshToken = UUID()
             }
         }

@@ -64,8 +64,16 @@ export default {
           const normalizedUserId = String(userId).toLowerCase();
           const normalizedPathUserId = pathUserId.toLowerCase();
 
+          // Redress suggestion collages live under the suggester's prefix. Recipients must
+          // DELETE them after reject (authorized in-app via respond_to_outfit_suggestion).
+          // Suggestion IDs are UUIDs; allow authenticated DELETE on that path shape only.
+          const isOutfitSuggestionDelete =
+            request.method === 'DELETE' &&
+            pathParts.length >= 3 &&
+            String(pathParts[1]).toLowerCase() === 'outfit-suggestions';
+
           // Verify user owns the path (case-insensitive comparison)
-          if (normalizedUserId !== normalizedPathUserId) {
+          if (normalizedUserId !== normalizedPathUserId && !isOutfitSuggestionDelete) {
             console.error(`User ID mismatch: JWT userId="${normalizedUserId}", path userId="${normalizedPathUserId}"`);
             return jsonResponse(
               { error: 'Forbidden: You can only access your own files' },

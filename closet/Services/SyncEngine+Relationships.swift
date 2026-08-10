@@ -22,11 +22,11 @@ extension SyncEngine {
         }
         guard let snap = try await performOnSyncContext({ ctx -> Snap? in
             guard let item = try ctx.existingObject(with: itemObjectID) as? Item, let id = item.id else { return nil }
-            let colors = Set((item.colors as? Set<AppColor> ?? []).compactMap { $0.id?.uuidString })
-            let seasons = Set((item.seasons as? Set<Season> ?? []).compactMap { $0.id?.uuidString })
-            let tags = Set((item.tags as? Set<Tag> ?? []).compactMap { $0.id?.uuidString })
-            let wardrobes = Set((item.wardrobes as? Set<Wardrobe> ?? []).compactMap { $0.id?.uuidString })
-            let pairs = Set((item.pairedItems as? Set<Item> ?? []).compactMap { $0.id?.uuidString })
+            let colors = Self.normalizedUUIDStringSet((item.colors as? Set<AppColor> ?? []).compactMap { $0.id?.uuidString })
+            let seasons = Self.normalizedUUIDStringSet((item.seasons as? Set<Season> ?? []).compactMap { $0.id?.uuidString })
+            let tags = Self.normalizedUUIDStringSet((item.tags as? Set<Tag> ?? []).compactMap { $0.id?.uuidString })
+            let wardrobes = Self.normalizedUUIDStringSet((item.wardrobes as? Set<Wardrobe> ?? []).compactMap { $0.id?.uuidString })
+            let pairs = Self.normalizedUUIDStringSet((item.pairedItems as? Set<Item> ?? []).compactMap { $0.id?.uuidString })
             return Snap(itemId: id, name: item.name ?? "unnamed", colors: colors, seasons: seasons, tags: tags, wardrobes: wardrobes, pairs: pairs)
         }) else { return }
         let itemId = snap.itemId
@@ -50,7 +50,7 @@ extension SyncEngine {
         let colorsData: Data = existingColorsResponse.data
         let existingColorIds: Set<String>
         if let existingColors = try? JSONDecoder().decode([ItemColorResponse].self, from: colorsData) {
-            existingColorIds = Set(existingColors.compactMap { $0.colorId })
+            existingColorIds = Self.normalizedUUIDStringSet(existingColors.compactMap { $0.colorId })
             print("🎨 Supabase shows \(existingColorIds.count) existing colors")
         } else {
             existingColorIds = Set()
@@ -77,18 +77,21 @@ extension SyncEngine {
             print("🎨 No orphaned colors to delete")
         }
         
-        // STEP 4: Now sync current colors (upsert new/existing)
-        if !currentColorIds.isEmpty {
-            print("🎨 Upserting \(currentColorIds.count) current colors to Supabase")
-            for colorId in currentColorIds {
+        // STEP 4: Upsert only colors missing from Supabase
+        let colorsToUpsert = currentColorIds.subtracting(existingColorIds)
+        if !colorsToUpsert.isEmpty {
+            print("🎨 Upserting \(colorsToUpsert.count) new color(s) to Supabase")
+            for colorId in colorsToUpsert {
                 let junctionData = ItemColorJunction(itemId: itemId.uuidString, colorId: colorId)
                 try await (await getSupabase()).supabaseClient.from("item_colors")
                     .upsert(junctionData, onConflict: "item_id,color_id")
                     .execute()
             }
-            print("✅ Finished syncing \(currentColorIds.count) colors")
-        } else {
+            print("✅ Finished syncing \(colorsToUpsert.count) colors")
+        } else if currentColorIds.isEmpty {
             print("🎨 No colors in Core Data")
+        } else {
+            print("🎨 Colors already in sync (\(currentColorIds.count))")
         }
         
         // Sync item_seasons with proper deletion handling
@@ -103,7 +106,7 @@ extension SyncEngine {
         let seasonsData: Data = existingSeasonsResponse.data
         let existingSeasonIds: Set<String>
         if let existingSeasons = try? JSONDecoder().decode([ItemSeasonResponse].self, from: seasonsData) {
-            existingSeasonIds = Set(existingSeasons.compactMap { $0.seasonId })
+            existingSeasonIds = Self.normalizedUUIDStringSet(existingSeasons.compactMap { $0.seasonId })
             print("🍂 Supabase shows \(existingSeasonIds.count) existing seasons")
         } else {
             existingSeasonIds = Set()
@@ -130,18 +133,21 @@ extension SyncEngine {
             print("🍂 No orphaned seasons to delete")
         }
         
-        // STEP 4: Now sync current seasons (upsert new/existing)
-        if !currentSeasonIds.isEmpty {
-            print("🍂 Upserting \(currentSeasonIds.count) current seasons to Supabase")
-            for seasonId in currentSeasonIds {
+        // STEP 4: Upsert only seasons missing from Supabase
+        let seasonsToUpsert = currentSeasonIds.subtracting(existingSeasonIds)
+        if !seasonsToUpsert.isEmpty {
+            print("🍂 Upserting \(seasonsToUpsert.count) new season(s) to Supabase")
+            for seasonId in seasonsToUpsert {
                 let junctionData = ItemSeasonJunction(itemId: itemId.uuidString, seasonId: seasonId)
                 try await (await getSupabase()).supabaseClient.from("item_seasons")
                     .upsert(junctionData, onConflict: "item_id,season_id")
                     .execute()
             }
-            print("✅ Finished syncing \(currentSeasonIds.count) seasons")
-        } else {
+            print("✅ Finished syncing \(seasonsToUpsert.count) seasons")
+        } else if currentSeasonIds.isEmpty {
             print("🍂 No seasons in Core Data")
+        } else {
+            print("🍂 Seasons already in sync (\(currentSeasonIds.count))")
         }
         
         // Sync item_tags with proper deletion handling
@@ -156,7 +162,7 @@ extension SyncEngine {
         let tagsData: Data = existingTagsResponse.data
         let existingTagIds: Set<String>
         if let existingTags = try? JSONDecoder().decode([ItemTagResponse].self, from: tagsData) {
-            existingTagIds = Set(existingTags.compactMap { $0.tagId })
+            existingTagIds = Self.normalizedUUIDStringSet(existingTags.compactMap { $0.tagId })
             print("🏷️ Supabase shows \(existingTagIds.count) existing tags")
         } else {
             existingTagIds = Set()
@@ -183,18 +189,21 @@ extension SyncEngine {
             print("🏷️ No orphaned tags to delete")
         }
         
-        // STEP 4: Now sync current tags (upsert new/existing)
-        if !currentTagIds.isEmpty {
-            print("🏷️ Upserting \(currentTagIds.count) current tags to Supabase")
-            for tagId in currentTagIds {
+        // STEP 4: Upsert only tags missing from Supabase
+        let tagsToUpsert = currentTagIds.subtracting(existingTagIds)
+        if !tagsToUpsert.isEmpty {
+            print("🏷️ Upserting \(tagsToUpsert.count) new tag(s) to Supabase")
+            for tagId in tagsToUpsert {
                 let junctionData = ItemTagJunction(itemId: itemId.uuidString, tagId: tagId)
                 try await (await getSupabase()).supabaseClient.from("item_tags")
                     .upsert(junctionData, onConflict: "item_id,tag_id")
                     .execute()
             }
-            print("✅ Finished syncing \(currentTagIds.count) tags")
-        } else {
+            print("✅ Finished syncing \(tagsToUpsert.count) tags")
+        } else if currentTagIds.isEmpty {
             print("🏷️ No tags in Core Data")
+        } else {
+            print("🏷️ Tags already in sync (\(currentTagIds.count))")
         }
         
         // Sync item_wardrobes with proper deletion handling
@@ -209,7 +218,7 @@ extension SyncEngine {
         let wardrobesData: Data = existingWardrobesResponse.data
         let existingWardrobeIds: Set<String>
         if let existingWardrobes = try? JSONDecoder().decode([ItemWardrobeResponse].self, from: wardrobesData) {
-            existingWardrobeIds = Set(existingWardrobes.compactMap { $0.wardrobeId })
+            existingWardrobeIds = Self.normalizedUUIDStringSet(existingWardrobes.compactMap { $0.wardrobeId })
             print("👔 Supabase shows \(existingWardrobeIds.count) existing wardrobes")
         } else {
             existingWardrobeIds = Set()
@@ -236,18 +245,21 @@ extension SyncEngine {
             print("👔 No orphaned wardrobes to delete")
         }
         
-        // STEP 4: Now sync current wardrobes (upsert new/existing)
-        if !currentWardrobeIds.isEmpty {
-            print("👔 Upserting \(currentWardrobeIds.count) current wardrobes to Supabase")
-            for wardrobeId in currentWardrobeIds {
+        // STEP 4: Upsert only wardrobes missing from Supabase
+        let wardrobesToUpsert = currentWardrobeIds.subtracting(existingWardrobeIds)
+        if !wardrobesToUpsert.isEmpty {
+            print("👔 Upserting \(wardrobesToUpsert.count) new wardrobe(s) to Supabase")
+            for wardrobeId in wardrobesToUpsert {
                 let junctionData = ItemWardrobeJunction(itemId: itemId.uuidString, wardrobeId: wardrobeId)
                 try await (await getSupabase()).supabaseClient.from("item_wardrobes")
                     .upsert(junctionData, onConflict: "item_id,wardrobe_id")
                     .execute()
             }
-            print("✅ Finished syncing \(currentWardrobeIds.count) wardrobes")
-        } else {
+            print("✅ Finished syncing \(wardrobesToUpsert.count) wardrobes")
+        } else if currentWardrobeIds.isEmpty {
             print("👔 No wardrobes in Core Data")
+        } else {
+            print("👔 Wardrobes already in sync (\(currentWardrobeIds.count))")
         }
         
         // Sync item_pairs with proper deletion handling
@@ -264,7 +276,7 @@ extension SyncEngine {
         let data: Data = existingPairsResponse.data
         let existingPairedItemIds: Set<String>
         if let existingPairs = try? JSONDecoder().decode([ItemPairResponse].self, from: data) {
-            existingPairedItemIds = Set(existingPairs.compactMap { $0.pairedItemId })
+            existingPairedItemIds = Self.normalizedUUIDStringSet(existingPairs.compactMap { $0.pairedItemId })
             print("🔗 Supabase shows \(existingPairedItemIds.count) existing pairs")
             for (idx, pairedId) in existingPairedItemIds.enumerated() {
                 print("   Existing pair #\(idx + 1): \(pairedId)")
@@ -309,16 +321,13 @@ extension SyncEngine {
             print("🔗 No orphaned pairs to delete")
         }
         
-        // STEP 4: Now sync current pairs (upsert new/existing)
-        if !currentPairIds.isEmpty {
-            print("🔗 Upserting \(currentPairIds.count) current pairs to Supabase")
-            let pairedItemArray = Array(currentPairIds)
-            
-            for (index, pairedItemId) in pairedItemArray.enumerated() {
+        // STEP 4: Upsert only pairs missing from Supabase
+        let pairsToUpsert = currentPairIds.subtracting(existingPairedItemIds)
+        if !pairsToUpsert.isEmpty {
+            print("🔗 Upserting \(pairsToUpsert.count) new pair(s) to Supabase")
+            for (index, pairedItemId) in pairsToUpsert.enumerated() {
                 print("🔗 Processing pair #\(index + 1): \(itemId.uuidString) <-> \(pairedItemId)")
-                
-                // Sync both directions
-                // Direction 1: item -> pairedItem
+
                 let junctionData1 = ItemPairJunction(
                     itemId: itemId.uuidString,
                     pairedItemId: pairedItemId
@@ -332,8 +341,7 @@ extension SyncEngine {
                     print("❌ Failed to upsert pair \(itemId.uuidString) -> \(pairedItemId): \(error)")
                     print("❌ Error: \(error.localizedDescription)")
                 }
-                
-                // Direction 2: pairedItem -> item (bidirectional)
+
                 let junctionData2 = ItemPairJunction(
                     itemId: pairedItemId,
                     pairedItemId: itemId.uuidString
@@ -348,30 +356,11 @@ extension SyncEngine {
                     print("❌ Error: \(error.localizedDescription)")
                 }
             }
-            
-            print("✅ Finished syncing \(currentPairIds.count) pairs")
-        } else {
-            // No paired items in Core Data
+            print("✅ Finished syncing \(pairsToUpsert.count) pairs")
+        } else if currentPairIds.isEmpty {
             print("🔗 No paired items in Core Data")
-            
-            // Delete all pairs for this item if any exist in Supabase
-            if !existingPairedItemIds.isEmpty {
-                print("🗑️ Deleting all \(existingPairedItemIds.count) pairs from Supabase")
-                do {
-                    try await (await getSupabase()).supabaseClient.from("item_pairs")
-                        .delete()
-                        .eq("item_id", value: itemId.uuidString)
-                        .execute()
-                    
-                    try await (await getSupabase()).supabaseClient.from("item_pairs")
-                        .delete()
-                        .eq("paired_item_id", value: itemId.uuidString)
-                        .execute()
-                    print("✅ Deleted all pairs for item")
-                } catch {
-                    print("⚠️ Failed to delete all pairs: \(error)")
-                }
-            }
+        } else {
+            print("🔗 Pairs already in sync (\(currentPairIds.count))")
         }
     }
     
@@ -383,7 +372,7 @@ extension SyncEngine {
     func syncItemLinks(itemObjectID: NSManagedObjectID, itemId: UUID, userId: UUID) async throws {
         let itemName = try await withSyncItem(itemObjectID) { $0.name ?? "unnamed" }
         let currentLinkIds = try await withSyncItem(itemObjectID) { item -> Set<String> in
-            Set((item.links as? Set<Link> ?? []).compactMap { $0.id?.uuidString })
+            Self.normalizedUUIDStringSet((item.links as? Set<Link> ?? []).compactMap { $0.id?.uuidString })
         }
         let linkObjectIDs = try await withSyncItem(itemObjectID) { item -> [NSManagedObjectID] in
             (item.links as? Set<Link>)?.map { $0.objectID } ?? []
@@ -401,7 +390,7 @@ extension SyncEngine {
         let data: Data = existingLinksResponse.data
         let existingLinkIds: Set<String>
         if let existingLinks = try? JSONDecoder().decode([ItemLinkResponse].self, from: data) {
-            existingLinkIds = Set(existingLinks.compactMap { $0.id })
+            existingLinkIds = Self.normalizedUUIDStringSet(existingLinks.compactMap { $0.id })
             print("🔗 Supabase shows \(existingLinkIds.count) existing links")
         } else {
             existingLinkIds = Set()
@@ -427,7 +416,7 @@ extension SyncEngine {
             print("🔗 No orphaned links to delete")
         }
         
-        // STEP 4: Now sync current links (upsert new/existing)
+        // STEP 4: Upsert current links (payload includes URL/title/type, so always push)
         if !linkObjectIDs.isEmpty {
             print("🔗 Upserting \(linkObjectIDs.count) current links to Supabase")
             for linkObjectID in linkObjectIDs {
@@ -464,11 +453,16 @@ extension SyncEngine {
     func syncLink(objectID: NSManagedObjectID, itemId: UUID, userId: UUID) async throws {
         let linkData = try await performOnSyncContext { ctx -> SyncLinkData? in
             guard let link = try ctx.existingObject(with: objectID) as? Link, let linkId = link.id else { return nil }
+            let resolvedType = link.itemLinkType.rawValue
+            if (link.type ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                link.type = resolvedType
+            }
             return SyncLinkData(
                 id: linkId.uuidString,
                 itemId: itemId.uuidString,
                 name: link.name,
-                url: link.url?.absoluteString
+                url: link.url?.absoluteString,
+                type: resolvedType
             )
         }
         guard let linkData else { return }

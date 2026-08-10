@@ -21,6 +21,12 @@ struct ImageCropperView: View {
     let onCancel: (() -> Void)?
     /// When false, rely on navigation back instead of a leading Cancel button.
     let showsCancelButton: Bool
+    /// Navigation bar title (e.g. "Crop" when adding, "Edit" when re-cropping).
+    let title: String
+    /// When true (typically with `showsCancelButton == false`), intercept back and confirm discard if dirty.
+    let confirmsDiscardBeforeDismiss: Bool
+    /// Label next to the custom back chevron when `confirmsDiscardBeforeDismiss` is true (e.g. "Item Details").
+    let backButtonTitle: String?
 
     // The image currently shown/edited
     @State private var currentImage: UIImage
@@ -51,6 +57,7 @@ struct ImageCropperView: View {
     @State private var hasEraseEdits: Bool = false
     @State private var brushSize: CGFloat = 30.0
     @State private var lastErasePoint: CGPoint?
+    @State private var showDiscardAlert = false
 
     private static let maxBrushSize: CGFloat = 100
     private static let editActionsRowHeight: CGFloat = 56
@@ -95,6 +102,17 @@ struct ImageCropperView: View {
         isProcessingBackgroundRemoval || (!hasEraseEdits && !isBrushEditing)
     }
 
+    private var hasUnsavedEdits: Bool {
+        guard let initial = editHistory.first else { return false }
+        let hasTransformChanges = scale != 1.0 || rotation != .zero || offset != .zero
+        return hasEraseEdits
+            || hasBackgroundRemoved
+            || hasTransformChanges
+            || currentImage !== initial.currentImage
+            || eraseSourceImage != nil
+            || !brushEditOps.isEmpty
+    }
+
     @Environment(\.dismiss) private var dismiss
     
     init(
@@ -102,13 +120,19 @@ struct ImageCropperView: View {
         onCrop: @escaping (UIImage) -> Void,
         isEditing: Bool = false,
         onCancel: (() -> Void)? = nil,
-        showsCancelButton: Bool = true
+        showsCancelButton: Bool = true,
+        title: String = "Crop",
+        confirmsDiscardBeforeDismiss: Bool = false,
+        backButtonTitle: String? = nil
     ) {
         self.originalImage = originalImage
         self.onCrop = onCrop
         self.isEditing = isEditing
         self.onCancel = onCancel
         self.showsCancelButton = showsCancelButton
+        self.title = title
+        self.confirmsDiscardBeforeDismiss = confirmsDiscardBeforeDismiss
+        self.backButtonTitle = backButtonTitle
         _currentImage = State(initialValue: originalImage)
         let initialSnapshot = EditSnapshot(
             currentImage: originalImage,
@@ -180,8 +204,10 @@ struct ImageCropperView: View {
                 }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .navigationTitle("Crop")
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(confirmsDiscardBeforeDismiss)
+        .modifier(ConditionalInteractivePopDisabler(isEnabled: confirmsDiscardBeforeDismiss))
         .toolbar {
             if showsCancelButton {
                 ToolbarItem(placement: .cancellationAction) {
@@ -193,12 +219,46 @@ struct ImageCropperView: View {
                         }
                     }
                 }
+            } else if confirmsDiscardBeforeDismiss {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        attemptDismiss()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                                .fontWeight(.semibold)
+                            if let backButtonTitle,
+                               !backButtonTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Text(backButtonTitle)
+                            }
+                        }
+                    }
+                    .accessibilityLabel(
+                        backButtonTitle.map { "Back to \($0)" } ?? "Back"
+                    )
+                }
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button(isEditing ? "Save" : "Add") {
                     cropAndSaveImage()
                 }
             }
+        }
+        .alert("Discard Changes?", isPresented: $showDiscardAlert) {
+            Button("Discard", role: .destructive) {
+                dismiss()
+            }
+            Button("Keep Editing", role: .cancel) {}
+        } message: {
+            Text("You have unsaved edits. Going back will discard them.")
+        }
+    }
+
+    private func attemptDismiss() {
+        if hasUnsavedEdits {
+            showDiscardAlert = true
+        } else {
+            dismiss()
         }
     }
 
@@ -229,15 +289,7 @@ struct ImageCropperView: View {
     }
 
     private var canRestoreToOriginal: Bool {
-        guard !isProcessingBackgroundRemoval else { return false }
-        guard let initial = editHistory.first else { return false }
-        let hasTransformChanges = scale != 1.0 || rotation != .zero || offset != .zero
-        return hasEraseEdits
-            || hasBackgroundRemoved
-            || hasTransformChanges
-            || currentImage !== initial.currentImage
-            || eraseSourceImage != nil
-            || !brushEditOps.isEmpty
+        !isProcessingBackgroundRemoval && hasUnsavedEdits
     }
 
     @ViewBuilder
@@ -1120,4 +1172,16 @@ struct ImageCropperView: View {
     }
 
 
+}
+
+private struct ConditionalInteractivePopDisabler: ViewModifier {
+    let isEnabled: Bool
+
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.disableInteractivePopGesture()
+        } else {
+            content
+        }
+    }
 }

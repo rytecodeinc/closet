@@ -95,8 +95,6 @@ struct SetSizeView: View {
             do {
                 try viewContext.save()
                 
-                // Trigger automatic sync for the modified item
-                SyncService.shared.syncItemIfNeeded(item)
             } catch {
                 print("❌ Failed to save size: \(error.localizedDescription)")
             }

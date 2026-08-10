@@ -9,7 +9,6 @@ import SwiftUI
 
 struct ItemFullScreenView: View {
     let frontImage: UIImage?
-    let backImage: UIImage?
     let wornImage: UIImage?
     @Binding var selectedPageIndex: Int
     @Binding var isPresented: Bool
@@ -17,15 +16,12 @@ struct ItemFullScreenView: View {
     @State private var currentScale: CGFloat = 1.0
     @GestureState private var gestureScale: CGFloat = 1.0
     
-    // Computed property to get available images in order
+    // Computed property to get available images in order (front + worn only).
     private var availableImages: [(image: UIImage, label: String)] {
         var images: [(image: UIImage, label: String)] = []
         
         if let front = frontImage {
             images.append((front, "Front"))
-        }
-        if let back = backImage {
-            images.append((back, "Back"))
         }
         if let worn = wornImage {
             images.append((worn, "Worn"))

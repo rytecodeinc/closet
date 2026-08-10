@@ -16,7 +16,7 @@ extension SyncEngine {
         itemRequest.predicate = NSPredicate(format: "userId == %@", userId.uuidString)
         itemRequest.propertiesToFetch = ["id"]
         let localItems = try await performOnSyncContext { ctx in try ctx.fetch(itemRequest) }
-        let localItemIds = Set(localItems.compactMap { $0.id?.uuidString })
+        let localItemIds = Self.normalizedUUIDStringSet(localItems.compactMap { $0.id?.uuidString })
         print("📦 Found \(localItemIds.count) items in Core Data")
 
         let supabase = await getSupabase()
@@ -29,7 +29,7 @@ extension SyncEngine {
             let id: String
         }
         let supabaseItems = try JSONDecoder().decode([ItemIdResponse].self, from: supabaseItemsResponse.data)
-        let supabaseItemIds = Set(supabaseItems.map { $0.id })
+        let supabaseItemIds = Self.normalizedUUIDStringSet(supabaseItems.map(\.id))
         print("📦 Found \(supabaseItemIds.count) items in Supabase")
 
         let orphanedItemIds = supabaseItemIds.subtracting(localItemIds)
@@ -147,7 +147,7 @@ extension SyncEngine {
 
         let photoRequest: NSFetchRequest<Photo> = Photo.fetchRequest()
         let allLocalPhotos = try await performOnSyncContext { ctx in try ctx.fetch(photoRequest) }
-        let localPhotoIds = Set(allLocalPhotos.compactMap { $0.id?.uuidString })
+        let localPhotoIds = Self.normalizedUUIDStringSet(allLocalPhotos.compactMap { $0.id?.uuidString })
         print("📸 Found \(localPhotoIds.count) photos in Core Data")
 
         if !localItemIds.isEmpty {
@@ -168,7 +168,10 @@ extension SyncEngine {
             }
 
             if let allPhotos = try? JSONDecoder().decode([PhotoWithItemResponse].self, from: allPhotosResponse.data) {
-                let orphanedPhotos = allPhotos.filter { !localPhotoIds.contains($0.id) }
+                let orphanedPhotos = allPhotos.filter { photo in
+                    guard let normalized = UUID(uuidString: photo.id)?.uuidString.lowercased() else { return false }
+                    return !localPhotoIds.contains(normalized)
+                }
                 print("📸 Found \(orphanedPhotos.count) orphaned photos for existing items")
 
                 for photo in orphanedPhotos {

@@ -15,6 +15,71 @@ extension SyncEngine {
         try await syncItem(objectID: objectID, userId: userId)
     }
 
+    /// Outfit worn removal only — R2 delete + null `worn_image_url` (no collage re-upload).
+    func syncOutfitWornRemovalAfterPreflight(objectID: NSManagedObjectID, userId: UUID) async throws {
+        let snapshot = try await performOnSyncContext { ctx -> (outfitId: UUID, name: String, hasWorn: Bool, isDraft: Bool)? in
+            guard let outfit = try ctx.existingObject(with: objectID) as? Outfit,
+                  let outfitId = outfit.id else { return nil }
+            return (outfitId, outfit.name ?? "unnamed", outfit.wornImage != nil, outfit.isDraft)
+        }
+        guard let snapshot else { return }
+        guard !snapshot.isDraft else {
+            print("⏭️ Skipping worn removal sync for draft outfit: \(snapshot.name)")
+            return
+        }
+        guard !snapshot.hasWorn else {
+            print("⚠️ Local outfit still has worn data; skipping worn-only removal sync")
+            return
+        }
+
+        try await (await getSupabase()).clearOutfitWornImage(outfitId: snapshot.outfitId, userId: userId)
+        print("✅ Synced outfit worn removal only: \(snapshot.name)")
+    }
+
+    /// Outfit worn add/replace only — R2 upload + `worn_image_url` patch (no full metadata upsert).
+    func syncOutfitWornUploadAfterPreflight(objectID: NSManagedObjectID, userId: UUID) async throws {
+        let snapshot = try await performOnSyncContext { ctx -> (outfitId: UUID, name: String, wornData: Data, isDraft: Bool)? in
+            guard let outfit = try ctx.existingObject(with: objectID) as? Outfit,
+                  let outfitId = outfit.id,
+                  let wornData = outfit.wornImage, !wornData.isEmpty else { return nil }
+            return (outfitId, outfit.name ?? "unnamed", wornData, outfit.isDraft)
+        }
+        guard let snapshot else {
+            print("⚠️ Outfit missing worn data; skipping worn-only upload sync")
+            return
+        }
+        guard !snapshot.isDraft else {
+            print("⏭️ Skipping worn upload sync for draft outfit: \(snapshot.name)")
+            return
+        }
+
+        _ = try await (await getSupabase()).setOutfitWornImage(
+            imageData: snapshot.wornData,
+            outfitId: snapshot.outfitId,
+            userId: userId
+        )
+        print("✅ Synced outfit worn upload only: \(snapshot.name)")
+    }
+
+    /// Photo-only push (delete/replace front or worn). Skips item metadata, refs, and junctions.
+    func syncItemPhotosAfterPreflight(objectID: NSManagedObjectID, userId: UUID) async throws {
+        let softDeleted = try await withSyncItem(objectID) { $0.isSoftDeleted }
+        if softDeleted {
+            try await syncItemAfterPreflight(objectID: objectID, userId: userId)
+            return
+        }
+
+        guard let itemId = try await withSyncItem(objectID, { $0.id }) else {
+            print("⚠️ Item missing ID, skipping photo sync")
+            return
+        }
+
+        try await syncItemPhotos(itemObjectID: objectID, itemId: itemId, userId: userId)
+        // Do not set item.syncedAt — photo push must not clear pending attribute dirty state.
+        let name = try await withSyncItem(objectID) { $0.name ?? "unnamed" }
+        print("✅ Synced item photos only: \(name)")
+    }
+
     /// Background needsSync check + wardrobe push.
     func syncWardrobeIfNeeded(objectID: NSManagedObjectID, wardrobeId: UUID, userId: UUID) async throws {
         let syncState = try await performOnSyncContext { ctx -> (needsSync: Bool, name: String)? in

@@ -65,6 +65,15 @@ class SyncService: ObservableObject {
     // MARK: - Incremental sync (*IfNeeded)
 
     nonisolated func syncItemIfNeeded(_ item: Item) {
+        syncItemIfNeeded(item, photosOnly: false)
+    }
+
+    /// Photo delete/replace only — skips metadata, reference data, and relationship upserts.
+    nonisolated func syncItemPhotosIfNeeded(_ item: Item) {
+        syncItemIfNeeded(item, photosOnly: true)
+    }
+
+    nonisolated private func syncItemIfNeeded(_ item: Item, photosOnly: Bool) {
         let objectID = item.objectID
         Task { @MainActor in
             guard self.supabaseService.isAuthenticated,
@@ -115,8 +124,13 @@ class SyncService: ObservableObject {
             let itemName = item.name ?? "unnamed"
             Task {
                 do {
-                    try await SyncEngine.shared.syncItemAfterPreflight(objectID: objectID, userId: userId)
-                    print("✅ Auto-synced item: \(itemName)")
+                    if photosOnly {
+                        try await SyncEngine.shared.syncItemPhotosAfterPreflight(objectID: objectID, userId: userId)
+                        print("✅ Auto-synced item photos: \(itemName)")
+                    } else {
+                        try await SyncEngine.shared.syncItemAfterPreflight(objectID: objectID, userId: userId)
+                        print("✅ Auto-synced item: \(itemName)")
+                    }
                 } catch {
                     print("⚠️ Auto-sync failed for item '\(itemName)': \(error.localizedDescription)")
                 }
@@ -164,6 +178,52 @@ class SyncService: ObservableObject {
                 )
             } catch {
                 print("⚠️ Auto-sync failed for outfit: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Worn photo removed locally — clear R2 + Supabase URL without full outfit sync.
+    nonisolated func syncOutfitWornRemovalIfNeeded(_ outfit: Outfit) {
+        let objectID = outfit.objectID
+        Task { @MainActor in
+            guard self.isCloudSyncEnabled else { return }
+            guard self.supabaseService.isAuthenticated,
+                  let userId = self.supabaseService.currentUser?.id else {
+                return
+            }
+            guard outfit.isDraft != true else { return }
+
+            do {
+                try await SyncEngine.shared.syncOutfitWornRemovalAfterPreflight(
+                    objectID: objectID,
+                    userId: userId
+                )
+                print("✅ Auto-synced outfit worn removal")
+            } catch {
+                print("⚠️ Auto-sync failed for outfit worn removal: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Worn photo added/replaced locally — upload + URL patch without full outfit sync.
+    nonisolated func syncOutfitWornUploadIfNeeded(_ outfit: Outfit) {
+        let objectID = outfit.objectID
+        Task { @MainActor in
+            guard self.isCloudSyncEnabled else { return }
+            guard self.supabaseService.isAuthenticated,
+                  let userId = self.supabaseService.currentUser?.id else {
+                return
+            }
+            guard outfit.isDraft != true else { return }
+
+            do {
+                try await SyncEngine.shared.syncOutfitWornUploadAfterPreflight(
+                    objectID: objectID,
+                    userId: userId
+                )
+                print("✅ Auto-synced outfit worn upload")
+            } catch {
+                print("⚠️ Auto-sync failed for outfit worn upload: \(error.localizedDescription)")
             }
         }
     }

@@ -181,7 +181,6 @@ struct SetCategoryView: View {
             if viewContext.parent == nil {
                 do {
                     try viewContext.save()
-                    SyncService.shared.syncItemIfNeeded(item)
                 } catch {
                     print("❌ Failed to save category: \(error.localizedDescription)")
                 }
@@ -210,7 +209,6 @@ struct SetCategoryView: View {
         if viewContext.parent == nil {
             do {
                 try viewContext.save()
-                SyncService.shared.syncItemIfNeeded(item)
             } catch {
                 print("❌ Failed to save category: \(error.localizedDescription)")
             }

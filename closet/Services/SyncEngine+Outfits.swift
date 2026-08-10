@@ -18,7 +18,7 @@ extension SyncEngine {
             format: "userId == %@ AND isDraft != YES AND (syncedAt == nil OR updatedAt > syncedAt)",
             userId.uuidString
         )
-        
+
         let outfitObjectIDs: [NSManagedObjectID]
         do {
             outfitObjectIDs = try await performOnSyncContext { ctx in
@@ -26,35 +26,35 @@ extension SyncEngine {
             }
         } catch {
             print("⚠️ Failed to fetch outfits for sync: \(error.localizedDescription)")
+            try await cleanupOrphanedOutfits(userId: userId)
             return
         }
 
-        guard !outfitObjectIDs.isEmpty else {
+        if outfitObjectIDs.isEmpty {
             print("ℹ️ No outfits need syncing")
-            return
-        }
+        } else {
+            print("🔍 Found \(outfitObjectIDs.count) outfit(s) that need syncing")
 
-        print("🔍 Found \(outfitObjectIDs.count) outfit(s) that need syncing")
-
-        for outfitObjectID in outfitObjectIDs {
-            try await performOnSyncContext { ctx in
-                guard let outfit = try ctx.existingObject(with: outfitObjectID) as? Outfit else { return }
-                if outfit.userId == nil || outfit.userId?.isEmpty == true {
-                    outfit.userId = userId.uuidString
+            for outfitObjectID in outfitObjectIDs {
+                try await performOnSyncContext { ctx in
+                    guard let outfit = try ctx.existingObject(with: outfitObjectID) as? Outfit else { return }
+                    if outfit.userId == nil || outfit.userId?.isEmpty == true {
+                        outfit.userId = userId.uuidString
+                    }
+                    if ctx.hasChanges { try ctx.save() }
                 }
-                if ctx.hasChanges { try ctx.save() }
-            }
-            do {
-                try await syncOutfit(objectID: outfitObjectID, userId: userId)
-                let name = try await performOnSyncContext { ctx in
-                    (try ctx.existingObject(with: outfitObjectID) as? Outfit)?.name ?? "unnamed"
+                do {
+                    try await syncOutfit(objectID: outfitObjectID, userId: userId)
+                    let name = try await performOnSyncContext { ctx in
+                        (try ctx.existingObject(with: outfitObjectID) as? Outfit)?.name ?? "unnamed"
+                    }
+                    print("✅ Synced outfit: \(name)")
+                } catch {
+                    let name = (try? await performOnSyncContext { ctx in
+                        (try ctx.existingObject(with: outfitObjectID) as? Outfit)?.name ?? "unnamed"
+                    }) ?? "unnamed"
+                    print("⚠️ Failed to sync outfit '\(name)': \(error.localizedDescription)")
                 }
-                print("✅ Synced outfit: \(name)")
-            } catch {
-                let name = (try? await performOnSyncContext { ctx in
-                    (try ctx.existingObject(with: outfitObjectID) as? Outfit)?.name ?? "unnamed"
-                }) ?? "unnamed"
-                print("⚠️ Failed to sync outfit '\(name)': \(error.localizedDescription)")
             }
         }
 
@@ -62,18 +62,8 @@ extension SyncEngine {
         try await cleanupOrphanedOutfits(userId: userId)
     }
 
-    /// Deletes Supabase outfits that no longer exist locally (including soft-deleted tombstones).
-    /// Friend-visible grids read cloud state; without this, incorrectly purged tombstones left live rows.
-    func cleanupOrphanedOutfits(userId: UUID) async throws {
-        let outfitRequest: NSFetchRequest<Outfit> = Outfit.fetchRequest()
-        outfitRequest.predicate = NSPredicate(format: "userId == %@", userId.uuidString)
-        outfitRequest.propertiesToFetch = ["id"]
-        let localOutfitIds = Set(
-            try await performOnSyncContext { ctx in
-                try ctx.fetch(outfitRequest).compactMap { $0.id?.uuidString }
-            }
-        )
-
+    /// Remote outfit IDs for this user, normalized as `UUID` (avoids string case mismatches).
+    private func fetchRemoteOutfitIds(userId: UUID) async throws -> Set<UUID> {
         let supabase = await getSupabase()
         let response = try await supabase.supabaseClient.from("outfits")
             .select("id")
@@ -83,7 +73,23 @@ extension SyncEngine {
         struct OutfitIdRow: Decodable {
             let id: String
         }
-        let remoteIds = Set(try JSONDecoder().decode([OutfitIdRow].self, from: response.data).map(\.id))
+        let rows = try JSONDecoder().decode([OutfitIdRow].self, from: response.data)
+        return Set(rows.compactMap { UUID(uuidString: $0.id) })
+    }
+
+    /// Deletes Supabase outfits that no longer exist locally (including soft-deleted tombstones).
+    /// Friend-visible grids read cloud state; without this, incorrectly purged tombstones left live rows.
+    func cleanupOrphanedOutfits(userId: UUID) async throws {
+        let outfitRequest: NSFetchRequest<Outfit> = Outfit.fetchRequest()
+        outfitRequest.predicate = NSPredicate(format: "userId == %@", userId.uuidString)
+        outfitRequest.propertiesToFetch = ["id"]
+        let localOutfitIds: Set<UUID> = Set(
+            try await performOnSyncContext { ctx in
+                try ctx.fetch(outfitRequest).compactMap { $0.id }
+            }
+        )
+
+        let remoteIds = try await fetchRemoteOutfitIds(userId: userId)
         let orphanedIds = remoteIds.subtracting(localOutfitIds)
         guard !orphanedIds.isEmpty else {
             print("ℹ️ No orphaned outfits to clean up")
@@ -92,12 +98,11 @@ extension SyncEngine {
 
         print("🗑️ Found \(orphanedIds.count) orphaned outfit(s) in Supabase")
         for orphanedId in orphanedIds {
-            guard let outfitUUID = UUID(uuidString: orphanedId) else { continue }
             do {
-                try await deleteRemoteOutfit(outfitId: outfitUUID, userId: userId)
-                print("✅ Cleaned up orphaned outfit: \(orphanedId)")
+                try await deleteRemoteOutfit(outfitId: orphanedId, userId: userId)
+                print("✅ Cleaned up orphaned outfit: \(orphanedId.uuidString)")
             } catch {
-                print("⚠️ Failed to clean orphaned outfit \(orphanedId): \(error.localizedDescription)")
+                print("⚠️ Failed to clean orphaned outfit \(orphanedId.uuidString): \(error.localizedDescription)")
             }
         }
 
@@ -168,14 +173,14 @@ extension SyncEngine {
 
             let itemIds: Set<String>
             if let items = outfit.items as? Set<Item> {
-                itemIds = Set(items.compactMap { $0.id?.uuidString })
+                itemIds = Self.normalizedUUIDStringSet(items.compactMap { $0.id?.uuidString })
             } else {
                 itemIds = Set()
             }
 
             let tagIds: Set<String>
             if let tags = outfit.tags as? Set<Tag> {
-                tagIds = Set(tags.compactMap { $0.id?.uuidString })
+                tagIds = Self.normalizedUUIDStringSet(tags.compactMap { $0.id?.uuidString })
             } else {
                 tagIds = Set()
             }
@@ -232,6 +237,7 @@ extension SyncEngine {
         }
 
         var wornImageUrl: String? = nil
+        var clearedLocalWorn = false
         if let wornData = snapshot.wornImage {
             do {
                 wornImageUrl = try await (await getSupabase()).uploadOutfitWornImage(
@@ -242,6 +248,15 @@ extension SyncEngine {
                 print("✅ Uploaded outfit worn image to R2: \(wornImageUrl ?? "")")
             } catch {
                 print("⚠️ Failed to upload outfit worn image to R2: \(error.localizedDescription)")
+            }
+        } else {
+            clearedLocalWorn = true
+            // Mirror item worn delete: remove R2 object(s) and null Supabase URL.
+            do {
+                try await (await getSupabase()).clearOutfitWornImage(outfitId: outfitId, userId: userId)
+                print("🗑️ Cleared outfit worn image from R2 + Supabase")
+            } catch {
+                print("⚠️ Failed to clear outfit worn image: \(error.localizedDescription)")
             }
         }
 
@@ -271,6 +286,18 @@ extension SyncEngine {
             .upsert(outfitData, onConflict: "id")
             .execute()
         print("✅ Upserted outfit metadata: \(snapshot.name)")
+
+        // Upsert omits nil optionals — re-assert null so worn_image_url cannot stick around.
+        if clearedLocalWorn {
+            do {
+                try await (await getSupabase()).supabaseClient.from("outfits")
+                    .update(["worn_image_url": AnyJSON.null])
+                    .eq("id", value: outfitId.uuidString)
+                    .execute()
+            } catch {
+                print("⚠️ Failed to re-null outfit worn_image_url after upsert: \(error.localizedDescription)")
+            }
+        }
 
         for itemObjectID in snapshot.unsyncedItemObjectIDs {
             do {
@@ -303,7 +330,7 @@ extension SyncEngine {
 
         let existingItemIds: Set<String>
         if let decoded = try? JSONDecoder().decode([OutfitItemResponse].self, from: existingItemsResponse.data) {
-            existingItemIds = Set(decoded.compactMap { $0.itemId })
+            existingItemIds = Self.normalizedUUIDStringSet(decoded.compactMap { $0.itemId })
         } else {
             existingItemIds = Set()
         }
@@ -334,7 +361,7 @@ extension SyncEngine {
 
         let existingTagIds: Set<String>
         if let decoded = try? JSONDecoder().decode([OutfitTagResponse].self, from: existingTagsResponse.data) {
-            existingTagIds = Set(decoded.compactMap { $0.tagId })
+            existingTagIds = Self.normalizedUUIDStringSet(decoded.compactMap { $0.tagId })
         } else {
             existingTagIds = Set()
         }

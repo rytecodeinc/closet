@@ -65,4 +65,16 @@ actor SyncEngine {
             return try work(item)
         }
     }
+
+    // MARK: - UUID orphan-diff helpers
+
+    /// Lowercased canonical UUID strings for case-insensitive set diffs.
+    /// Postgres/PostgREST JSON often returns lowercase; `UUID.uuidString` is uppercase.
+    nonisolated static func normalizedUUIDStringSet<S: Sequence>(_ strings: S) -> Set<String> where S.Element == String {
+        Set(strings.compactMap { UUID(uuidString: $0)?.uuidString.lowercased() })
+    }
+
+    nonisolated static func normalizedUUIDStringSet(fromUUIDs ids: some Sequence<UUID>) -> Set<String> {
+        Set(ids.map { $0.uuidString.lowercased() })
+    }
 }

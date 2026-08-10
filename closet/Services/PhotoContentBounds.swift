@@ -82,8 +82,14 @@ enum PhotoContentBounds {
 
     static func primaryPhoto(for item: Item) -> Photo? {
         let photos = item.photos as? Set<Photo> ?? []
-        if let front = photos.first(where: { $0.type == "front" }) { return front }
-        if let primary = photos.first(where: { $0.isPrimary && ($0.type == nil || $0.type == "") }) { return primary }
+        if let front = ItemPhotoSlot.photosMatching(photos, slot: "front").first(where: {
+            ItemPhotoSlot.normalizedType($0) == "front"
+        }) {
+            return front
+        }
+        if let legacy = ItemPhotoSlot.photosMatching(photos, slot: "front").first {
+            return legacy
+        }
         return photos.first
     }
 
@@ -113,5 +119,81 @@ enum PhotoContentBounds {
         }
         let imageForBounds = UIImage(data: data) ?? sourceImage
         assignImage(imageForBounds, to: photo, data: data)
+    }
+}
+
+// MARK: - Photo slot replace / delete
+
+/// Shared front/worn replace rules. Prevents leftover primaries / empty-type fronts
+/// from surviving a replace (the stale-primary Profile image bug).
+enum ItemPhotoSlot {
+    static func normalizedType(_ photo: Photo) -> String {
+        (photo.type ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    /// Photos to remove when replacing/deleting a slot. Front also clears legacy primary /
+    /// empty-type slots so Profile/read-only detail cannot keep serving a deleted image.
+    static func photosMatching(_ photos: Set<Photo>, slot type: String) -> [Photo] {
+        let target = type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return photos.filter { photo in
+            let t = normalizedType(photo)
+            if t == target { return true }
+            if target == "front", photo.isPrimary, t.isEmpty { return true }
+            return false
+        }
+    }
+
+    static func deleteMatching(in item: Item, slot type: String, context: NSManagedObjectContext) {
+        let photos = (item.photos as? Set<Photo>) ?? []
+        for photo in photosMatching(photos, slot: type) {
+            context.delete(photo)
+        }
+        if type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "front" {
+            demoteOtherPrimaries(in: item, keeping: nil)
+        }
+    }
+
+    /// Item back photos were retired (front + worn only). Removes local rows so sync can drop R2.
+    @discardableResult
+    static func purgeRetiredBackPhotos(in item: Item, context: NSManagedObjectContext) -> Bool {
+        let before = photosMatching((item.photos as? Set<Photo>) ?? [], slot: "back")
+        guard !before.isEmpty else { return false }
+        deleteMatching(in: item, slot: "back", context: context)
+        return true
+    }
+
+    static func demoteOtherPrimaries(in item: Item, keeping kept: Photo?) {
+        let photos = (item.photos as? Set<Photo>) ?? []
+        for photo in photos where photo.isPrimary && photo.objectID != kept?.objectID {
+            photo.isPrimary = false
+        }
+    }
+
+    /// Configures a newly inserted photo for a slot after prior matches were deleted.
+    static func configureReplacedPhoto(
+        _ newPhoto: Photo,
+        on item: Item,
+        image: UIImage,
+        processedData: Data?,
+        type: String,
+        asPrimary: Bool
+    ) {
+        let now = Date()
+        if newPhoto.id == nil {
+            newPhoto.id = UUID()
+        }
+        PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: newPhoto)
+        newPhoto.thumbnailData = image.generateThumbnail()
+        newPhoto.type = type
+        newPhoto.isPrimary = asPrimary
+        newPhoto.createdAt = now
+        newPhoto.timestamp = now
+        // Drop stale remote URLs until upload finishes.
+        newPhoto.imageUrl = nil
+        newPhoto.thumbnailUrl = nil
+        newPhoto.item = item
+        if asPrimary {
+            demoteOtherPrimaries(in: item, keeping: newPhoto)
+        }
     }
 }

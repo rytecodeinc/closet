@@ -115,7 +115,6 @@ struct SetTagView: View {
                 if (item.tags as? Set<Tag>)?.contains(tag) == false {
                     cleanupTagIfOrphaned(tag)
                 }
-                SyncService.shared.syncItemIfNeeded(item)
             } catch {
                 print("❌ Failed to save tag: \(error.localizedDescription)")
             }
