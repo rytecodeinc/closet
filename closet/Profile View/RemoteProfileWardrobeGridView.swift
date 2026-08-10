@@ -17,6 +17,7 @@ struct RemoteProfileWardrobeGridView: View {
     private let profileCollapsingHeader: AnyView
     private let profileStickyPrefix: AnyView
 
+    @Environment(\.appCapabilities) private var appCapabilities
     @EnvironmentObject private var supabaseService: SupabaseService
 
     @StateObject private var itemFilterModel = ItemFilterModel()
@@ -25,8 +26,10 @@ struct RemoteProfileWardrobeGridView: View {
 
     @State private var items: [VisibleWardrobeItem] = []
     @State private var outfits: [VisibleWardrobeOutfit] = []
+    @State private var pendingViewerSuggestions: [VisibleOutfitSuggestion] = []
     @State private var isLoadingItems = false
     @State private var isLoadingOutfits = false
+    @State private var isLoadingRedressSuggestions = false
     @State private var loadError: String?
     @State private var selectedItem: VisibleWardrobeItem?
     @State private var selectedOutfit: VisibleWardrobeOutfit?
@@ -34,6 +37,7 @@ struct RemoteProfileWardrobeGridView: View {
     @FocusState private var isActionBarSearchFocused: Bool
     @State private var showItemFilter = false
     @State private var showOutfitFilter = false
+    @State private var isRedressFilterActive = false
 
     private static let pagedTabMinHeight: CGFloat = 280
     private static let tabActionsBarHeight: CGFloat = 44
@@ -52,12 +56,41 @@ struct RemoteProfileWardrobeGridView: View {
         wardrobe.wardrobeType.lowercased()
     }
 
+    private var showsRedressFilterAction: Bool {
+        guard appCapabilities.enablesFriendsAndSharing else { return false }
+        guard wardrobeType != "wishlist" else { return false }
+        return isRedressFilterActive || !pendingViewerSuggestions.isEmpty
+    }
+
     private var displayedItems: [VisibleWardrobeItem] {
         Self.filteredAndSortedItems(items, filter: itemFilterModel)
     }
 
     private var displayedOutfits: [VisibleWardrobeOutfit] {
         Self.filteredAndSortedOutfits(outfits, filter: outfitFilterModel)
+    }
+
+    /// Outgoing pending Redress from me → this user, for the active wardrobe (search / sort applied).
+    private var displayedPendingViewerSuggestions: [VisibleOutfitSuggestion] {
+        guard isRedressFilterActive else { return [] }
+        if outfitFilterModel.selectedCategory != nil {
+            return []
+        }
+        var list = pendingViewerSuggestions
+        let query = outfitFilterModel.trimmedSearchQuery
+        if !query.isEmpty {
+            list = list.filter { suggestion in
+                (suggestion.name ?? "").localizedCaseInsensitiveContains(query)
+            }
+        }
+        if outfitFilterModel.sortOrder == .oldestFirst {
+            list.reverse()
+        }
+        return list
+    }
+
+    private var hasRedressFilterContent: Bool {
+        !displayedPendingViewerSuggestions.isEmpty
     }
 
     init(
@@ -91,18 +124,26 @@ struct RemoteProfileWardrobeGridView: View {
             outfitsPage: outfitsTab,
             onRefresh: {
                 await loadGridData(forceRefresh: true)
-            }
+            },
+            snapsHeaderCollapse: true,
+            searchSessionActive: isActionBarSearchActive
         )
+        .ignoresSafeArea(.keyboard)
+        .profileSerifTypography()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: "\(wardrobe.id.uuidString)-\(refreshToken.uuidString)") {
+            isRedressFilterActive = false
             await loadGridData(forceRefresh: true)
         }
         .onAppear {
             tabBarHideState?.shouldHideTabBar = true
             hydrateGridFromCacheIfNeeded()
         }
-        .onChange(of: preferredTab) { _, _ in
+        .onChange(of: preferredTab) { _, newTab in
             dismissActionBarSearch(clearQueries: false)
+            if newTab != "Outfits", isRedressFilterActive {
+                isRedressFilterActive = false
+            }
         }
         .navigationDestination(item: $selectedItem) { item in
             ReadOnlyItemDetailView(
@@ -120,7 +161,16 @@ struct RemoteProfileWardrobeGridView: View {
                     recipientUserId: ownerUserId,
                     wardrobeId: wardrobe.id,
                     suggestionSummary: outfit,
-                    viewerRole: .submitter
+                    viewerRole: .submitter,
+                    onSuggestionResolved: {
+                        selectedOutfit = nil
+                        Task {
+                            await loadViewerPendingSuggestions(forceRefresh: true)
+                        }
+                    },
+                    counterpartUsername: ownerProfile?.username,
+                    counterpartDisplayName: ownerProfile?.displayName,
+                    backButtonTitle: ownerProfile?.username
                 )
             } else {
                 ReadOnlyOutfitDetailView(
@@ -168,6 +218,7 @@ struct RemoteProfileWardrobeGridView: View {
         }
         .pickerStyle(.segmented)
         .labelsHidden()
+        .background(SerifSegmentedPickerConfigurer())
         .padding(.horizontal, 14)
         .padding(.bottom, 8)
         .background(Color(.systemBackground))
@@ -200,6 +251,15 @@ struct RemoteProfileWardrobeGridView: View {
                     showOutfitFilter = true
                 },
                 onDismissSearch: { dismissActionBarSearch(clearQueries: true) },
+                onRedress: showsRedressFilterAction
+                    ? {
+                        isRedressFilterActive.toggle()
+                        if isRedressFilterActive {
+                            Task { await loadViewerPendingSuggestions(forceRefresh: true) }
+                        }
+                    }
+                    : nil,
+                isRedressFilterActive: isRedressFilterActive,
                 activeFilterCount: remoteOutfitActiveFilterCount,
                 searchPlaceholder: "Name, category",
                 barHeight: Self.tabActionsBarHeight
@@ -281,7 +341,9 @@ struct RemoteProfileWardrobeGridView: View {
 
     @ViewBuilder
     private var outfitsContent: some View {
-        if isLoadingOutfits && outfits.isEmpty {
+        if isRedressFilterActive {
+            redressFilterContent
+        } else if isLoadingOutfits && outfits.isEmpty {
             ProgressView("Loading outfits…")
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: Self.pagedTabMinHeight)
@@ -314,6 +376,67 @@ struct RemoteProfileWardrobeGridView: View {
             }
             .padding(.top, 2)
         }
+    }
+
+    @ViewBuilder
+    private var redressFilterContent: some View {
+        if (isLoadingRedressSuggestions || isLoadingOutfits) && !hasRedressFilterContent {
+            ProgressView("Loading Redress…")
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: Self.pagedTabMinHeight)
+        } else if !hasRedressFilterContent {
+            Text("No pending Redress outfits between you and this user")
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding()
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: Self.pagedTabMinHeight)
+        } else {
+            VStack(spacing: 0) {
+                redressSectionHeader("PENDING")
+                pendingViewerSuggestionsGrid
+            }
+        }
+    }
+
+    private func redressSectionHeader(_ title: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.profileSerif(.footnote, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Color(.systemBackground))
+    }
+
+    private var pendingViewerSuggestionsGrid: some View {
+        let suggestions = displayedPendingViewerSuggestions
+        let rowCount = (suggestions.count + 2) / 3
+        return VStack(spacing: 2) {
+            ForEach(0..<rowCount, id: \.self) { row in
+                HStack(spacing: 2) {
+                    ForEach(0..<3, id: \.self) { column in
+                        let index = row * 3 + column
+                        if index < suggestions.count {
+                            let suggestion = suggestions[index]
+                            RemotePendingRedressOutfitCell(suggestion: suggestion)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    selectedOutfit = suggestion.asGridOutfit()
+                                }
+                        } else {
+                            Color.clear
+                                .aspectRatio(1, contentMode: .fit)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.top, 2)
+        .id(suggestions.map(\.id))
     }
 
     private func hydrateGridFromCacheIfNeeded() {
@@ -359,7 +482,9 @@ struct RemoteProfileWardrobeGridView: View {
         )
 
         do {
+            async let suggestionsLoad: Void = loadViewerPendingSuggestions(forceRefresh: forceRefresh)
             let (fetchedItems, fetchedOutfits) = try await (itemsTask, outfitsTask)
+            await suggestionsLoad
             if Task.isCancelled { return }
             items = fetchedItems
             outfits = fetchedOutfits
@@ -368,10 +493,40 @@ struct RemoteProfileWardrobeGridView: View {
             return
         } catch {
             if Self.isCancellationError(error) { return }
+            await loadViewerPendingSuggestions(forceRefresh: forceRefresh)
             if items.isEmpty && outfits.isEmpty {
                 loadError = error.localizedDescription
             }
             print("⚠️ Failed to load remote wardrobe grid: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    private func loadViewerPendingSuggestions(forceRefresh: Bool) async {
+        guard appCapabilities.enablesFriendsAndSharing,
+              wardrobeType != "wishlist" else {
+            pendingViewerSuggestions = []
+            isRedressFilterActive = false
+            return
+        }
+
+        if isLoadingRedressSuggestions, !forceRefresh { return }
+        isLoadingRedressSuggestions = true
+        defer { isLoadingRedressSuggestions = false }
+
+        do {
+            let suggestions = try await supabaseService.fetchViewerOutfitSuggestions(
+                recipientId: ownerUserId,
+                wardrobeId: wardrobe.id,
+                forceRefresh: forceRefresh
+            )
+            if Task.isCancelled { return }
+            pendingViewerSuggestions = suggestions
+        } catch is CancellationError {
+            return
+        } catch {
+            if Self.isCancellationError(error) { return }
+            print("⚠️ Failed to load outgoing Redress suggestions: \(error.localizedDescription)")
         }
     }
 
@@ -561,5 +716,36 @@ private struct RemoteProfileOutfitCell: View {
             .clipped()
         }
         .aspectRatio(1, contentMode: .fit)
+    }
+}
+
+private struct RemotePendingRedressOutfitCell: View {
+    let suggestion: VisibleOutfitSuggestion
+
+    private var collageURL: URL? {
+        guard let imageUrl = suggestion.imageUrl, let url = URL(string: imageUrl) else { return nil }
+        return url
+    }
+
+    var body: some View {
+        Color(red: 247 / 255, green: 247 / 255, blue: 247 / 255)
+            .overlay {
+                if let url = collageURL {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image.resizable().scaledToFill()
+                        case .failure:
+                            Image(systemName: "photo").foregroundStyle(.secondary)
+                        default:
+                            ProgressView()
+                        }
+                    }
+                } else {
+                    Image(systemName: "photo").foregroundStyle(.secondary)
+                }
+            }
+            .clipped()
+            .aspectRatio(1, contentMode: .fit)
     }
 }

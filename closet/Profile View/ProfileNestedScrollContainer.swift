@@ -19,11 +19,16 @@ struct ProfileNestedScrollContainer<Header: View, Sticky: View, Items: View, Out
     let outfitsPage: Outfits
     /// Pull-to-refresh at the top of the profile scroll (items / outfits reload).
     var onRefresh: (() async -> Void)?
+    /// When true, header collapse snaps fully open or fully closed (no resting mid-collapse).
+    var snapsHeaderCollapse: Bool = false
+    /// Sticky search session — capture offsets on activate, restore on Cancel / dismiss.
+    var searchSessionActive: Bool = false
 
     func makeUIViewController(context: Context) -> ProfileNestedScrollViewController {
         let vc = ProfileNestedScrollViewController()
         vc.selectedTab = selectedTab
         vc.onRefresh = onRefresh
+        vc.snapsHeaderCollapse = snapsHeaderCollapse
         vc.onSelectedTabChange = { tab in
             if selectedTab != tab {
                 selectedTab = tab
@@ -35,11 +40,13 @@ struct ProfileNestedScrollContainer<Header: View, Sticky: View, Items: View, Out
             itemsPage: itemsPage,
             outfitsPage: outfitsPage
         )
+        vc.applySearchSessionActive(searchSessionActive)
         return vc
     }
 
     func updateUIViewController(_ uiViewController: ProfileNestedScrollViewController, context: Context) {
         uiViewController.onRefresh = onRefresh
+        uiViewController.snapsHeaderCollapse = snapsHeaderCollapse
         uiViewController.onSelectedTabChange = { tab in
             if selectedTab != tab {
                 selectedTab = tab
@@ -48,12 +55,20 @@ struct ProfileNestedScrollContainer<Header: View, Sticky: View, Items: View, Out
         if uiViewController.selectedTab != selectedTab {
             uiViewController.setSelectedTab(selectedTab, animated: true)
         }
+        // On search activate: capture offsets before sticky swaps / keyboard avoidance.
+        // On dismiss: schedule restore after keyboard + chrome settle.
+        let searchBecameActive = searchSessionActive && !uiViewController.isSearchSessionActiveForHost
+        uiViewController.applySearchSessionActive(searchSessionActive)
         uiViewController.update(
             header: header,
             sticky: sticky,
             itemsPage: itemsPage,
             outfitsPage: outfitsPage
         )
+        // If capture ran before child scroll views were discovered, refresh saved child offsets once.
+        if searchBecameActive {
+            uiViewController.refreshCapturedSearchChildOffsetsIfNeeded()
+        }
     }
 }
 
@@ -72,6 +87,8 @@ final class ProfileNestedScrollViewController: UIViewController {
     var selectedTab: String = "Items"
     var onSelectedTabChange: ((String) -> Void)?
     var onRefresh: (() async -> Void)?
+    /// Other-user profile: snap header like a vertical page (expanded ↔ collapsed only).
+    var snapsHeaderCollapse: Bool = false
 
     private let outerScrollView = UIScrollView()
     private let contentStack = UIStackView()
@@ -105,6 +122,18 @@ final class ProfileNestedScrollViewController: UIViewController {
     private var isUpdatingOffsets = false
     private var didScheduleScrollDiscovery = false
     private var isRefreshInFlight = false
+    private var isHeaderSnapAnimating = false
+    /// Velocity past this commits to the flicked page (points/sec).
+    private let headerSnapVelocityThreshold: CGFloat = 0.35
+
+    private var isSearchSessionActive = false
+    /// Hosted representable reads this to detect rising-edge capture timing.
+    var isSearchSessionActiveForHost: Bool { isSearchSessionActive }
+    private var hasCapturedSearchScrollOffsets = false
+    private var savedSearchOuterOffset: CGFloat?
+    private var savedSearchItemsOffset: CGFloat?
+    private var savedSearchOutfitsOffset: CGFloat?
+    private var searchOffsetRestoreWorkItem: DispatchWorkItem?
 
     private var maxOuterOffset: CGFloat {
         max(0, headerHeight)
@@ -420,6 +449,129 @@ final class ProfileNestedScrollViewController: UIViewController {
         }
     }
 
+    /// Skip no-op `contentOffset` writes — they fight the pan gesture and feel stepped on scroll-up.
+    private func pinChildScrollToTopIfNeeded(_ scrollView: UIScrollView?) {
+        guard let scrollView, abs(scrollView.contentOffset.y) > 0.5 else { return }
+        isUpdatingOffsets = true
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: 0), animated: false)
+        isUpdatingOffsets = false
+    }
+
+    /// Rising edge captures offsets before keyboard avoidance; falling edge restores after dismiss.
+    func applySearchSessionActive(_ active: Bool) {
+        if active, !isSearchSessionActive {
+            isSearchSessionActive = true
+            captureScrollOffsetsForSearch()
+        } else if !active, isSearchSessionActive {
+            isSearchSessionActive = false
+            scheduleRestoreScrollOffsetsAfterSearch()
+        }
+    }
+
+    private func captureScrollOffsetsForSearch() {
+        searchOffsetRestoreWorkItem?.cancel()
+        searchOffsetRestoreWorkItem = nil
+        discoverChildScrollViewsIfNeeded()
+        savedSearchOuterOffset = outerScrollView.contentOffset.y
+        savedSearchItemsOffset = itemsScrollView?.contentOffset.y
+        savedSearchOutfitsOffset = outfitsScrollView?.contentOffset.y
+        hasCapturedSearchScrollOffsets = true
+    }
+
+    func refreshCapturedSearchChildOffsetsIfNeeded() {
+        guard hasCapturedSearchScrollOffsets, isSearchSessionActive else { return }
+        discoverChildScrollViewsIfNeeded()
+        if savedSearchItemsOffset == nil, let y = itemsScrollView?.contentOffset.y {
+            savedSearchItemsOffset = y
+        }
+        if savedSearchOutfitsOffset == nil, let y = outfitsScrollView?.contentOffset.y {
+            savedSearchOutfitsOffset = y
+        }
+    }
+
+    private func scheduleRestoreScrollOffsetsAfterSearch() {
+        searchOffsetRestoreWorkItem?.cancel()
+        // Wait for keyboard + sticky chrome layout to settle, then put scroll back.
+        let work = DispatchWorkItem { [weak self] in
+            self?.restoreScrollOffsetsAfterSearch()
+        }
+        searchOffsetRestoreWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.28, execute: work)
+    }
+
+    private func restoreScrollOffsetsAfterSearch() {
+        guard hasCapturedSearchScrollOffsets else { return }
+        discoverChildScrollViewsIfNeeded()
+        isHeaderSnapAnimating = false
+
+        let maxY = maxOuterOffset
+        isUpdatingOffsets = true
+        if let outer = savedSearchOuterOffset {
+            let clamped = min(max(-refreshOverscrollLimit, outer), maxY)
+            outerScrollView.setContentOffset(CGPoint(x: 0, y: clamped), animated: false)
+        }
+        if let itemsY = savedSearchItemsOffset, let itemsScrollView {
+            itemsScrollView.setContentOffset(
+                CGPoint(x: itemsScrollView.contentOffset.x, y: max(0, itemsY)),
+                animated: false
+            )
+        }
+        if let outfitsY = savedSearchOutfitsOffset, let outfitsScrollView {
+            outfitsScrollView.setContentOffset(
+                CGPoint(x: outfitsScrollView.contentOffset.x, y: max(0, outfitsY)),
+                animated: false
+            )
+        }
+        isUpdatingOffsets = false
+
+        hasCapturedSearchScrollOffsets = false
+        savedSearchOuterOffset = nil
+        savedSearchItemsOffset = nil
+        savedSearchOutfitsOffset = nil
+        searchOffsetRestoreWorkItem = nil
+
+        // Re-enable normal header page-snap settle after restore.
+        settleNestedScrollOffsets()
+    }
+
+    /// Page-style header: only fully expanded (`0`) or fully collapsed (`maxY`).
+    private func pageSnappedHeaderOffset(proposedY: CGFloat, velocityY: CGFloat, maxY: CGFloat) -> CGFloat {
+        guard maxY > 1 else { return 0 }
+        // Positive velocity → content moves up → collapse. Negative → expand.
+        if velocityY > headerSnapVelocityThreshold { return maxY }
+        if velocityY < -headerSnapVelocityThreshold { return 0 }
+        return proposedY > maxY * 0.5 ? maxY : 0
+    }
+
+    private func animateOuterHeaderSnap(to y: CGFloat) {
+        let maxY = maxOuterOffset
+        let target = min(max(0, y), maxY)
+        let current = outerScrollView.contentOffset.y
+        guard abs(current - target) > 0.5 else {
+            if target < maxY - 0.5 {
+                pinChildScrollToTopIfNeeded(itemsScrollView)
+                pinChildScrollToTopIfNeeded(outfitsScrollView)
+            }
+            return
+        }
+        isHeaderSnapAnimating = true
+        isUpdatingOffsets = true
+        UIView.animate(
+            withDuration: 0.28,
+            delay: 0,
+            options: [.curveEaseOut, .allowUserInteraction]
+        ) {
+            self.outerScrollView.contentOffset = CGPoint(x: 0, y: target)
+        } completion: { _ in
+            self.isUpdatingOffsets = false
+            self.isHeaderSnapAnimating = false
+            if target < self.maxOuterOffset - 0.5 {
+                self.pinChildScrollToTopIfNeeded(self.itemsScrollView)
+                self.pinChildScrollToTopIfNeeded(self.outfitsScrollView)
+            }
+        }
+    }
+
     private static func findScrollView(in root: UIView) -> UIScrollView? {
         var candidate: UIScrollView?
         var stack: [UIView] = [root]
@@ -438,7 +590,7 @@ final class ProfileNestedScrollViewController: UIViewController {
 
 extension ProfileNestedScrollViewController: UIScrollViewDelegate {
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        guard !isUpdatingOffsets else { return }
+        guard !isUpdatingOffsets, !isHeaderSnapAnimating else { return }
 
         // Ignore UIPageViewController's horizontal scroll view.
         if let pageScroll = pageViewController.view.subviews.first(where: { $0 is UIScrollView }),
@@ -449,37 +601,132 @@ extension ProfileNestedScrollViewController: UIScrollViewDelegate {
         let maxY = maxOuterOffset
 
         if scrollView === outerScrollView {
-            if scrollView.contentOffset.y > maxY {
+            if scrollView.contentOffset.y > maxY + 0.5 {
                 isUpdatingOffsets = true
                 scrollView.contentOffset.y = maxY
                 isUpdatingOffsets = false
             }
 
+            // Only pin children that have drifted — avoid per-frame zeroing when already at top.
             if scrollView.contentOffset.y < maxY - 0.5 {
-                isUpdatingOffsets = true
-                itemsScrollView?.setContentOffset(.zero, animated: false)
-                outfitsScrollView?.setContentOffset(.zero, animated: false)
-                isUpdatingOffsets = false
+                pinChildScrollToTopIfNeeded(itemsScrollView)
+                pinChildScrollToTopIfNeeded(outfitsScrollView)
             }
             return
         }
 
         // Child tab scroll views.
-        if outerScrollView.contentOffset.y < maxY - 0.5 {
+        let outerY = outerScrollView.contentOffset.y
+        if outerY < maxY - 0.5 {
+            let childY = scrollView.contentOffset.y
+            // No movement to transfer — skip writes (main scroll-up stutter source).
+            guard abs(childY) > 0.5 else { return }
             isUpdatingOffsets = true
-            let proposed = outerScrollView.contentOffset.y + scrollView.contentOffset.y
+            let proposed = outerY + childY
             // Allow negative outer offset so pull-to-refresh can engage at the top.
             outerScrollView.contentOffset.y = min(max(-refreshOverscrollLimit, proposed), maxY)
-            scrollView.contentOffset.y = 0
+            if abs(scrollView.contentOffset.y) > 0.5 {
+                scrollView.contentOffset.y = 0
+            }
             isUpdatingOffsets = false
             return
         }
 
-        if scrollView.contentOffset.y < 0 {
+        // Header collapsed: expand only when the child pulls past its top.
+        if scrollView.contentOffset.y < -0.5 {
             isUpdatingOffsets = true
             outerScrollView.contentOffset.y = max(-refreshOverscrollLimit, maxY + scrollView.contentOffset.y)
             scrollView.contentOffset.y = 0
             isUpdatingOffsets = false
+        }
+    }
+
+    func scrollViewWillEndDragging(
+        _ scrollView: UIScrollView,
+        withVelocity velocity: CGPoint,
+        targetContentOffset: UnsafeMutablePointer<CGPoint>
+    ) {
+        guard snapsHeaderCollapse, !isHeaderSnapAnimating else { return }
+
+        // Ignore UIPageViewController's horizontal scroll view.
+        if let pageScroll = pageViewController.view.subviews.first(where: { $0 is UIScrollView }),
+           scrollView === pageScroll {
+            return
+        }
+
+        let maxY = maxOuterOffset
+        guard maxY > 1 else { return }
+
+        if scrollView === outerScrollView {
+            let proposed = targetContentOffset.pointee.y
+            // Leave pull-to-refresh overscroll alone.
+            if proposed < -0.5 || outerScrollView.contentOffset.y < -0.5 { return }
+            if proposed >= maxY - 0.5 {
+                targetContentOffset.pointee.y = maxY
+                return
+            }
+            if proposed <= 0.5, outerScrollView.contentOffset.y <= 0.5 {
+                targetContentOffset.pointee.y = 0
+                return
+            }
+            // Mid-header — snap fully open or fully closed (ItemDetail front/worn page feel).
+            let referenceY = min(max(max(proposed, outerScrollView.contentOffset.y), 0), maxY)
+            targetContentOffset.pointee.y = pageSnappedHeaderOffset(
+                proposedY: referenceY,
+                velocityY: velocity.y,
+                maxY: maxY
+            )
+            return
+        }
+
+        // Child drove header collapse/expand — snap outer; stop child mid-header settle.
+        let outerY = outerScrollView.contentOffset.y
+        let headerBetweenEnds = outerY > 0 && outerY < maxY
+        let expandingViaChildPull = outerY >= maxY - 0.5 && scrollView.contentOffset.y < -0.5
+        guard headerBetweenEnds || expandingViaChildPull else { return }
+
+        let proposedOuter = expandingViaChildPull
+            ? max(0, maxY + min(0, scrollView.contentOffset.y))
+            : outerY
+        let snap = pageSnappedHeaderOffset(proposedY: proposedOuter, velocityY: velocity.y, maxY: maxY)
+        targetContentOffset.pointee.y = 0
+        DispatchQueue.main.async { [weak self] in
+            self?.animateOuterHeaderSnap(to: snap)
+        }
+    }
+
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        guard !decelerate else { return }
+        settleNestedScrollOffsets()
+    }
+
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        settleNestedScrollOffsets()
+    }
+
+    /// One-shot sync after a gesture ends (instead of continuous dual-tab zeroing).
+    private func settleNestedScrollOffsets() {
+        guard !isUpdatingOffsets, !isHeaderSnapAnimating else { return }
+        let maxY = maxOuterOffset
+        if outerScrollView.contentOffset.y > maxY + 0.5 {
+            isUpdatingOffsets = true
+            outerScrollView.contentOffset.y = maxY
+            isUpdatingOffsets = false
+        }
+
+        if snapsHeaderCollapse, maxY > 1 {
+            let y = outerScrollView.contentOffset.y
+            // Don't fight pull-to-refresh; snap any in-between header offset.
+            if y >= 0, y > 0, y < maxY {
+                let snap = pageSnappedHeaderOffset(proposedY: y, velocityY: 0, maxY: maxY)
+                animateOuterHeaderSnap(to: snap)
+                return
+            }
+        }
+
+        if outerScrollView.contentOffset.y < maxY - 0.5 {
+            pinChildScrollToTopIfNeeded(itemsScrollView)
+            pinChildScrollToTopIfNeeded(outfitsScrollView)
         }
     }
 }

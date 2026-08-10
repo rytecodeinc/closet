@@ -13,6 +13,7 @@ struct SelectionHeader: View {
     var backgroundColor: Color = Color(UIColor.secondarySystemBackground)
     var onTitleTap: (() -> Void)? = nil
     var compactTopSpacing: Bool = false
+    @Environment(\.selectionTitleFontDesign) private var titleFontDesign
 
     var body: some View {
         VStack {
@@ -20,10 +21,10 @@ struct SelectionHeader: View {
                 Button(action: onTitleTap) {
                     HStack(spacing: 4) {
                         Text(title)
-                            .font(.headline)
+                            .font(.system(.headline, design: titleFontDesign))
                             .foregroundColor(.black)
                         Image(systemName: "chevron.down")
-                            .font(.caption)
+                            .font(.system(.caption, design: titleFontDesign))
                             .foregroundColor(.black)
                     }
                 }
@@ -32,7 +33,7 @@ struct SelectionHeader: View {
                 .frame(maxWidth: .infinity, alignment: .center)
             } else {
                 Text(title)
-                    .font(.headline)
+                    .font(.system(.headline, design: titleFontDesign))
                     .foregroundColor(.black)
                     .padding(.top)
                     .padding(.bottom)

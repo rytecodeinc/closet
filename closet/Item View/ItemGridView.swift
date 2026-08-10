@@ -32,14 +32,6 @@ private struct ProfileReadOnlyItemDestination: Hashable {
     let wardrobeType: String
 }
 
-/// Own-profile read-only outfit tap → same destination as other-user profile grid.
-private struct ProfileReadOnlyOutfitDestination: Hashable {
-    let ownerUserId: UUID
-    let wardrobeId: UUID
-    let outfit: VisibleWardrobeOutfit
-    let wardrobeType: String
-}
-
 struct ItemGridView: View {
     @ObservedObject var filterModel: ItemFilterModel
     @ObservedObject var outfitFilterModel: OutfitFilterModel
@@ -126,9 +118,9 @@ struct ItemGridView: View {
     @State private var selectedItemURIForNavigation: String?
     @State private var selectedItems: Set<Item> = []
     @State private var selectedOutfitURIForNavigation: String?
-    /// Profile read-only: same detail screens as other-user `RemoteProfileWardrobeGridView`.
+    /// Profile read-only items: same detail screen as other-user `RemoteProfileWardrobeGridView`.
+    /// Own-profile outfits use Core Data `OutfitDetailView(isReadOnly:)` instead.
     @State private var profileReadOnlyItemDestination: ProfileReadOnlyItemDestination?
-    @State private var profileReadOnlyOutfitDestination: ProfileReadOnlyOutfitDestination?
     @State private var selectedOutfits: Set<Outfit> = []
     @State private var showWardrobeSelectionSheet = false
     @State private var showWardrobeSelectionConfirmAlert = false
@@ -275,9 +267,8 @@ struct ItemGridView: View {
     }
 
     private var showsTabActionsBar: Bool {
-        if isInSelectionMode { return false }
-        // Closet / Wishlist / Profile: keep Filter/Sort/Search visible (no hide-on-scroll).
-        return true
+        // Closet / Wishlist / Profile: keep Filter/Sort/Search visible (disabled in selection mode).
+        true
     }
 
     private var shouldHideTabBar: Bool {
@@ -291,7 +282,6 @@ struct ItemGridView: View {
         selectedItemURIForNavigation != nil
             || selectedOutfitURIForNavigation != nil
             || profileReadOnlyItemDestination != nil
-            || profileReadOnlyOutfitDestination != nil
             || selectedPendingRedress != nil
     }
 
@@ -334,7 +324,8 @@ struct ItemGridView: View {
             .navigationDestination(item: $selectedOutfitURIForNavigation) { uriString in
                 Group {
                     if let outfit = managedOutfit(forURI: uriString) {
-                        OutfitDetailView(outfit: outfit, isReadOnly: false)
+                        // Closet: editable. Own Profile (`isReadOnly`): Core Data read-only detail.
+                        OutfitDetailView(outfit: outfit, isReadOnly: isReadOnly)
                             .onAppear { selectedOutfitURIForNavigation = nil }
                     } else {
                         EmptyView()
@@ -354,16 +345,6 @@ struct ItemGridView: View {
                     tabBarHideState: tabBarHideState
                 )
             }
-            .navigationDestination(item: $profileReadOnlyOutfitDestination) { destination in
-                ReadOnlyOutfitDetailView(
-                    ownerUserId: destination.ownerUserId,
-                    wardrobeId: destination.wardrobeId,
-                    outfitSummary: destination.outfit,
-                    wardrobeType: destination.wardrobeType,
-                    ownerProfile: ownProfileForReadOnlyDetail(userId: destination.ownerUserId),
-                    tabBarHideState: tabBarHideState
-                )
-            }
             .navigationDestination(item: $selectedPendingRedress) { destination in
                 PendingOutfitDetailView(
                     recipientUserId: destination.recipientUserId,
@@ -372,7 +353,10 @@ struct ItemGridView: View {
                     viewerRole: destination.viewerRole,
                     onSuggestionResolved: {
                         scheduleOutfitsRefresh(forceRedressRefresh: true)
-                    }
+                    },
+                    backButtonTitle: showsProfilePendingRedressSuggestions
+                        ? (supabaseService.cachedUsername ?? "Profile")
+                        : nil
                 )
             }
             .onChange(of: isShowingDetailNavigation) { _, isActive in
@@ -445,6 +429,7 @@ struct ItemGridView: View {
 
             if showsTabActionsBar {
                 tabActionsBar
+                    .disabled(isInSelectionMode)
             }
 
             TabView(selection: $selectedTab) {
@@ -466,7 +451,8 @@ struct ItemGridView: View {
             outfitsPage: outfitsTab,
             onRefresh: {
                 await refreshProfileItemsAndOutfits()
-            }
+            },
+            snapsHeaderCollapse: true
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -487,6 +473,19 @@ struct ItemGridView: View {
     }
 
     @ViewBuilder
+    private func closetPullToRefreshIfNeeded<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        if usesProfileUnifiedScroll {
+            // Profile nested scroll owns pull-to-refresh via `onRefresh`.
+            content()
+        } else {
+            content()
+                .refreshable {
+                    await refreshProfileItemsAndOutfits()
+                }
+        }
+    }
+
+    @ViewBuilder
     private var profileStickyChrome: some View {
         VStack(spacing: 0) {
             profileStickyPrefix
@@ -499,6 +498,7 @@ struct ItemGridView: View {
 
             if showsTabActionsBar {
                 tabActionsBar
+                    .disabled(isInSelectionMode)
             }
         }
         .background(Color(.systemBackground))
@@ -924,7 +924,7 @@ struct ItemGridView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Are you sure you want to delete \(selectedItems.count) item\(selectedItems.count == 1 ? "" : "s")? This action cannot be undone.")
+                Text(deleteSelectedItemsAlertMessage)
             }
             .alert("Delete Outfits", isPresented: $showOutfitDeleteConfirmation) {
                 Button("Delete", role: .destructive) {
@@ -1307,19 +1307,35 @@ struct ItemGridView: View {
     }
 
     private var itemsTab: some View {
-        ScrollView(showsIndicators: false) {
-            if isItemsTabLoading {
-                closetContentLoadingView
+        closetPullToRefreshIfNeeded {
+            ScrollView(showsIndicators: false) {
+                if isItemsTabLoading {
+                    closetContentLoadingView
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: 240)
+                } else if closetItems.isEmpty {
+                    Group {
+                        if hasActiveItemFiltersOrSearch {
+                            EmptyOutfitStateView(
+                                title: "No matching items",
+                                message: "Try adjusting your filters or search.",
+                                systemImage: "line.3.horizontal.decrease.circle"
+                            )
+                        } else {
+                            EmptyItemStateView(wardrobe: selectedWardrobe)
+                        }
+                    }
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: 240)
-            } else if closetItems.isEmpty {
-                EmptyItemStateView(wardrobe: selectedWardrobe)
-                    .frame(maxWidth: .infinity)
-                    .frame(minHeight: 240)
-            } else {
-                itemsLazyGrid
+                } else {
+                    itemsLazyGrid
+                }
             }
         }
+    }
+
+    private var hasActiveItemFiltersOrSearch: Bool {
+        filterModel.activeFilterCount > 0 || !filterModel.trimmedSearchQuery.isEmpty
     }
 
     private var itemsLazyGrid: some View {
@@ -1466,26 +1482,6 @@ struct ItemGridView: View {
         )
     }
 
-    private func openProfileReadOnlyOutfitDetail(_ outfit: Outfit) {
-        guard let ownerUserId = authSession.userId,
-              let wardrobeId = selectedWardrobe.id,
-              let outfitId = outfit.id else { return }
-        let type = wardrobeType.lowercased() == "wishlist" ? "wishlist" : "closet"
-        tabBarHideState.shouldHideTabBar = true
-        profileReadOnlyOutfitDestination = ProfileReadOnlyOutfitDestination(
-            ownerUserId: ownerUserId,
-            wardrobeId: wardrobeId,
-            outfit: VisibleWardrobeOutfit(
-                id: outfitId,
-                name: outfit.name,
-                imageUrl: nil,
-                wornImageUrl: nil,
-                createdAt: outfit.createdAt ?? outfit.timestamp
-            ),
-            wardrobeType: type
-        )
-    }
-
     private func ownProfileForReadOnlyDetail(userId: UUID) -> PublicUserProfile {
         PublicUserProfile(
             userId: userId,
@@ -1508,12 +1504,10 @@ struct ItemGridView: View {
                 isInSelectionMode = false
             }
         } else {
-            // Navigate to detail view
             if isReadOnly {
-                openProfileReadOnlyOutfitDetail(outfit)
-            } else {
-                selectedOutfitURIForNavigation = outfit.objectID.uriRepresentation().absoluteString
+                tabBarHideState.shouldHideTabBar = true
             }
+            selectedOutfitURIForNavigation = outfit.objectID.uriRepresentation().absoluteString
         }
     }
     
@@ -2105,9 +2099,14 @@ struct ItemGridView: View {
 
     private func deleteSelectedItems() {
         guard !selectedItems.isEmpty else { return }
-        
-        let sanitizerResult = OutfitSanitizer.sanitizeOutfitsAfterDeleting(deletedItems: selectedItems, in: viewContext)
-        let removedFromOutfitsCount = sanitizerResult.affectedOutfits.count
+
+        let itemCount = selectedItems.count
+        let outfitsToDelete = outfitsContainingSelectedItems()
+        let deletedOutfitsCount = outfitsToDelete.count
+
+        for outfit in outfitsToDelete {
+            softDelete(outfit)
+        }
 
         // Store brands before deletion to check if cleanup is needed
         var brandsToCheck: Set<Brand> = []
@@ -2127,7 +2126,7 @@ struct ItemGridView: View {
         
         do {
             try viewContext.save()
-            print("✅ Deleted \(selectedItems.count) items")
+            print("✅ Deleted \(itemCount) items and \(deletedOutfitsCount) outfits")
             
             // Trigger sync for all soft-deleted items
             for item in selectedItems {
@@ -2139,17 +2138,20 @@ struct ItemGridView: View {
                 SyncService.shared.syncItemIfNeeded(item)
             }
 
-            // Sync outfits that were sanitized (after the single save)
-            for outfit in sanitizerResult.affectedOutfits {
+            for outfit in outfitsToDelete {
                 SyncService.shared.syncOutfitIfNeeded(outfit)
             }
 
+            let toastMessage: String
+            if deletedOutfitsCount == 0 {
+                toastMessage = "Deleted \(itemCount) item\(itemCount == 1 ? "" : "s")."
+            } else {
+                toastMessage = "Deleted \(itemCount) item\(itemCount == 1 ? "" : "s") and \(deletedOutfitsCount) outfit\(deletedOutfitsCount == 1 ? "" : "s")."
+            }
             NotificationCenter.default.post(
                 name: Notification.Name("Closet.ItemDeletionToast"),
                 object: nil,
-                userInfo: [
-                    "message": "Deleted \(selectedItems.count) item\(selectedItems.count == 1 ? "" : "s"). Removed from \(removedFromOutfitsCount) outfit\(removedFromOutfitsCount == 1 ? "" : "s")."
-                ]
+                userInfo: ["message": toastMessage]
             )
             
             // Cleanup orphaned brands
@@ -2157,13 +2159,46 @@ struct ItemGridView: View {
                 cleanupBrandIfOrphaned(brand)
             }
             
-            // Exit selection mode and refresh items after deletion
+            // Exit selection mode and refresh after deletion
             isInSelectionMode = false
             selectedItems.removeAll()
             scheduleItemsFetch()
+            scheduleOutfitsRefresh()
         } catch {
             print("❌ Failed to delete items: \(error.localizedDescription)")
         }
+    }
+
+    /// Outfits that include any of the currently selected items (non–soft-deleted).
+    private func outfitsContainingSelectedItems() -> [Outfit] {
+        guard !selectedItems.isEmpty else { return [] }
+        guard let userId = authSession.userId?.uuidString, !userId.isEmpty else { return [] }
+
+        let request: NSFetchRequest<Outfit> = Outfit.fetchRequest()
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            NSPredicate(format: "ANY items IN %@", selectedItems),
+            NSPredicate(format: "userId == %@", userId),
+            NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil"),
+        ])
+
+        do {
+            return try viewContext.fetch(request)
+        } catch {
+            print("❌ Failed to fetch outfits containing selected items: \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    private var deleteSelectedItemsAlertMessage: String {
+        let itemCount = selectedItems.count
+        let itemPhrase = "\(itemCount) item\(itemCount == 1 ? "" : "s")"
+        let outfitCount = outfitsContainingSelectedItems().count
+        if outfitCount == 0 {
+            return "Are you sure you want to delete \(itemPhrase)? This action cannot be undone."
+        }
+        let outfitPhrase = "\(outfitCount) outfit\(outfitCount == 1 ? "" : "s")"
+        let containingPhrase = itemCount == 1 ? "that item" : "those items"
+        return "Are you sure you want to delete \(itemPhrase)? This will also delete \(outfitPhrase) containing \(containingPhrase). This action cannot be undone."
     }
 
     private func showToast(_ message: String) {
@@ -2888,9 +2923,19 @@ struct ItemGridView: View {
                 message: "Nobody has redressed you yet! Connect with friends and invite them to redress you.",
                 systemImage: "person.2"
             )
+        } else if hasActiveOutfitFiltersOrSearch {
+            EmptyOutfitStateView(
+                title: "No matching outfits",
+                message: "Try adjusting your filters or search.",
+                systemImage: "line.3.horizontal.decrease.circle"
+            )
         } else {
             EmptyOutfitStateView()
         }
+    }
+
+    private var hasActiveOutfitFiltersOrSearch: Bool {
+        outfitFilterModel.activeFilterCount > 0 || !outfitFilterModel.trimmedSearchQuery.isEmpty
     }
 
     private var hasRedressFilterContent: Bool {
@@ -2898,25 +2943,27 @@ struct ItemGridView: View {
     }
 
     private var outfitsTab: some View {
-        ScrollView(showsIndicators: false) {
-            if isOutfitsTabLoading || (isRedressFilterActive && isRedressLoading && !hasRedressFilterContent) {
-                closetContentLoadingView
-                    .frame(maxWidth: .infinity)
-                    .frame(minHeight: 240)
-            } else if isRedressFilterActive {
-                if !hasRedressFilterContent {
+        closetPullToRefreshIfNeeded {
+            ScrollView(showsIndicators: false) {
+                if isOutfitsTabLoading || (isRedressFilterActive && isRedressLoading && !hasRedressFilterContent) {
+                    closetContentLoadingView
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: 240)
+                } else if isRedressFilterActive {
+                    if !hasRedressFilterContent {
+                        outfitsEmptyState
+                            .frame(maxWidth: .infinity)
+                            .frame(minHeight: 240)
+                    } else {
+                        redressFilterContent
+                    }
+                } else if outfits.isEmpty {
                     outfitsEmptyState
                         .frame(maxWidth: .infinity)
                         .frame(minHeight: 240)
                 } else {
-                    redressFilterContent
+                    outfitsLazyGrid
                 }
-            } else if outfits.isEmpty {
-                outfitsEmptyState
-                    .frame(maxWidth: .infinity)
-                    .frame(minHeight: 240)
-            } else {
-                outfitsLazyGrid
             }
         }
     }

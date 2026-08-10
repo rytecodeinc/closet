@@ -16,6 +16,7 @@ struct ItemDetailView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appCapabilities) private var appCapabilities
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var supabaseService: SupabaseService
     @EnvironmentObject private var authSession: AuthSession
     
@@ -26,6 +27,7 @@ struct ItemDetailView: View {
     @State private var isAttributesExpanded = true
     @State private var isSetsExpanded = false
     @State private var isOutfitsExpanded = false
+    @State private var isLinksExpanded = false
     @State private var isHistoryExpanded = false
     
     private let currencySymbol = Locale.current.currencySymbol ?? "$"
@@ -35,7 +37,9 @@ struct ItemDetailView: View {
     @State private var selectedUIImage: UIImage?
     @State private var pendingImageType: ImageType? // Track which image type is being added/edited
     
-    @State private var isCropperPresented = false
+    @State private var cropperDestination: CropperDestination? = nil
+    /// Stays true for the whole crop push (even after the nav trigger is cleared onAppear).
+    @State private var isCropEditorPresented = false
     @State private var imageToEdit: UIImage? // Store the image to edit directly
     @State private var cropEditorSessionID = UUID()
     @State private var showShareSheet = false
@@ -119,10 +123,13 @@ struct ItemDetailView: View {
         return closets.first ?? set.first
     }
     
-    enum ImageType {
+    enum ImageType: Hashable {
         case front
-        case back
         case worn
+    }
+
+    private enum CropperDestination: Hashable {
+        case cropper(ImageType)
     }
 
     private var pairsSectionHeaderIconName: String {
@@ -175,6 +182,14 @@ struct ItemDetailView: View {
         (item.wardrobes as? Set<Wardrobe>)?.contains { $0.type?.lowercased() == "wishlist" } ?? false
     }
 
+    private var itemPastWornEventCount: Int {
+        pastWornEvents(for: item).count
+    }
+
+    private var showsCalendarActions: Bool {
+        !isReadOnly && !isWishlistItem && itemPastWornEventCount > 0
+    }
+
     private func pairedItemIsWishlistMember(_ pairedItem: Item) -> Bool {
         (pairedItem.wardrobes as? Set<Wardrobe>)?.contains { $0.type?.lowercased() == "wishlist" } ?? false
     }
@@ -220,7 +235,63 @@ struct ItemDetailView: View {
         let uri = item.objectID.uriRepresentation().absoluteString
         createOutfitSessionID = UUID()
         print("🧭 [ItemDetailView] Create Outfit tapped. itemURI=\(uri) sessionID=\(createOutfitSessionID.uuidString)")
-        createOutfitNavigation = .create
+        // Defer push so the List header tap is not held by the system gesture gate.
+        DispatchQueue.main.async {
+            createOutfitNavigation = .create
+        }
+    }
+
+    private var namedItemLinks: [Link] {
+        ((item.links as? Set<Link>) ?? [])
+            .filter { !($0.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .sorted { ($0.name ?? "") < ($1.name ?? "") }
+    }
+
+    private func namedItemLinks(for type: ItemLinkType) -> [Link] {
+        namedItemLinks.filter { $0.itemLinkType == type }
+    }
+
+    private var itemLinkCount: Int { namedItemLinks.count }
+
+    private var linksSectionHeaderIconName: String {
+        isLinksExpanded ? "minus" : "plus"
+    }
+
+    private func handleLinksSectionHeaderTap() {
+        withAnimation {
+            isLinksExpanded.toggle()
+        }
+    }
+
+    private let linksChevronColumnWidth: CGFloat = 20
+
+    @ViewBuilder
+    private var linksSectionContent: some View {
+        HStack(alignment: .center, spacing: 2) {
+            ItemLinkTypedSectionsView(
+                linksForType: namedItemLinks(for:)
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if !isReadOnly {
+                Button {
+                    attributesSheet = .link
+                } label: {
+                    Color.clear
+                        .overlay {
+                            Image(systemName: "chevron.right")
+                                .foregroundColor(.gray)
+                                .font(.caption)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .frame(width: linksChevronColumnWidth)
+                .frame(maxHeight: .infinity, alignment: .center)
+                .accessibilityLabel("Edit links")
+            }
+        }
     }
 
     @ViewBuilder
@@ -241,6 +312,15 @@ struct ItemDetailView: View {
         isHistoryExpanded ? "minus" : "plus"
     }
 
+    private var historySectionBottomPad: some View {
+        Color.clear
+            .frame(height: 4)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
+            .environment(\.defaultMinListRowHeight, 1)
+    }
+
     private func initializeSelectedImageType() {
         selectedImageType = .front
         heroCarouselPage = 0
@@ -254,23 +334,11 @@ struct ItemDetailView: View {
         case .worn:
             selectedImageType = .worn
             heroCarouselPage = 1
-        case .back:
-            selectedImageType = .back
-            heroCarouselPage = 0
         }
     }
 
-    /// Hero carousel only has front + worn; map `.back` (e.g. after fullscreen swipe) back to a valid slot.
-    private func syncHeroCarouselAfterFullscreenOrBackSelection() {
-        switch selectedImageType {
-        case .front:
-            heroCarouselPage = 0
-        case .worn:
-            heroCarouselPage = 1
-        case .back:
-            heroCarouselPage = 0
-            selectedImageType = .front
-        }
+    private func syncHeroCarouselWithSelectedImageType() {
+        heroCarouselPage = (selectedImageType == .worn) ? 1 : 0
     }
 
     var body: some View {
@@ -301,10 +369,14 @@ struct ItemDetailView: View {
                                     _ = item.photos
                                 }
                             ),
-                            favoriteSelection: isReadOnly ? isLikedByMe : item.isFavorite,
+                            favoriteSelection: isViewingOwnContent ? item.isFavorite : isLikedByMe,
                             likeCount: isReadOnly ? likeCount : nil,
+                            calendarCount: showsCalendarActions
+                                ? itemPastWornEventCount
+                                : nil,
                             showsLikeButton: true,
                             isLikeInteractive: isReadOnly ? canToggleSocialLike : true,
+                            showsCalendarButton: showsCalendarActions,
                             showsShareButton: appCapabilities.enablesFriendsAndSharing,
                             showsMoveToClosetButton: !isReadOnly && appCapabilities.showsWishlistTab && isWishlistItem,
                             showsWornSegment: getImage(for: .worn) != nil || !isReadOnly,
@@ -317,6 +389,7 @@ struct ItemDetailView: View {
                                     }
                                 }
                             },
+                            onCalendar: {},
                             onShare: { showShareFriendsSheet = true },
                             onMoveToCloset: { showAddToClosetConfirmation = true }
                         )
@@ -333,7 +406,8 @@ struct ItemDetailView: View {
                                 AttributesSectionView(
                                     item: item,
                                     activeSheet: $attributesSheet,
-                                    isReadOnly: isReadOnly
+                                    isReadOnly: isReadOnly,
+                                    includeLinks: false
                                 )
                                     .transition(.opacity.combined(with: .slide))
                                     .listRowInsets(EdgeInsets(top: 05, leading: 20, bottom: 05, trailing: 20))
@@ -354,6 +428,7 @@ struct ItemDetailView: View {
                                 }
                             }
                         }
+                        .listSectionSpacing(4)
                     }
                     //  .listRowInsets(EdgeInsets(.zero))
                     
@@ -378,7 +453,7 @@ struct ItemDetailView: View {
                         }
                     }
                     .listRowInsets(EdgeInsets(.zero))
-                    .listSectionSpacing(0)
+                    .listSectionSpacing(4)
                     .padding(.horizontal)
                     }
 
@@ -389,22 +464,53 @@ struct ItemDetailView: View {
                                 .transition(.opacity.combined(with: .slide))
                         }
                     } header: {
-                        HStack {
-                            Text("OUTFITS")
-                                .fontWeight(.semibold)
-                            Spacer()
-                            Image(systemName: outfitsSectionHeaderIconName)
-                                .foregroundColor(.gray)
-                                .font(.caption)
-                        }
-                        .contentShape(Rectangle())
-                        .onTapGesture {
+                        Button {
                             handleOutfitsSectionHeaderTap()
+                        } label: {
+                            HStack {
+                                Text("OUTFITS")
+                                    .fontWeight(.semibold)
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                                Image(systemName: outfitsSectionHeaderIconName)
+                                    .foregroundColor(.gray)
+                                    .font(.caption)
+                            }
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
                     }
                     .listRowInsets(EdgeInsets(.zero))
-                    .listSectionSpacing(0)
+                    .listSectionSpacing(4)
                     .padding(.horizontal)
+                    }
+
+                    if !isReadOnly || itemLinkCount > 0 {
+                        Section {
+                            if isLinksExpanded {
+                                linksSectionContent
+                                    .transition(.opacity.combined(with: .slide))
+                            }
+                        } header: {
+                            Button {
+                                handleLinksSectionHeaderTap()
+                            } label: {
+                                HStack {
+                                    Text("LINKS")
+                                        .fontWeight(.semibold)
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                    Image(systemName: linksSectionHeaderIconName)
+                                        .foregroundColor(.gray)
+                                        .font(.caption)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .listRowInsets(EdgeInsets(.zero))
+                        .listSectionSpacing(4)
+                        .padding(.horizontal)
                     }
 
                     if !isReadOnly || !itemHistoryEntries.isEmpty {
@@ -413,6 +519,7 @@ struct ItemDetailView: View {
                             historyRows
                                 .transition(.opacity.combined(with: .slide))
                         }
+                        historySectionBottomPad
                     } header: {
                         HStack {
                             Text("HISTORY")
@@ -430,21 +537,27 @@ struct ItemDetailView: View {
                         }
                     }
                     .listRowInsets(EdgeInsets(.zero))
-                    .listSectionSpacing(0)
+                    .listSectionSpacing(4)
                     .padding(.horizontal)
                     }
                 }
                 .listStyle(.plain)
-               // .listSectionSpacing(.compact)
+                .scrollIndicators(.hidden)
             }
         }
         .sheet(item: $attributesSheet) { sheet in
             sheet.destination(for: item, isReadOnly: isReadOnly)
+                .onDisappear {
+                    if sheet == .link, itemLinkCount > 0 {
+                        isLinksExpanded = true
+                    }
+                }
         }
         .onAppear {
             fetchOutfits()
             if !isReadOnly {
                 viewContext.refresh(item, mergeChanges: true)
+                purgeRetiredBackPhotosIfNeeded()
             }
             // Always land on front first; a pending worn selection re-applies after (and async).
             heroCarouselPage = 0
@@ -454,12 +567,14 @@ struct ItemDetailView: View {
                 // Match ReadOnlyItemDetailView: attributes expanded; secondary sections collapsed.
                 isSetsExpanded = false
                 isOutfitsExpanded = false
+                isLinksExpanded = false
                 isHistoryExpanded = false
             } else {
                 isSetsExpanded = !pairedItems.isEmpty
                 if outfits.isEmpty {
                     isOutfitsExpanded = false
                 }
+                isLinksExpanded = itemLinkCount > 0
             }
         }
         .task(id: item.id) {
@@ -468,9 +583,16 @@ struct ItemDetailView: View {
         }
         .onDisappear {
             guard !isCoveringModalPresented else { return }
+            // Attribute sheets save locally on dismiss; push once when leaving detail.
+            syncPendingItemChangesIfNeeded()
             pendingSelectWornHero = false
             heroCarouselPage = 0
             selectedImageType = .front
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // Safety net if the app backgrounds before popping detail.
+            guard phase == .background else { return }
+            syncPendingItemChangesIfNeeded()
         }
         .onChange(of: authSession.userId) { _, _ in
             fetchOutfits()
@@ -487,6 +609,13 @@ struct ItemDetailView: View {
                 isOutfitsExpanded = false
             } else if oldCount == 0 && newCount > 0 {
                 isOutfitsExpanded = true
+            }
+        }
+        .onChange(of: itemLinkCount) { oldCount, newCount in
+            if newCount == 0 {
+                isLinksExpanded = false
+            } else if oldCount == 0 && newCount > 0 {
+                isLinksExpanded = true
             }
         }
         .toolbar {
@@ -559,6 +688,50 @@ struct ItemDetailView: View {
                 }
             }
         }
+        .navigationDestination(item: $cropperDestination) { destination in
+            // Capture type + image immediately; do not put UIImage in the nav item.
+            // Clear the item onAppear (same as createOutfit / paired item) to avoid
+            // SwiftUI re-evaluating this destination in a loop and freezing.
+            let imageType: ImageType = {
+                if case .cropper(let type) = destination { return type }
+                return .front
+            }()
+            let capturedImage = imageToEdit
+            Group {
+                if let capturedImage {
+                    ImageCropperView(
+                        originalImage: capturedImage,
+                        onCrop: { croppedImage in
+                            switch imageType {
+                            case .front:
+                                replaceFrontImage(with: croppedImage)
+                            case .worn:
+                                replaceWornImage(with: croppedImage)
+                            }
+                            pendingImageType = nil
+                            imageToEdit = nil
+                        },
+                        isEditing: true,
+                        showsCancelButton: false,
+                        title: "Edit",
+                        confirmsDiscardBeforeDismiss: true,
+                        backButtonTitle: "Item Details"
+                    )
+                    .id(cropEditorSessionID)
+                } else {
+                    Color.clear
+                }
+            }
+            .onAppear {
+                cropperDestination = nil
+            }
+            .onDisappear {
+                isCropEditorPresented = false
+                applyPendingWornHeroSelectionIfNeeded(clearAfterApplying: false)
+                pendingImageType = nil
+                imageToEdit = nil
+            }
+        }
     }
 
     private var itemDetailWithSheets: some View {
@@ -575,44 +748,12 @@ struct ItemDetailView: View {
                     switch imageType {
                     case .front:
                         replaceFrontImage(with: newImage)
-                    case .back:
-                        replaceBackImage(with: newImage)
                     case .worn:
                         replaceWornImage(with: newImage)
                     }
                     pendingImageType = nil
                 }
                 isImagePickerPresented = false
-            }
-        }
-        .sheet(isPresented: $isCropperPresented, onDismiss: {
-            applyPendingWornHeroSelectionIfNeeded(clearAfterApplying: false)
-        }) {
-            Group {
-                if let imageType = pendingImageType, let image = imageToEdit {
-                    NavigationView {
-                        ImageCropperView(
-                            originalImage: image,
-                            onCrop: { croppedImage in
-                                switch imageType {
-                                case .front:
-                                    replaceFrontImage(with: croppedImage)
-                                case .back:
-                                    replaceBackImage(with: croppedImage)
-                                case .worn:
-                                    replaceWornImage(with: croppedImage)
-                                }
-                                pendingImageType = nil
-                                imageToEdit = nil
-                            },
-                            isEditing: true
-                        )
-                        .id(cropEditorSessionID)
-                    }
-                } else {
-                    Text("No image found to edit.")
-                        .padding()
-                }
             }
         }
         .sheet(isPresented: $showShareSelectionSheet, onDismiss: handleShareSelectionSheetDismissed) {
@@ -629,7 +770,7 @@ struct ItemDetailView: View {
         }
         .onChange(of: isImageFullScreen) { _, isOpen in
             if !isOpen {
-                syncHeroCarouselAfterFullscreenOrBackSelection()
+                syncHeroCarouselWithSelectedImageType()
             }
         }
         .onChange(of: showShareSheet) { _, isShowing in
@@ -766,8 +907,16 @@ struct ItemDetailView: View {
             get: { appCapabilities.enablesFriendsAndSharing && showShareFriendsSheet },
             set: { showShareFriendsSheet = $0 }
         )) {
-            ShareItemFriendsSheet()
+            if let itemId = item.id {
+                ShareItemFriendsSheet(targetId: itemId) {
+                    showAddToClosetToast(message: "Sent")
+                }
                 .environmentObject(supabaseService)
+            } else {
+                Text("This item isn’t ready to share yet.")
+                    .foregroundStyle(.secondary)
+                    .padding()
+            }
         }
     }
     
@@ -776,30 +925,6 @@ struct ItemDetailView: View {
 
     // MARK: - Replace Image Functions
 
-    /// Normalized photo slot (`front` / `back` / `worn` / empty).
-    private func normalizedPhotoType(_ photo: Photo) -> String {
-        (photo.type ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    }
-
-    /// Photos to remove when replacing/deleting a slot. Front also clears legacy primary /
-    /// empty-type slots so Profile/read-only detail cannot keep serving a deleted image.
-    private func photosMatchingSlot(_ photos: Set<Photo>, slot type: String) -> [Photo] {
-        let target = type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return photos.filter { photo in
-            let t = normalizedPhotoType(photo)
-            if t == target { return true }
-            if target == "front", photo.isPrimary, t.isEmpty { return true }
-            return false
-        }
-    }
-
-    private func demoteOtherPrimaryPhotos(keeping kept: Photo?) {
-        let photos = (item.photos as? Set<Photo>) ?? []
-        for photo in photos where photo.isPrimary && photo.objectID != kept?.objectID {
-            photo.isPrimary = false
-        }
-    }
-
     private func configureReplacedPhoto(
         _ newPhoto: Photo,
         with image: UIImage,
@@ -807,29 +932,18 @@ struct ItemDetailView: View {
         type: String,
         asPrimary: Bool
     ) {
-        let now = Date()
-        newPhoto.id = UUID()
-        PhotoContentBounds.assignProcessedData(processedData, sourceImage: image, to: newPhoto)
-        newPhoto.thumbnailData = image.generateThumbnail()
-        newPhoto.type = type
-        newPhoto.isPrimary = asPrimary
-        newPhoto.createdAt = now
-        newPhoto.timestamp = now
-        // Drop stale remote URLs until upload finishes — avoids read-only detail
-        // briefly resolving the previous CDN object via leftover metadata.
-        newPhoto.imageUrl = nil
-        newPhoto.thumbnailUrl = nil
-        newPhoto.item = item
-        if asPrimary {
-            demoteOtherPrimaryPhotos(keeping: newPhoto)
-        }
+        ItemPhotoSlot.configureReplacedPhoto(
+            newPhoto,
+            on: item,
+            image: image,
+            processedData: processedData,
+            type: type,
+            asPrimary: asPrimary
+        )
     }
 
     private func replaceFrontImage(with image: UIImage) {
-        let photos = item.photos as? Set<Photo> ?? []
-        for existing in photosMatchingSlot(photos, slot: "front") {
-            viewContext.delete(existing)
-        }
+        ItemPhotoSlot.deleteMatching(in: item, slot: "front", context: viewContext)
 
         let processedData = image.processForStorage()
         let newPhoto = Photo(context: viewContext)
@@ -848,40 +962,26 @@ struct ItemDetailView: View {
             for outfit in outfitsToSync {
                 SyncService.shared.syncOutfitIfNeeded(outfit)
             }
-            SyncService.shared.syncItemIfNeeded(item)
+            SyncService.shared.syncItemPhotosIfNeeded(item)
         } catch {
             print("❌ Failed to save new photo: \(error.localizedDescription)")
         }
     }
     
-    private func replaceBackImage(with image: UIImage) {
-        let photos = item.photos as? Set<Photo> ?? []
-        for existing in photosMatchingSlot(photos, slot: "back") {
-            viewContext.delete(existing)
-        }
-
-        let processedData = image.processForStorage()
-        let newPhoto = Photo(context: viewContext)
-        configureReplacedPhoto(newPhoto, with: image, processedData: processedData, type: "back", asPrimary: false)
-
+    private func purgeRetiredBackPhotosIfNeeded() {
+        guard ItemPhotoSlot.purgeRetiredBackPhotos(in: item, context: viewContext) else { return }
         setUpdatedAt(item)
-
         do {
             try viewContext.save()
-            print("✅ Replaced back photo.")
-            selectedImageType = .front
-            heroCarouselPage = 0
-            SyncService.shared.syncItemIfNeeded(item)
+            SyncService.shared.syncItemPhotosIfNeeded(item)
+            print("🧹 Purged retired item back photo(s)")
         } catch {
-            print("❌ Failed to save new photo: \(error.localizedDescription)")
+            print("⚠️ Failed to purge retired back photos: \(error.localizedDescription)")
         }
     }
-    
+
     private func replaceWornImage(with image: UIImage) {
-        let photos = item.photos as? Set<Photo> ?? []
-        for existing in photosMatchingSlot(photos, slot: "worn") {
-            viewContext.delete(existing)
-        }
+        ItemPhotoSlot.deleteMatching(in: item, slot: "worn", context: viewContext)
 
         let processedData = image.processForStorage()
         let newPhoto = Photo(context: viewContext)
@@ -899,7 +999,7 @@ struct ItemDetailView: View {
                 selectHeroImageSlot(.worn)
                 pendingSelectWornHero = false
             }
-            SyncService.shared.syncItemIfNeeded(item)
+            SyncService.shared.syncItemPhotosIfNeeded(item)
         } catch {
             print("❌ Failed to save new photo: \(error.localizedDescription)")
         }
@@ -926,7 +1026,7 @@ struct ItemDetailView: View {
     /// Sheets / covers that can re-fire `onAppear` without leaving the detail screen.
     private var isCoveringModalPresented: Bool {
         isImagePickerPresented
-            || isCropperPresented
+            || isCropEditorPresented
             || isImageFullScreen
             || showShareSelectionSheet
             || showPairItemSelection
@@ -935,23 +1035,22 @@ struct ItemDetailView: View {
             || attributesSheet != nil
     }
 
+    /// Attribute edits persist locally on sheet dismiss; cloud sync is deferred here.
+    private func syncPendingItemChangesIfNeeded() {
+        guard !isReadOnly else { return }
+        SyncService.shared.syncItemIfNeeded(item)
+    }
+
     private func deleteImage(type: ImageType) {
-        let photos = item.photos as? Set<Photo> ?? []
         let slot: String
         switch type {
         case .front: slot = "front"
-        case .back: slot = "back"
         case .worn: slot = "worn"
         }
-        let toDelete = photosMatchingSlot(photos, slot: slot)
-        guard !toDelete.isEmpty else { return }
+        let before = (item.photos as? Set<Photo>) ?? []
+        guard !ItemPhotoSlot.photosMatching(before, slot: slot).isEmpty else { return }
 
-        for photo in toDelete {
-            viewContext.delete(photo)
-        }
-        if type == .front {
-            demoteOtherPrimaryPhotos(keeping: nil)
-        }
+        ItemPhotoSlot.deleteMatching(in: item, slot: slot, context: viewContext)
 
         setUpdatedAt(item)
 
@@ -968,7 +1067,7 @@ struct ItemDetailView: View {
             for outfit in outfitsToSync {
                 SyncService.shared.syncOutfitIfNeeded(outfit)
             }
-            SyncService.shared.syncItemIfNeeded(item)
+            SyncService.shared.syncItemPhotosIfNeeded(item)
         } catch {
             print("❌ Failed to delete photo: \(error.localizedDescription)")
         }
@@ -978,31 +1077,30 @@ struct ItemDetailView: View {
     // MARK: - Image Display
     
     /// Order matches `ItemFullScreenView` pager: only slots that have an image.
-    private func orderedAvailableImageTypes(front: UIImage?, back: UIImage?, worn: UIImage?) -> [ImageType] {
+    private func orderedAvailableImageTypes(front: UIImage?, worn: UIImage?) -> [ImageType] {
         var types: [ImageType] = []
         if front != nil { types.append(.front) }
-        if back != nil { types.append(.back) }
         if worn != nil { types.append(.worn) }
         return types
     }
     
-    private func fullscreenPageIndex(for imageType: ImageType, front: UIImage?, back: UIImage?, worn: UIImage?) -> Int {
-        let order = orderedAvailableImageTypes(front: front, back: back, worn: worn)
+    private func fullscreenPageIndex(for imageType: ImageType, front: UIImage?, worn: UIImage?) -> Int {
+        let order = orderedAvailableImageTypes(front: front, worn: worn)
         return order.firstIndex(of: imageType) ?? 0
     }
     
-    private func imageType(forFullscreenPageIndex index: Int, front: UIImage?, back: UIImage?, worn: UIImage?) -> ImageType {
-        let order = orderedAvailableImageTypes(front: front, back: back, worn: worn)
+    private func imageType(forFullscreenPageIndex index: Int, front: UIImage?, worn: UIImage?) -> ImageType {
+        let order = orderedAvailableImageTypes(front: front, worn: worn)
         guard !order.isEmpty else { return .front }
         let clamped = min(max(0, index), order.count - 1)
         return order[clamped]
     }
     
-    private func fullscreenSelectedPageIndexBinding(frontImage: UIImage?, backImage: UIImage?, wornImage: UIImage?) -> Binding<Int> {
+    private func fullscreenSelectedPageIndexBinding(frontImage: UIImage?, wornImage: UIImage?) -> Binding<Int> {
         Binding(
-            get: { self.fullscreenPageIndex(for: self.selectedImageType, front: frontImage, back: backImage, worn: wornImage) },
+            get: { self.fullscreenPageIndex(for: self.selectedImageType, front: frontImage, worn: wornImage) },
             set: { newIndex in
-                let newType = self.imageType(forFullscreenPageIndex: newIndex, front: frontImage, back: backImage, worn: wornImage)
+                let newType = self.imageType(forFullscreenPageIndex: newIndex, front: frontImage, worn: wornImage)
                 if self.selectedImageType != newType {
                     self.selectedImageType = newType
                     _ = self.item.photos
@@ -1013,14 +1111,12 @@ struct ItemDetailView: View {
     
     private func fullScreenImageView() -> some View {
         let frontImage = getImage(for: .front)
-        let backImage = getImage(for: .back)
         let wornImage = getImage(for: .worn)
         
         return ItemFullScreenView(
             frontImage: frontImage,
-            backImage: backImage,
             wornImage: wornImage,
-            selectedPageIndex: fullscreenSelectedPageIndexBinding(frontImage: frontImage, backImage: backImage, wornImage: wornImage),
+            selectedPageIndex: fullscreenSelectedPageIndexBinding(frontImage: frontImage, wornImage: wornImage),
             isPresented: $isImageFullScreen
         )
     }
@@ -1116,14 +1212,10 @@ struct ItemDetailView: View {
                     beginShareImage(type: selectedImageType)
                 }
             }
-            if (selectedImageType == .back || selectedImageType == .worn), getImage(for: selectedImageType) != nil {
+            if selectedImageType == .worn, getImage(for: .worn) != nil {
                 Button("Remove Image", role: .destructive) {
-                    if selectedImageType == .worn {
-                        DispatchQueue.main.async {
-                            showRemoveWornImageConfirmation = true
-                        }
-                    } else {
-                        deleteImage(type: selectedImageType)
+                    DispatchQueue.main.async {
+                        showRemoveWornImageConfirmation = true
                     }
                 }
             }
@@ -1175,7 +1267,7 @@ struct ItemDetailView: View {
         switch type {
         case .worn:
             return "person.crop.square.badge.camera"
-        case .front, .back:
+        case .front:
             return "photo"
         }
     }
@@ -1188,8 +1280,6 @@ struct ItemDetailView: View {
             return isReadOnly
                 ? "No image available"
                 : "Tap to add a photo of you wearing this item"
-        case .back:
-            return "Tap to add a photo of the back of the item"
         }
     }
     
@@ -1287,22 +1377,13 @@ struct ItemDetailView: View {
     }
     
     private func imageThumbnailRow() -> some View {
-        let size: CGFloat = (UIScreen.main.bounds.width - 6) / 3
+        let size: CGFloat = (UIScreen.main.bounds.width - 4) / 2
         
         return HStack(spacing: 2) {
-            // Front image thumbnail with menu
             thumbnailMenu(for: .front) {
                 imageThumbnail(type: .front, image: getImage(for: .front), size: size)
                     .contentShape(Rectangle())
             }
-            
-            // Back image thumbnail with menu
-            thumbnailMenu(for: .back) {
-                imageThumbnail(type: .back, image: getImage(for: .back), size: size)
-                    .contentShape(Rectangle())
-            }
-            
-            // Worn image thumbnail with menu
             thumbnailMenu(for: .worn) {
                 imageThumbnail(type: .worn, image: getImage(for: .worn), size: size)
                     .contentShape(Rectangle())
@@ -1333,7 +1414,7 @@ struct ItemDetailView: View {
                             withAnimation {
                                 selectedImageType = type
                             }
-                            syncHeroCarouselAfterFullscreenOrBackSelection()
+                            syncHeroCarouselWithSelectedImageType()
                             // Ensure photos relationship is loaded when switching images
                             _ = item.photos
                         }
@@ -1375,8 +1456,6 @@ struct ItemDetailView: View {
         switch type {
         case .front:
             return "Front"
-        case .back:
-            return "Back"
         case .worn:
             return "Worn"
         }
@@ -1413,15 +1492,11 @@ struct ItemDetailView: View {
             })
         }
         
-        // Remove Image option (only for back and worn, not front)
-        if (type == .back || type == .worn) && getImage(for: type) != nil {
+        // Remove Image option (worn only — front is required)
+        if type == .worn && getImage(for: .worn) != nil {
             alert.addAction(UIAlertAction(title: "Remove Image", style: .destructive) { _ in
-                if type == .worn {
-                    DispatchQueue.main.async {
-                        showRemoveWornImageConfirmation = true
-                    }
-                } else {
-                    deleteImage(type: type)
+                DispatchQueue.main.async {
+                    showRemoveWornImageConfirmation = true
                 }
             })
         }
@@ -1480,10 +1555,12 @@ struct ItemDetailView: View {
         viewContext.refresh(item, mergeChanges: true)
         
         if let image = getImage(for: type) {
-            // Store both the type and image we're editing
+            // Image stays in state; destination is a lightweight Hashable trigger only.
             pendingImageType = type
             imageToEdit = image
-            isCropperPresented = true
+            cropEditorSessionID = UUID()
+            isCropEditorPresented = true
+            cropperDestination = .cropper(type)
         }
     }
 
@@ -1611,11 +1688,6 @@ struct ItemDetailView: View {
                     return UIImage(data: primaryPhoto.data ?? Data())
                 }
                 return nil
-        case .back:
-            if let backPhoto = photos.first(where: { $0.type == "back" }) {
-                return UIImage(data: backPhoto.data ?? Data())
-            }
-            return nil
         case .worn:
             if let wornPhoto = photos.first(where: { $0.type == "worn" }) {
                 return UIImage(data: wornPhoto.data ?? Data())
@@ -1815,6 +1887,15 @@ struct ItemDetailView: View {
         let ownerId = item.userId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !ownerId.isEmpty, let ownerUUID = UUID(uuidString: ownerId) else { return false }
         return viewerId != ownerUUID
+    }
+
+    /// Owner viewing their own item (Closet editable or Profile read-only).
+    private var isViewingOwnContent: Bool {
+        if !isReadOnly { return true }
+        guard let viewerId = authSession.userId else { return false }
+        let ownerId = item.userId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard let ownerUUID = UUID(uuidString: ownerId) else { return false }
+        return viewerId == ownerUUID
     }
 
     private func refreshSocialLikeState(itemId: UUID) async {
@@ -2243,6 +2324,11 @@ struct ShareSelectionView: View {
     var allSelected: Bool {
         !availableAttributes.isEmpty && availableAttributes.isSubset(of: selectedAttributes)
     }
+
+    /// Image + a custom attribute mix (not empty, not all, not the saved default preset).
+    private var isCustomSelectedAttributes: Bool {
+        !selectedAttributes.isEmpty && !allSelected && !isDefaultSelected
+    }
     
     var defaultAttributes: Set<ShareableAttribute> {
         DefaultShareAttributes.load()
@@ -2269,6 +2355,18 @@ struct ShareSelectionView: View {
             List {
                 Section {
                     Toggle(isOn: Binding(
+                        get: { selectedAttributes.isEmpty },
+                        set: { newValue in
+                            if newValue {
+                                selectedAttributes.removeAll()
+                            }
+                        }
+                    )) {
+                        Text("Image Only")
+                            .foregroundColor(.black)
+                    }
+
+                    Toggle(isOn: Binding(
                         get: { allSelected },
                         set: { newValue in
                             if newValue {
@@ -2278,8 +2376,7 @@ struct ShareSelectionView: View {
                             }
                         }
                     )) {
-                        Text("All Attributes")
-                           // .fontWeight(.semibold)
+                        Text("Image + All Attributes")
                             .foregroundColor(.black)
                     }
                     
@@ -2295,10 +2392,25 @@ struct ShareSelectionView: View {
                                 }
                             }
                         )) {
-                            Text("Default Attributes")
-                              //  .fontWeight(.semibold)
+                            Text("Image + Default Attributes")
                                 .foregroundColor(.black)
                         }
+                    }
+
+                    Toggle(isOn: Binding(
+                        get: { isCustomSelectedAttributes },
+                        set: { newValue in
+                            if newValue {
+                                if allSelected || isDefaultSelected {
+                                    selectedAttributes.removeAll()
+                                }
+                            } else if isCustomSelectedAttributes {
+                                selectedAttributes.removeAll()
+                            }
+                        }
+                    )) {
+                        Text("Image + Selected Attributes")
+                            .foregroundColor(.black)
                     }
                 }
                 
@@ -2353,11 +2465,11 @@ struct ShareSelectionView: View {
                     .padding(.vertical, 8)
                 }
             }
-            .navigationTitle("Select Attributes")
+            .navigationTitle("External Share")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Share") {
+                    Button {
                         let shareText: String?
                         if selectedAttributes.isEmpty {
                             shareText = nil
@@ -2367,6 +2479,9 @@ struct ShareSelectionView: View {
                             shareText = generated.isEmpty ? nil : generated
                         }
                         onShare(shareText)
+                    } label: {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                            .labelStyle(.titleAndIcon)
                     }
                     .fontWeight(.semibold)
                 }
@@ -2414,15 +2529,13 @@ struct ShareSelectionView: View {
             lines.append("Location: \(location)")
         }
         
-        if attributes.contains(.price), let price = item.price {
-            let currencySymbol = (price.currency != nil)
-                ? Locale(identifier: Locale.identifier(fromComponents: [NSLocale.Key.currencyCode.rawValue: price.currency!]))
-                    .currencySymbol ?? "$"
-                : Locale.current.currencySymbol ?? "$"
-            if let amount = price.amount {
-                let formattedAmount = NumberFormatter.currency2.string(from: amount) ?? "0.00"
-                lines.append("Price: \(currencySymbol)\(formattedAmount)")
-            }
+        if attributes.contains(.price), let price = item.price, let amount = price.amount {
+            let currencyCode = price.currency ?? Locale.current.currency?.identifier ?? "USD"
+            let formattedPrice = CurrencyFormatting.displayPrice(
+                amount: amount,
+                currencyCode: currencyCode
+            )
+            lines.append("Price: \(formattedPrice)")
         }
         
         if appCapabilities.showsWeatherAttribute,

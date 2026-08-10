@@ -1,0 +1,44 @@
+---
+description: Clear navigationDestination(item:) on appear to prevent SwiftUI freeze loops
+globs: closet/**/*.swift
+alwaysApply: false
+---
+
+# `navigationDestination(item:)` — clear binding on appear
+
+When a screen **owns** a nested push via `navigationDestination(item:)` (Item → Outfit, Outfit → Item, Pending Redress → Edit OutfitAddView):
+
+## Do
+
+- Clear the destination binding in the **pushed** view’s `onAppear` so SwiftUI does not keep re-evaluating the destination builder (that loop freezes the UI).
+- Keep `.id(...)` on the pushed root when the session/identity must stay stable.
+- Use the child’s `dismiss()` (or system back) to pop; do not rely on the binding staying non-nil to keep the screen on the stack.
+
+```swift
+.navigationDestination(item: $editDestination) { destination in
+    ChildView(...)
+        .id(destination.id)
+        .onAppear {
+            // Critical: prevent destination from being re-evaluated in a loop.
+            editDestination = nil
+        }
+}
+```
+
+## References
+
+- `ItemDetailView` → `OutfitAddView` / paired `ItemDetailView` / `OutfitDetailView`
+- `OutfitDetailView` → `ItemDetailView`
+- `PendingOutfitDetailView` → Edit `OutfitAddView` (`editRedressDestination`)
+
+## Don’t confuse with Profile root ownership
+
+When **Profile** (or another root) owns the binding that represents the *currently visible* pushed screen (e.g. grid → item detail), do **not** nil that binding from the child’s `onAppear` — that can orphan the parent push. See `profile-nested-navigation.mdc`.
+
+Also **do not** clear on appear for Friends / Users / Notifications → other-user `ProfileView` — that orphans the push and breaks Back (`< Friends`). Those mid-stack profile pushes keep the binding until system pop (same as Profile root ownership).
+
+| Owner of binding | Clear on child’s `onAppear`? |
+|---|---|
+| Mid-stack screen pushing Item / Outfit / Pending / Edit | **Yes** — required to avoid freeze |
+| Friends / Users / Notifications → other-user Profile | **No** — keep until system pop |
+| Profile/root binding for the active pushed child | **No** — keep until system pop |

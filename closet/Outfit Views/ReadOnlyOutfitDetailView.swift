@@ -7,6 +7,7 @@
 
 import SwiftUI
 import UIKit
+import CoreData
 
 struct ReadOnlyOutfitDetailView: View {
     let ownerUserId: UUID
@@ -22,6 +23,7 @@ struct ReadOnlyOutfitDetailView: View {
     var tabBarHideState: TabBarHideState? = nil
 
     @Environment(\.appCapabilities) private var appCapabilities
+    @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject private var supabaseService: SupabaseService
     @EnvironmentObject private var authSession: AuthSession
 
@@ -38,11 +40,25 @@ struct ReadOnlyOutfitDetailView: View {
     @State private var likeCount = 0
     @State private var isLikedByMe = false
     @State private var isLikeBusy = false
+    /// Own-profile: heart reflects Core Data favorite (not social like).
+    @State private var isOwnFavorite = false
     @State private var showShareSheet = false
     @State private var isPreparingShare = false
     @State private var shareItems: [Any] = []
 
     private var screenWidth: CGFloat { UIScreen.main.bounds.width }
+
+    private var localOwnedOutfit: Outfit? {
+        guard isViewingOwnContent else { return nil }
+        let request: NSFetchRequest<Outfit> = Outfit.fetchRequest()
+        request.fetchLimit = 1
+        request.predicate = NSPredicate(
+            format: "id == %@ AND userId == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)",
+            outfitSummary.id as CVarArg,
+            ownerUserId.uuidString
+        )
+        return try? viewContext.fetch(request).first
+    }
 
     private var canToggleLike: Bool {
         authSession.userId != nil && authSession.userId != ownerUserId && !isLikeBusy
@@ -130,6 +146,7 @@ struct ReadOnlyOutfitDetailView: View {
             }
         }
         .task(id: outfitSummary.id) {
+            syncOwnFavoriteFromLocalOutfit()
             await loadDetail()
             await refreshLikeState()
         }
@@ -175,7 +192,9 @@ struct ReadOnlyOutfitDetailView: View {
                                 }
                             }
                         ),
-                        favoriteSelection: isViewingOwnContent ? false : isLikedByMe,
+                        favoriteSelection: isViewingOwnContent
+                            ? isOwnFavorite
+                            : isLikedByMe,
                         likeCount: likeCount,
                         showsLikeButton: true,
                         isLikeInteractive: canToggleLike,
@@ -463,6 +482,14 @@ struct ReadOnlyOutfitDetailView: View {
         }
     }
 
+    private func syncOwnFavoriteFromLocalOutfit() {
+        guard isViewingOwnContent else {
+            isOwnFavorite = false
+            return
+        }
+        isOwnFavorite = localOwnedOutfit?.isFavorite ?? false
+    }
+
     private func toggleLike() {
         guard canToggleLike else { return }
         isLikeBusy = true
@@ -517,11 +544,36 @@ struct RemoteReadOnlyOutfitItemCell: View {
     }
 }
 
+/// Light fullscreen pager used by read-only outfit collage/worn and item front/worn.
 struct RemoteOutfitFullScreenView: View {
-    let imageURLs: [URL]
+    struct Page: Identifiable {
+        let id: Int
+        let url: URL?
+        let uiImage: UIImage?
+
+        init(id: Int, url: URL? = nil, uiImage: UIImage? = nil) {
+            self.id = id
+            self.url = url
+            self.uiImage = uiImage
+        }
+    }
+
+    let pages: [Page]
     @Binding var selectedPageIndex: Int
     @Binding var isPresented: Bool
     @State private var dragOffset: CGSize = .zero
+
+    init(imageURLs: [URL], selectedPageIndex: Binding<Int>, isPresented: Binding<Bool>) {
+        self.pages = imageURLs.enumerated().map { Page(id: $0.offset, url: $0.element) }
+        self._selectedPageIndex = selectedPageIndex
+        self._isPresented = isPresented
+    }
+
+    init(pages: [Page], selectedPageIndex: Binding<Int>, isPresented: Binding<Bool>) {
+        self.pages = pages
+        self._selectedPageIndex = selectedPageIndex
+        self._isPresented = isPresented
+    }
 
     var body: some View {
         ZStack {
@@ -529,33 +581,44 @@ struct RemoteOutfitFullScreenView: View {
                 .ignoresSafeArea()
                 .onTapGesture { isPresented = false }
 
-            if imageURLs.isEmpty {
+            if pages.isEmpty {
                 VStack {
                     Image(systemName: "photo")
                         .font(.system(size: 60))
-                        .foregroundColor(.white.opacity(0.5))
+                        .foregroundColor(.secondary.opacity(0.5))
                     Text("No images available")
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(.secondary)
                         .padding(.top, 16)
                 }
             } else {
                 TabView(selection: $selectedPageIndex) {
-                    ForEach(Array(imageURLs.enumerated()), id: \.offset) { index, url in
-                        AsyncImage(url: url) { phase in
-                            switch phase {
-                            case .success(let image):
-                                image
+                    ForEach(pages) { page in
+                        Group {
+                            if let uiImage = page.uiImage {
+                                Image(uiImage: uiImage)
                                     .resizable()
                                     .aspectRatio(contentMode: .fit)
                                     .background(.white)
-                            default:
+                            } else if let url = page.url {
+                                AsyncImage(url: url) { phase in
+                                    switch phase {
+                                    case .success(let image):
+                                        image
+                                            .resizable()
+                                            .aspectRatio(contentMode: .fit)
+                                            .background(.white)
+                                    default:
+                                        ProgressView()
+                                    }
+                                }
+                            } else {
                                 ProgressView()
                             }
                         }
-                        .tag(index)
+                        .tag(page.id)
                     }
                 }
-                .tabViewStyle(.page(indexDisplayMode: imageURLs.count > 1 ? .automatic : .never))
+                .tabViewStyle(.page(indexDisplayMode: pages.count > 1 ? .automatic : .never))
 
                 VStack {
                     HStack {

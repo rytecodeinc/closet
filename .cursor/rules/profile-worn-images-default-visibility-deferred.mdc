@@ -1,0 +1,25 @@
+---
+description: Deferred — decide if profile hides item/outfit worn images by default
+globs: closet/Profile View/**/*.swift,closet/Outfit Views/ReadOnlyOutfitDetailView.swift,closet/Shared/SocialEngagementActionsRow.swift,closet/Shared/WardrobeVisibility.swift
+alwaysApply: false
+---
+
+# Deferred: profile worn-image default visibility
+
+**Status:** Open product decision. Do not change default worn visibility on Profile unless the user asks.
+
+## Decision to make
+
+Should **item worn** and **outfit worn** photos be **hidden by default** on Profile (own and/or other-user), with collage/front as the only default hero — vs today’s behavior where worn is shown when present (segment / carousel)?
+
+Scope to clarify when revisiting:
+
+- Grid thumbnails vs detail hero vs both
+- Own Profile vs other-user public wardrobe
+- Per-item/outfit override vs global setting vs privacy/wardrobe visibility flags
+
+## When revisiting
+
+1. Decide default (hide vs show) and any user-facing control.
+2. Apply consistently across Profile grids, `ReadOnlyItemDetailView`, `ReadOnlyOutfitDetailView`, and related engagement rows / RPCs if needed.
+3. Remove this rule once shipped or explicitly won’t-do.

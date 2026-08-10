@@ -76,6 +76,10 @@ struct ProfileView: View {
     /// Gap between avatar row and display name.
     private static let profileHeaderNameTopPadding: CGFloat = 8
     private static let profileHeaderActionIconSize: CGFloat = 20
+    /// Layout preview placeholders for other-user header (real bio/tags later).
+    private static let otherUserHeaderPlaceholderBio =
+        "Style is how I express who I am – effortlessly, authentically, and always evolving"
+    private static let otherUserHeaderPlaceholderStyleTags = ["Vintage", "Romantic", "Minimalist"]
     /// Full header template (bio/tags/location/socials/Sizes flanking) — see `.cursor/rules/profile-header-full-template-deferred.mdc`.
 
     @State private var refreshToken = UUID()
@@ -539,6 +543,14 @@ struct ProfileView: View {
                     profileNavigationToolbar()
                 }
             }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if isViewingOtherUser, appCapabilities.enablesFriendsAndSharing {
+                    otherUserBottomActionsBar
+                }
+            }
+            // Keyboard must not resize/push the nested profile scroll (Cancel jump).
+            .ignoresSafeArea(isViewingOtherUser ? .keyboard : [])
+            .modifier(OtherUserProfileSerifModifier(isActive: isViewingOtherUser))
             .toolbar(shouldHideTabBar ? .hidden : .automatic, for: .tabBar)
             .onAppear {
                 if isViewingOtherUser || isFriendsPresented || isUsersPresented {
@@ -622,32 +634,44 @@ struct ProfileView: View {
     }
 
     private var profileWithDestinations: some View {
-        profileNavigationChrome
-            .navigationDestination(isPresented: $isRedressOutfitPresented) {
-                redressOutfitDestination
+        // Nested other-user profiles join the root NavigationStack — do not re-register
+        // root pushes (Notifications/Settings/…) or they fight Friends → profile and
+        // orphan the intermediate Friends screen / hide "< Friends".
+        Group {
+            if ownsNavigationStack {
+                profileNavigationChrome
+                    .navigationDestination(isPresented: $isRedressOutfitPresented) {
+                        redressOutfitDestination
+                    }
+                    .navigationDestination(isPresented: $isNotificationsPresented) {
+                        UserNotificationsView(tabBarHideState: tabBarHideState)
+                    }
+                    .navigationDestination(isPresented: $isSettingsPresented) {
+                        SettingsView()
+                    }
+                    .navigationDestination(isPresented: $isEditProfilePresented) {
+                        EditProfileView()
+                    }
+                    .navigationDestination(isPresented: $isUsersPresented) {
+                        UsersView(tabBarHideState: tabBarHideState)
+                    }
+                    .navigationDestination(isPresented: $isFriendsPresented) {
+                        if let userId = displayedProfileUserId {
+                            FriendsView(
+                                userId: userId,
+                                followersCount: displayedFollowersCount,
+                                followingCount: displayedFollowingCount,
+                                tabBarHideState: tabBarHideState
+                            )
+                        }
+                    }
+            } else {
+                profileNavigationChrome
+                    .navigationDestination(isPresented: $isRedressOutfitPresented) {
+                        redressOutfitDestination
+                    }
             }
-            .navigationDestination(isPresented: $isNotificationsPresented) {
-                UserNotificationsView()
-            }
-            .navigationDestination(isPresented: $isSettingsPresented) {
-                SettingsView()
-            }
-            .navigationDestination(isPresented: $isEditProfilePresented) {
-                EditProfileView()
-            }
-            .navigationDestination(isPresented: $isUsersPresented) {
-                UsersView(tabBarHideState: tabBarHideState)
-            }
-            .navigationDestination(isPresented: $isFriendsPresented) {
-                if let userId = displayedProfileUserId {
-                    FriendsView(
-                        userId: userId,
-                        followersCount: displayedFollowersCount,
-                        followingCount: displayedFollowingCount,
-                        tabBarHideState: tabBarHideState
-                    )
-                }
-            }
+        }
     }
 
     private var profileNavigationChrome: some View {
@@ -852,9 +876,9 @@ struct ProfileView: View {
     private func ownProfileOutlinedHeaderButtonLabel(title: String, systemImage: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: systemImage)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold, design: .serif))
             Text(title)
-                .font(.system(.subheadline, design: .serif).weight(.semibold))
+                .font(.profileSerif(.subheadline, weight: .semibold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
         }
@@ -914,7 +938,7 @@ struct ProfileView: View {
     /// Gap between display name ↔ action buttons, and action buttons ↔ wardrobe row.
     private static let otherUserHeaderActionsVerticalSpacing: CGFloat = 14
 
-    // MARK: - Other-user header (centered avatar; actions under display name)
+    // MARK: - Other-user header (centered avatar; bio/tags preview; Friends/Redress in bottom bar)
 
     @ViewBuilder
     private var otherUserProfileHeaderSection: some View {
@@ -924,15 +948,21 @@ struct ProfileView: View {
 
             // Display name typography — see profile-display-name-font-deferred.mdc
             Text(displayNameForHeader)
-                .font(.title2.weight(.semibold))
+                .font(.profileSerif(.title2, weight: .semibold))
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
                 .padding(.top, Self.profileHeaderNameTopPadding)
 
-            if appCapabilities.enablesFriendsAndSharing {
-                otherUserHeaderActionsRow
-                    .padding(.top, Self.otherUserHeaderActionsVerticalSpacing)
-            }
+            // Layout preview — replace with real bio/tags when profile fields ship.
+            Text(Self.otherUserHeaderPlaceholderBio)
+                .font(.profileSerif(.subheadline))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 12)
+                .padding(.top, 10)
+
+            otherUserPlaceholderStyleTagsRow
+                .padding(.top, 12)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal)
@@ -941,9 +971,48 @@ struct ProfileView: View {
         .id(refreshToken)
     }
 
-    /// Add/Remove/Friends (outlined, matches own-profile Friends) + Redress (cayenne); equal width.
-    private var otherUserHeaderActionsRow: some View {
-        HStack(alignment: .center, spacing: 12) {
+    /// Three style chips forced onto one row for layout preview.
+    private var otherUserPlaceholderStyleTagsRow: some View {
+        HStack(spacing: 8) {
+            ForEach(Array(Self.otherUserHeaderPlaceholderStyleTags.enumerated()), id: \.offset) { index, label in
+                Text(otherUserStyleTagDisplayLabel(label))
+                    .font(.profileSerif(.caption))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(
+                        ProfileStyleTagsRow.previewChipColor(at: index),
+                        in: Capsule()
+                    )
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func otherUserStyleTagDisplayLabel(_ label: String) -> String {
+        let cleaned = label.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
+        guard !cleaned.isEmpty else { return "#" }
+        return "#\(cleaned.lowercased())"
+    }
+
+    /// Friends / Redress — pinned above the home indicator on other-user profiles.
+    private var otherUserBottomActionsBar: some View {
+        otherUserActionsRow
+            .padding(.horizontal, 8)
+            .padding(.top, 8)
+            .padding(.bottom, 6)
+            .background {
+                Color(.systemBackground)
+                    .shadow(color: .black.opacity(0.08), radius: 8, y: -2)
+                    .ignoresSafeArea(edges: .bottom)
+            }
+            .accessibilityElement(children: .contain)
+    }
+
+    /// Add/Remove/Friends + Redress — icon above label (tab-bar style).
+    private var otherUserActionsRow: some View {
+        HStack(alignment: .top, spacing: 0) {
             otherUserFriendshipButton
                 .frame(maxWidth: .infinity)
             otherUserRedressButton
@@ -982,8 +1051,11 @@ struct ProfileView: View {
                 Task { await sendFriendRequestToViewedUser() }
             }
         } label: {
-            // Match own-profile Friends outlined button (clear fill + thin border).
-            ownProfileOutlinedHeaderButtonLabel(title: title, systemImage: systemImage)
+            otherUserBottomBarActionLabel(
+                title: title,
+                systemImage: systemImage,
+                style: .outlinedCircle
+            )
         }
         .buttonStyle(.plain)
         .disabled(isUpdatingFriendship)
@@ -996,38 +1068,72 @@ struct ProfileView: View {
             guard enabled else { return }
             isRedressOutfitPresented = true
         } label: {
-            HStack(spacing: 8) {
-                Image("Redress.SFSymbol")
-                    .resizable()
-                    .renderingMode(.template)
-                    .scaledToFit()
-                    .frame(width: Self.profileHeaderActionIconSize, height: Self.profileHeaderActionIconSize)
-                Text("Redress")
-                    .font(.subheadline.weight(.semibold))
-            }
-            .foregroundStyle(enabled ? .white : .primary)
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: Self.otherUserHeaderActionCornerRadius, style: .continuous)
-                    .fill(
-                        enabled
-                            ? AnyShapeStyle(Color.cayenne.gradient)
-                            : AnyShapeStyle(Color(UIColor.secondarySystemFill))
-                    )
+            otherUserBottomBarActionLabel(
+                title: "Redress",
+                redressSymbol: true,
+                style: enabled ? .filledCayenneCircle : .outlinedCircleDisabled
             )
-            .overlay {
-                if !enabled {
-                    RoundedRectangle(cornerRadius: Self.otherUserHeaderActionCornerRadius, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-                }
-            }
         }
         .buttonStyle(.plain)
         .allowsHitTesting(enabled)
         .accessibilityLabel("Redress")
         .accessibilityHint(enabled ? "" : "Unavailable")
+    }
+
+    private enum OtherUserBottomBarIconStyle {
+        case outlinedCircle
+        case outlinedCircleDisabled
+        case filledCayenneCircle
+    }
+
+    private func otherUserBottomBarActionLabel(
+        title: String,
+        systemImage: String? = nil,
+        redressSymbol: Bool = false,
+        style: OtherUserBottomBarIconStyle
+    ) -> some View {
+        let circleSize = Self.profileHeaderActionIconSize + 18
+        let iconForeground: Color = {
+            switch style {
+            case .filledCayenneCircle: return .white
+            case .outlinedCircleDisabled: return .secondary
+            case .outlinedCircle: return .primary
+            }
+        }()
+
+        return VStack(spacing: 6) {
+            ZStack {
+                Circle()
+                    .fill(style == .filledCayenneCircle ? AnyShapeStyle(Color.cayenne.gradient) : AnyShapeStyle(Color.clear))
+                    .frame(width: circleSize, height: circleSize)
+                if style != .filledCayenneCircle {
+                    Circle()
+                        .strokeBorder(Color.primary.opacity(style == .outlinedCircleDisabled ? 0.12 : 0.18), lineWidth: 1)
+                        .frame(width: circleSize, height: circleSize)
+                }
+                Group {
+                    if redressSymbol {
+                        Image("Redress.SFSymbol")
+                            .resizable()
+                            .renderingMode(.template)
+                            .scaledToFit()
+                            .frame(width: Self.profileHeaderActionIconSize, height: Self.profileHeaderActionIconSize)
+                    } else if let systemImage {
+                        Image(systemName: systemImage)
+                            .font(.system(size: 18, weight: .semibold, design: .serif))
+                            .frame(width: Self.profileHeaderActionIconSize, height: Self.profileHeaderActionIconSize)
+                    }
+                }
+                .foregroundStyle(iconForeground)
+            }
+            Text(title)
+                .font(.profileSerif(.caption2, weight: .semibold))
+                .foregroundStyle(Color.black)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
     }
 
     private var isRedressHeaderActionEnabled: Bool {
@@ -1099,6 +1205,9 @@ struct ProfileView: View {
 
     @ToolbarContentBuilder
     private func otherUserProfileToolbar() -> some ToolbarContent {
+        // Do not place a custom `.principal` title — it often collapses the system
+        // back button to a bare chevron (losing "< Friends"). Title comes from
+        // `.navigationTitle` on `profileNavigationChrome`.
         ToolbarItem(placement: .navigationBarTrailing) {
             Button {
                 showOtherUserProfileOptionsDialog = true
@@ -1120,6 +1229,9 @@ struct ProfileView: View {
             }
         }
         ToolbarItemGroup(placement: .navigationBarTrailing) {
+            if appCapabilities.enablesFriendsAndSharing {
+                UserNotificationsBellButton(isPresented: $isNotificationsPresented)
+            }
             Button {
                 isUsersPresented = true
             } label: {
@@ -1256,6 +1368,7 @@ struct ProfileView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .disabled(true)
+                .background(SerifSegmentedPickerConfigurer())
                 .padding(.horizontal, 14)
                 .padding(.bottom, 8)
                 .background(Color(.systemBackground))
@@ -1265,7 +1378,8 @@ struct ProfileView: View {
             outfitsPage: emptyRemoteWardrobeTabMessage,
             onRefresh: {
                 await loadRemoteWardrobes()
-            }
+            },
+            snapsHeaderCollapse: true
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -1284,12 +1398,12 @@ struct ProfileView: View {
             Spacer(minLength: 0)
             HStack(spacing: 4) {
                 Image(systemName: WardrobeVisibility.private.iconName)
-                    .font(.caption.weight(.semibold))
+                    .font(.profileSerif(.caption, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(WardrobeVisibility.private.menuLabel)
 
                 Text("Closet")
-                    .font(.system(.headline, design: .serif))
+                    .font(.profileSerif(.headline))
                     .foregroundStyle(.primary)
             }
             Spacer(minLength: 0)
@@ -1307,7 +1421,7 @@ struct ProfileView: View {
             Spacer(minLength: 0)
             HStack(spacing: 4) {
                 Image(systemName: wardrobe.wardrobeVisibility.iconName)
-                    .font(.caption.weight(.semibold))
+                    .font(.profileSerif(.caption, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(wardrobe.wardrobeVisibility.menuLabel)
 
@@ -1317,9 +1431,9 @@ struct ProfileView: View {
                 } label: {
                     HStack(spacing: 4) {
                         Text(wardrobe.name)
-                            .font(.system(.headline, design: .serif))
+                            .font(.profileSerif(.headline))
                         Image(systemName: "chevron.down")
-                            .font(.system(.caption, design: .serif))
+                            .font(.profileSerif(.caption))
                     }
                 }
                 .buttonStyle(.plain)
@@ -1341,6 +1455,7 @@ struct ProfileView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+                .background(SerifSegmentedPickerConfigurer())
             }
 
             Group {
@@ -1351,6 +1466,7 @@ struct ProfileView: View {
                 }
             }
         }
+        .profileSerifTypography()
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
     }
@@ -1372,9 +1488,10 @@ struct ProfileView: View {
                         HStack(spacing: 12) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(wardrobe.name)
+                                    .font(.profileSerif(.body))
                                     .foregroundStyle(.primary)
                                 Text(wardrobe.wardrobeType == "wishlist" ? "Wishlist" : "Closet")
-                                    .font(.subheadline)
+                                    .font(.profileSerif(.subheadline))
                                     .foregroundStyle(.secondary)
                             }
                             Spacer(minLength: 0)

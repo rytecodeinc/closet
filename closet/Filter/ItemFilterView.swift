@@ -290,6 +290,12 @@ struct ItemFilterView: View {
                 attributeDestinationView(route)
             }
             .toolbar {
+                if remoteProfileMode {
+                    ToolbarItem(placement: .principal) {
+                        Text("Filter")
+                            .font(.profileSerif(.headline, weight: .semibold))
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     ItemFilterApplyButton {
                         filterModel.copyValues(from: draftFilterModel)
@@ -297,6 +303,7 @@ struct ItemFilterView: View {
                 }
             }
             .toolbar(tabBarHideState.shouldHideTabBar ? .hidden : .automatic, for: .tabBar)
+            .modifier(OtherUserProfileSerifModifier(isActive: remoteProfileMode))
             .onAppear {
                 tabBarHideState.shouldHideTabBar = true
                 guard !didSeedDraft else { return }

@@ -1,0 +1,22 @@
+---
+description: Deferred — other-user profile bottom bar Wishlist (list for that person)
+globs: closet/Profile View/ProfileView.swift
+alwaysApply: false
+---
+
+# Deferred: other-user bottom bar — Wishlist (for them)
+
+**Status:** Parked. Do not add Wishlist to the other-user profile bottom bar unless the user asks.
+
+## Product intent
+
+Add a **Wishlist** action to the other-user profile bottom bar (alongside Friends / Redress).
+
+This is **not** that person’s public wishlist wardrobe. It is **the signed-in user’s list of things for that person** (gift / ideas list keyed to the viewed user).
+
+## When revisiting
+
+1. Bottom bar: new Wishlist entry (icon + label), same layout language as existing actions.
+2. Model + storage: per-viewer → per-recipient list (local and/or cloud); clarify vs existing Wishlist wardrobe type.
+3. UX: create/browse/edit items intended for that person; keep clearly separate from viewing their wardrobe wishlist.
+4. Remove this rule once shipped or explicitly won’t-do.

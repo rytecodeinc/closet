@@ -1,0 +1,24 @@
+---
+description: Deferred — other-user filter/sort/search bar shadow only while grid scrolls down
+globs: closet/Profile View/RemoteProfileWardrobeGridView.swift,closet/Profile View/ProfileNestedScrollContainer.swift
+alwaysApply: false
+---
+
+# Deferred: other-user filter bar shadow on scroll-down
+
+**Status:** Parked. Do not add a always-on shadow under the other-user Items/Outfits filter/sort/search bar unless the user asks.
+
+## Why parked
+
+A static elevation under the bar (matching the other-user bottom bar) was tried and rejected — user does not want it always visible.
+
+## Idea to try later
+
+Show a soft shadow **only after the grid scrolls down** (content moving under the sticky filter bar), and hide it again at scroll top / when the bar is flush with the first row.
+
+## Implementation notes when revisiting
+
+1. Prefer a downward-only shadow that sits on the grid (sticky UIKit chrome clips SwiftUI `.shadow` on the bar itself — upward blur was all that showed).
+2. Drive visibility from nested scroll offset in `ProfileNestedScrollContainer` / remote grid (threshold near `contentOffset.y > 0` after header collapse, or equivalent).
+3. Match bottom-bar elevation roughly: `opacity ~0.08`, `radius ~8`, cast **under** the bar onto the grid.
+4. Remove this rule once shipped or explicitly won’t-do.

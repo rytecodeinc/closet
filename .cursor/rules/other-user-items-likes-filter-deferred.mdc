@@ -1,0 +1,20 @@
+---
+description: Deferred — other-user items filter bar “Likes” (items I liked)
+globs: closet/Profile View/RemoteProfileWardrobeGridView.swift,closet/Filter/ItemFilterSortSearchBar.swift,closet/Filter/ItemFilterModel.swift
+alwaysApply: false
+---
+
+# Deferred: other-user items bar — Likes filter
+
+**Status:** Parked. Do not add a Likes control on the other-user Items filter/sort/search bar unless the user asks.
+
+## Product intent
+
+On **other-user profile → Items**, add a **Likes** action on the filter/sort/search bar that filters the grid to items **the signed-in user has liked** (not the owner’s likes).
+
+## When revisiting
+
+1. UI: bar action (toggle/badge pattern similar to Redress on Outfits if useful).
+2. Data: reuse content-like state for `(viewer, item)` on that owner’s wardrobe grid; ensure RPC/cache supports filtering by viewer likes.
+3. Scope: Items tab only unless Outfits is requested later.
+4. Remove this rule once shipped or explicitly won’t-do.

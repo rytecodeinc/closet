@@ -22,6 +22,7 @@ struct ReadOnlyItemDetailView: View {
 
     @Environment(\.appCapabilities) private var appCapabilities
     @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.openURL) private var openURL
     @EnvironmentObject private var supabaseService: SupabaseService
     @EnvironmentObject private var authSession: AuthSession
 
@@ -32,8 +33,10 @@ struct ReadOnlyItemDetailView: View {
     @State private var isAttributesExpanded = true
     @State private var isPairsExpanded = false
     @State private var isOutfitsExpanded = false
+    @State private var isLinksExpanded = false
     @State private var isHistoryExpanded = false
     @State private var isImageFullScreen = false
+    @State private var fullscreenPageIndex = 0
     @State private var attributeDetailSheet: VisibleAttributeDetailSheet?
     @State private var selectedPairedItem: VisibleWardrobeItem?
     @State private var selectedOutfit: VisibleWardrobeOutfit?
@@ -42,6 +45,8 @@ struct ReadOnlyItemDetailView: View {
     @State private var likeCount = 0
     @State private var isLikedByMe = false
     @State private var isLikeBusy = false
+    /// Own-profile: heart reflects Core Data favorite (not social like).
+    @State private var isOwnFavorite = false
     /// Friends-style nested push — see `.cursor/rules/profile-nested-navigation.mdc`.
     @State private var redressDestination: ItemRedressDestination?
     @State private var showShareSheet = false
@@ -56,6 +61,79 @@ struct ReadOnlyItemDetailView: View {
 
     private var outfits: [VisibleWardrobeOutfit] {
         detail?.outfits ?? []
+    }
+
+    /// Own-profile read-only detail can read local Core Data links; other users have no link payload yet.
+    private var localOwnedItem: Item? {
+        guard isViewingOwnContent else { return nil }
+        let request: NSFetchRequest<Item> = Item.fetchRequest()
+        request.fetchLimit = 1
+        request.predicate = NSPredicate(
+            format: "id == %@ AND userId == %@ AND (isSoftDeleted != YES OR isSoftDeleted == nil)",
+            itemSummary.id as CVarArg,
+            ownerUserId.uuidString
+        )
+        return try? viewContext.fetch(request).first
+    }
+
+    private var viewerIsFriendWithOwner: Bool {
+        supabaseService.cachedViewedUserIsFriend(forUserId: ownerUserId) == true
+    }
+
+    private var namedItemLinks: [Link] {
+        guard let item = localOwnedItem else { return [] }
+        return ((item.links as? Set<Link>) ?? [])
+            .filter { !($0.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .filter {
+                $0.itemLinkVisibility.isVisibleOnPublicProfile(
+                    viewerIsOwner: isViewingOwnContent,
+                    viewerIsFriend: viewerIsFriendWithOwner
+                )
+            }
+            .sorted { ($0.name ?? "") < ($1.name ?? "") }
+    }
+
+    private func namedItemLinks(for type: ItemLinkType) -> [Link] {
+        namedItemLinks.filter { $0.itemLinkType == type }
+    }
+
+    @ViewBuilder
+    private func readOnlyLinkRow(_ link: Link) -> some View {
+        ItemLinkNameHostRow(
+            name: link.name ?? "",
+            host: link.url?.host,
+            nameLeadingInset: ItemLinkRowMetrics.detailNameLeadingInset,
+            onRowTap: link.url.map { url in { openURL(url) } }
+        ) {
+            if link.url != nil {
+                ItemLinkExternalArrow()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var readOnlyLinksSectionContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(ItemLinkType.allCases) { linkType in
+                let links = namedItemLinks(for: linkType)
+                if !links.isEmpty {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ItemLinkSectionTitle(type: linkType)
+                            .padding(.vertical, ItemLinkRowMetrics.headerVerticalPadding)
+
+                        ForEach(links, id: \.objectID) { link in
+                            VStack(spacing: 0) {
+                                readOnlyLinkRow(link)
+                                    .padding(.vertical, ItemLinkRowMetrics.rowVerticalPadding)
+
+                                ItemLinkRowSeparator()
+                            }
+                        }
+                    }
+                    .padding(.bottom, ItemLinkRowMetrics.sectionBottomSpacing)
+                }
+            }
+        }
     }
 
     private var canToggleLike: Bool {
@@ -170,6 +248,7 @@ struct ReadOnlyItemDetailView: View {
             tabBarHideState?.shouldHideTabBar = true
         }
         .task(id: itemSummary.id) {
+            syncOwnFavoriteFromLocalItem()
             await loadDetail()
             await refreshLikeState()
         }
@@ -177,7 +256,11 @@ struct ReadOnlyItemDetailView: View {
             visibleAttributeDetailSheet(sheet)
         }
         .fullScreenCover(isPresented: $isImageFullScreen) {
-            visibleItemFullScreenImage
+            RemoteOutfitFullScreenView(
+                pages: heroFullScreenPages,
+                selectedPageIndex: $fullscreenPageIndex,
+                isPresented: $isImageFullScreen
+            )
         }
         .navigationDestination(item: $selectedPairedItem) { item in
             ReadOnlyItemDetailView(
@@ -252,7 +335,9 @@ struct ReadOnlyItemDetailView: View {
                                     }
                                 }
                             ),
-                            favoriteSelection: isViewingOwnContent ? false : isLikedByMe,
+                            favoriteSelection: isViewingOwnContent
+                                ? isOwnFavorite
+                                : isLikedByMe,
                             likeCount: likeCount,
                             showsLikeButton: true,
                             isLikeInteractive: canToggleLike,
@@ -357,6 +442,32 @@ struct ReadOnlyItemDetailView: View {
                         .listRowInsets(EdgeInsets(.zero))
                         .listSectionSpacing(0)
                         .padding(.horizontal)
+                    }
+
+                    if !namedItemLinks.isEmpty {
+                        Section {
+                            if isLinksExpanded {
+                                readOnlyLinksSectionContent
+                                    .transition(.opacity.combined(with: .slide))
+                                    .listRowInsets(EdgeInsets(top: 5, leading: 20, bottom: 5, trailing: 20))
+                            }
+                        } header: {
+                            HStack {
+                                Text("LINKS")
+                                    .fontWeight(.semibold)
+                                Spacer()
+                                Image(systemName: isLinksExpanded ? "minus" : "plus")
+                                    .foregroundColor(.gray)
+                                    .font(.caption)
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                withAnimation {
+                                    isLinksExpanded.toggle()
+                                }
+                            }
+                        }
+                        .listSectionSpacing(0)
                     }
 
                     if let historyDate {
@@ -501,24 +612,53 @@ struct ReadOnlyItemDetailView: View {
     private func heroSlot(for type: String) -> some View {
         let heroType: HeroImageType = type == "worn" ? .worn : .front
         if let local = localHeroUIImage(for: type) {
-            localHeroImage(local)
+            localHeroImage(local, heroType: type)
         } else if let url = photoURL(for: type) {
-            remoteHeroImage(url: url, placeholderType: heroType)
+            remoteHeroImage(url: url, placeholderType: heroType, heroType: type)
         } else {
             heroImagePlaceholder(for: heroType)
         }
     }
 
-    private func localHeroImage(_ image: UIImage) -> some View {
+    private var heroFullScreenPages: [RemoteOutfitFullScreenView.Page] {
+        var pages: [RemoteOutfitFullScreenView.Page] = []
+        if let frontLocal = localHeroUIImage(for: "front") {
+            pages.append(.init(id: pages.count, uiImage: frontLocal))
+        } else if let frontURL = photoURL(for: "front") {
+            pages.append(.init(id: pages.count, url: frontURL))
+        }
+        if let wornLocal = localHeroUIImage(for: "worn") {
+            pages.append(.init(id: pages.count, uiImage: wornLocal))
+        } else if let wornURL = photoURL(for: "worn") {
+            pages.append(.init(id: pages.count, url: wornURL))
+        }
+        return pages
+    }
+
+    private func presentHeroFullScreen(for type: String) {
+        let pages = heroFullScreenPages
+        guard !pages.isEmpty else { return }
+        let targetIndex: Int
+        if type == "worn", pages.count > 1 {
+            targetIndex = 1
+        } else {
+            targetIndex = 0
+        }
+        fullscreenPageIndex = min(targetIndex, pages.count - 1)
+        isImageFullScreen = true
+    }
+
+    private func localHeroImage(_ image: UIImage, heroType: String) -> some View {
         Image(uiImage: image)
             .resizable()
             .aspectRatio(contentMode: .fill)
             .frame(width: screenWidth, height: screenWidth)
             .clipped()
-            .onTapGesture { isImageFullScreen = true }
+            .contentShape(Rectangle())
+            .onTapGesture { presentHeroFullScreen(for: heroType) }
     }
 
-    private func remoteHeroImage(url: URL, placeholderType: HeroImageType) -> some View {
+    private func remoteHeroImage(url: URL, placeholderType: HeroImageType, heroType: String) -> some View {
         AsyncImage(url: url) { phase in
             switch phase {
             case .success(let image):
@@ -534,7 +674,8 @@ struct ReadOnlyItemDetailView: View {
                     .frame(width: screenWidth, height: screenWidth)
             }
         }
-        .onTapGesture { isImageFullScreen = true }
+        .contentShape(Rectangle())
+        .onTapGesture { presentHeroFullScreen(for: heroType) }
     }
 
     private enum HeroImageType {
@@ -622,41 +763,6 @@ struct ReadOnlyItemDetailView: View {
     }
 
     @ViewBuilder
-    private var visibleItemFullScreenImage: some View {
-        let type = heroCarouselPage == 0 ? "front" : "worn"
-        ZStack(alignment: .topTrailing) {
-            Color.black.ignoresSafeArea()
-            if let local = localHeroUIImage(for: type) {
-                Image(uiImage: local)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let url = photoURL(for: type) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    default:
-                        ProgressView()
-                            .tint(.white)
-                    }
-                }
-            }
-            Button {
-                isImageFullScreen = false
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.title)
-                    .foregroundStyle(.white.opacity(0.9))
-                    .padding()
-            }
-        }
-    }
-
-    @ViewBuilder
     private func visibleAttributeDetailSheet(_ sheet: VisibleAttributeDetailSheet) -> some View {
         VStack(spacing: 0) {
             SelectionPanelHeader(title: sheet.title)
@@ -699,6 +805,14 @@ struct ReadOnlyItemDetailView: View {
         } catch {
             // Keep prior local state if like RPCs are not deployed yet.
         }
+    }
+
+    private func syncOwnFavoriteFromLocalItem() {
+        guard isViewingOwnContent else {
+            isOwnFavorite = false
+            return
+        }
+        isOwnFavorite = localOwnedItem?.isFavorite ?? false
     }
 
     private func toggleLike() {

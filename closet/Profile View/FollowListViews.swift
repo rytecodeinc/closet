@@ -171,6 +171,8 @@ struct FriendsView: View {
                             selectedProfile = profile
                         } label: {
                             profileRow(profile)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .listRowBackground(Color(.systemBackground))
@@ -199,6 +201,7 @@ struct FriendsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            Spacer(minLength: 0)
         }
         .padding(.vertical, 4)
     }

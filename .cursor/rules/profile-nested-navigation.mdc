@@ -20,7 +20,13 @@ When pushing a screen **from a view that was itself pushed** onto Profile’s `N
 - Nest **`navigationDestination(isPresented:)`** inside a screen that was already presented via `isPresented` (Edit Profile is pushed that way from Profile) — freezes.
 - Use classic **`NavigationLink(destination:)`** for these nested profile pushes — also froze Edit Profile → Wardrobe Privacy.
 - Wrap Edit Profile / Friends in a second `NavigationStack` unless intentionally isolating like `SettingsView`.
-- **`nil` out `navigationDestination(item:)` bindings in `onAppear`** of the pushed screen (e.g. `profileReadOnlyItemDestination = nil`). That orphans the parent push; Profile → Item → Outfit → Back can leave a duplicate outfit (or skip item). Keep the binding until the system pops / clears it.
+- From a **child**, nil out a **Profile/root-owned** `navigationDestination(item:)` binding in `onAppear` (e.g. `profileReadOnlyItemDestination = nil`). That orphans the parent push; Profile → Item → Outfit → Back can leave a duplicate outfit (or skip item). Keep root-owned bindings until the system pops / clears them.
+- On a **nested** other-user `ProfileView`, re-register root destinations (Notifications / Settings / Users / Friends / …). Those fight the active Friends push and can orphan Friends / hide `< Friends`. Nested profiles only attach destinations they need (e.g. Redress).
+- Put a custom **`.principal`** toolbar title on other-user Profile — iOS often drops the back-button label (chevron only). Use `.navigationTitle` so `< Friends` can show.
+
+## Nested pushes owned by mid-stack screens
+
+When **Item / Outfit / Pending** owns the next `navigationDestination(item:)` (not Profile), **do** clear that binding on the pushed child’s `onAppear` — otherwise SwiftUI re-evaluates the destination in a loop and freezes. See `navigation-destination-clear-on-appear.mdc`.
 
 ## Contrast
 
@@ -30,3 +36,4 @@ When pushing a screen **from a view that was itself pushed** onto Profile’s `N
 | Friends → other-user profile | `navigationDestination(item:)` (canonical nested push) |
 | Edit Profile → Wardrobe Privacy | `navigationDestination(item:)` (match Friends) |
 | Settings → child settings | Own inner `NavigationStack` + links (isolated) |
+| Item → Outfit / Pending → Edit OutfitAddView | `navigationDestination(item:)` + **clear binding on appear** |

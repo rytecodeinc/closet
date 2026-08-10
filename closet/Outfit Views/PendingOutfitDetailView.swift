@@ -14,6 +14,13 @@ struct PendingOutfitDetailView: View {
     let suggestionSummary: VisibleWardrobeOutfit
     var viewerRole: RedressSuggestionViewerRole = .submitter
     var onSuggestionResolved: (() -> Void)? = nil
+    /// Optional @username shown under the Redress nav title (e.g. recipient when viewing as submitter).
+    var counterpartUsername: String? = nil
+    /// Optional display name for the counterpart (used as Edit Redress headline / recipient profile).
+    var counterpartDisplayName: String? = nil
+    /// When set, replaces the system back button so the label matches the screen we came from
+    /// (needed when this view is pushed from a child that doesn’t own `navigationTitle`).
+    var backButtonTitle: String? = nil
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var viewContext
@@ -28,7 +35,6 @@ struct PendingOutfitDetailView: View {
     @State private var isItemsSectionExpanded = true
     @State private var isAttributesExpanded = false
     @State private var isHistoryExpanded = false
-    @State private var heroSegment: SocialEngagementToolbarSegment = .tshirt
     @State private var isOutfitImageFullScreen = false
     @State private var fullscreenPageIndex = 0
     @State private var localItemSheet: PendingOutfitLocalItemSheet?
@@ -38,6 +44,7 @@ struct PendingOutfitDetailView: View {
     @State private var acceptedOutfit: Outfit?
     @State private var showWithdrawConfirmation = false
     @State private var profileToView: PublicUserProfile?
+    @State private var editRedressDestination: PendingRedressEditDestination?
 
     private var screenWidth: CGFloat { UIScreen.main.bounds.width }
 
@@ -102,10 +109,63 @@ struct PendingOutfitDetailView: View {
         viewerRole == .recipient && suggesterProfile != nil
     }
 
+    private var redressNavUsernameCaption: String {
+        let raw = resolvedCounterpartUsername
+        return raw.hasPrefix("@") ? raw : "@\(raw)"
+    }
+
+    private var resolvedCounterpartUsername: String {
+        if let counterpartUsername {
+            let trimmed = counterpartUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        if viewerRole == .recipient {
+            let fromSuggester = suggesterProfile?.username.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !fromSuggester.isEmpty { return fromSuggester }
+            let caption = historyCaption?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !caption.isEmpty, caption != "Someone" { return caption }
+        }
+        return "user"
+    }
+
+    private var redressPrincipalTitle: some View {
+        VStack(spacing: 1) {
+            Text("Redress")
+                .font(.headline)
+            Text(redressNavUsernameCaption)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var sanitizedBackButtonTitle: String? {
+        guard let backButtonTitle else { return nil }
+        let trimmed = backButtonTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("@") {
+            let withoutAt = String(trimmed.dropFirst())
+            return withoutAt.isEmpty ? nil : withoutAt
+        }
+        return trimmed
+    }
+
+    private var recipientProfileForEdit: PublicUserProfile? {
+        guard showsSubmitterActions else { return nil }
+        let username = resolvedCounterpartUsername
+        let display = counterpartDisplayName?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return PublicUserProfile(
+            userId: recipientUserId,
+            username: username.hasPrefix("@") ? String(username.dropFirst()) : username,
+            displayName: display.isEmpty ? nil : display
+        )
+    }
+
     var body: some View {
         Group {
             if isLoading {
-                ProgressView("Loading suggestion…")
+                ProgressView("Loading redress…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let loadError {
                 Text(loadError)
@@ -117,14 +177,56 @@ struct PendingOutfitDetailView: View {
                 listContent
             }
         }
-        .navigationTitle("Redressed You")
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(sanitizedBackButtonTitle != nil)
         .toolbar(.hidden, for: .tabBar)
+        .toolbar {
+            if let sanitizedBackButtonTitle {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                            Text(sanitizedBackButtonTitle)
+                        }
+                    }
+                    .accessibilityLabel("Back to \(sanitizedBackButtonTitle)")
+                }
+            }
+            ToolbarItem(placement: .principal) {
+                redressPrincipalTitle
+            }
+        }
         .task(id: suggestionSummary.id) {
             await loadDetail()
         }
         .navigationDestination(item: $profileToView) { profile in
             ProfileView(viewedProfile: profile)
+        }
+        .navigationDestination(item: $editRedressDestination) { destination in
+            // Same pattern as ItemDetailView → OutfitAddView / OutfitDetailView → ItemDetailView:
+            // clear the item binding on appear so SwiftUI does not re-evaluate this
+            // destination in a loop (which freezes the stack).
+            OutfitAddView(
+                redressRecipient: destination.recipient,
+                editingSuggestionId: destination.suggestionId,
+                editingSuggestionWardrobeId: destination.wardrobeId,
+                editingProposedName: destination.proposedName,
+                editingProposedNotes: destination.proposedNotes,
+                editingItemThumbnails: destination.itemThumbnails,
+                sessionID: destination.id,
+                onRedressSent: {
+                    onSuggestionResolved?()
+                    dismiss()
+                }
+            )
+            .id(destination.id)
+            .onAppear {
+                print("🧭 [PendingOutfitDetailView] OutfitAddView appeared; resetting editRedressDestination to nil.")
+                editRedressDestination = nil
+            }
         }
         .sheet(item: $localItemSheet) { presentation in
             NavigationStack {
@@ -278,24 +380,14 @@ struct PendingOutfitDetailView: View {
             }
     }
 
-    /// Picker row with optional suggester chip; Decline/Accept (or Withdraw) sit on the row below.
+    /// Optional suggester chip (recipient) and Decline/Accept or Withdraw/Edit actions.
     private var redressActionsEngagementRow: some View {
         VStack(spacing: 10) {
-            HStack(spacing: 12) {
-                if showsSuggesterLeadingControl, let profile = suggesterProfile {
+            if showsSuggesterLeadingControl, let profile = suggesterProfile {
+                HStack(spacing: 12) {
                     suggesterLeadingControl(profile: profile)
+                    Spacer(minLength: 0)
                 }
-
-                Spacer(minLength: 0)
-
-                Picker("", selection: $heroSegment) {
-                    Image(systemName: SocialEngagementToolbarSegment.tshirt.systemImage)
-                        .tag(SocialEngagementToolbarSegment.tshirt)
-                        .accessibilityLabel(SocialEngagementToolbarSegment.tshirt.accessibilityLabel)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(maxWidth: 70)
             }
 
             if showsActionButtonsRow {
@@ -306,7 +398,7 @@ struct PendingOutfitDetailView: View {
                         redressSubmitterActionsRow
                     }
                 }
-                .padding(.top, 6)
+                .padding(.top, showsSuggesterLeadingControl ? 6 : 0)
             }
         }
         .foregroundStyle(.primary)
@@ -478,30 +570,67 @@ struct PendingOutfitDetailView: View {
 
     @ViewBuilder
     private var redressSubmitterActionsRow: some View {
-        Button {
-            showWithdrawConfirmation = true
-        } label: {
-            HStack(spacing: 6) {
-                if isRespondingToSuggestion {
-                    ProgressView()
-                } else {
-                    Image(systemName: "arrow.uturn.backward")
+        HStack(spacing: 8) {
+            Button {
+                showWithdrawConfirmation = true
+            } label: {
+                HStack(spacing: 6) {
+                    if isRespondingToSuggestion {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "xmark")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Withdraw")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                }
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.clear)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isRespondingToSuggestion)
+            .frame(maxWidth: .infinity)
+
+            Button {
+                guard let recipient = recipientProfileForEdit else { return }
+                editRedressDestination = PendingRedressEditDestination(
+                    suggestionId: suggestionSummary.id,
+                    wardrobeId: wardrobeId,
+                    recipient: recipient,
+                    proposedName: detail?.proposedName ?? suggestionSummary.name,
+                    proposedNotes: detail?.proposedNotes,
+                    itemThumbnails: detail?.itemThumbnails ?? []
+                )
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "pencil")
                         .font(.subheadline.weight(.semibold))
-                    Text("Withdraw")
+                    Text("Edit")
                         .font(.subheadline.weight(.semibold))
                 }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.cayenne.gradient)
+                )
+                .contentShape(Rectangle())
             }
-            .foregroundStyle(.primary)
+            .buttonStyle(.plain)
+            .disabled(isRespondingToSuggestion)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color(.secondarySystemFill))
-            )
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .disabled(isRespondingToSuggestion)
     }
 
     private func loadDetail() async {
@@ -540,6 +669,7 @@ struct PendingOutfitDetailView: View {
                 suggestionId: suggestionSummary.id,
                 recipientId: recipientUserId
             )
+            await deleteSuggestionImageFromR2IfPossible()
             await MainActor.run {
                 onSuggestionResolved?()
                 dismiss()
@@ -576,6 +706,8 @@ struct PendingOutfitDetailView: View {
                 )
                 try await supabaseService.respondToOutfitSuggestion(suggestionId: suggestionId, accept: true)
                 await markRedressNotificationReadIfNeeded(suggestionId: suggestionId)
+                // Suggestion collage is superseded by the materialized outfit collage upload.
+                await deleteSuggestionImageFromR2IfPossible()
 
                 if let context = redressContext {
                     outfit.persistRedressHistory(from: context)
@@ -596,6 +728,7 @@ struct PendingOutfitDetailView: View {
                     recipientUserId: recipientUserId,
                     in: viewContext
                 )
+                await deleteSuggestionImageFromR2IfPossible()
                 await MainActor.run {
                     onSuggestionResolved?()
                     dismiss()
@@ -623,6 +756,38 @@ struct PendingOutfitDetailView: View {
             try? await supabaseService.markNotificationRead(id: notification.id)
         }
     }
+
+    /// Suggestion collages live under the suggester's R2 prefix.
+    private func deleteSuggestionImageFromR2IfPossible() async {
+        let ownerId =
+            suggestionSummary.suggesterUserId
+            ?? redressContext?.suggesterUserId
+            ?? (viewerRole == .submitter ? authSession.userId : nil)
+        guard let ownerId else {
+            print("⚠️ Skipping suggestion R2 delete — missing suggester user id")
+            return
+        }
+        do {
+            try await supabaseService.deleteOutfitSuggestionImage(
+                suggestionId: suggestionSummary.id,
+                ownerUserId: ownerId
+            )
+        } catch {
+            print("⚠️ Failed to delete suggestion image from R2: \(error.localizedDescription)")
+        }
+    }
+}
+
+/// Edit Redress push payload (`navigationDestination(item:)`).
+struct PendingRedressEditDestination: Identifiable, Hashable {
+    let suggestionId: UUID
+    let wardrobeId: UUID
+    let recipient: PublicUserProfile
+    let proposedName: String?
+    let proposedNotes: String?
+    let itemThumbnails: [VisibleOutfitItemThumb]
+
+    var id: UUID { suggestionId }
 }
 
 private struct PendingOutfitLocalItemSheet: Identifiable {

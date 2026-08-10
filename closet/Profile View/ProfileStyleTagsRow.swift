@@ -18,6 +18,10 @@ struct ProfileStyleTagsRow: View {
         Color(red: 0.90, green: 0.86, blue: 0.80)
     ]
 
+    static func previewChipColor(at index: Int) -> Color {
+        chipColors[index % chipColors.count]
+    }
+
     var body: some View {
         ProfileStyleTagFlowLayout(horizontalSpacing: 8, verticalSpacing: 8) {
             ForEach(Array(labels.enumerated()), id: \.offset) { index, label in

@@ -23,6 +23,13 @@ struct ItemFilterSortSearchBar: View {
     var searchPlaceholder: String = "Name, brand, category, color, tag"
     var barHeight: CGFloat = 44
     var backgroundColor: Color = Color(.systemBackground)
+    @Environment(\.usesProfileSerifTypography) private var usesProfileSerifTypography
+
+    private func labelFont(_ style: Font.TextStyle, weight: Font.Weight = .regular) -> Font {
+        usesProfileSerifTypography
+            ? .system(style, design: .serif).weight(weight)
+            : .system(style).weight(weight)
+    }
 
     var body: some View {
         Group {
@@ -87,7 +94,7 @@ struct ItemFilterSortSearchBar: View {
                             .fixedSize(horizontal: true, vertical: true)
                             .transaction { $0.animation = nil }
                         Text("Redress")
-                            .font(.subheadline)
+                            .font(labelFont(.subheadline))
                             .foregroundStyle(isRedressFilterActive ? Color.white : Color.primary)
                     }
                     .frame(maxWidth: .infinity)
@@ -110,12 +117,12 @@ struct ItemFilterSortSearchBar: View {
     private var searchBar: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.body)
+                .font(labelFont(.body))
                 .foregroundStyle(.secondary)
 
             TextField(searchPlaceholder, text: $searchQuery)
                 .textFieldStyle(.plain)
-                .font(.subheadline)
+                .font(labelFont(.subheadline))
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .focused(isSearchFocused)
@@ -124,7 +131,7 @@ struct ItemFilterSortSearchBar: View {
             Button("Cancel") {
                 onDismissSearch()
             }
-            .font(.subheadline)
+            .font(labelFont(.subheadline))
         }
         .onAppear {
             isSearchFocused.wrappedValue = true
@@ -134,13 +141,13 @@ struct ItemFilterSortSearchBar: View {
     private var filterActionLabel: some View {
         HStack(spacing: 4) {
             Image(systemName: "line.3.horizontal.decrease.circle")
-                .font(.body)
+                .font(labelFont(.body))
                 .overlay(alignment: .topTrailing) {
                     FilterSelectionCountBadge(count: activeFilterCount)
                         .offset(x: 6, y: -6)
                 }
             Text("Filter")
-                .font(.subheadline)
+                .font(labelFont(.subheadline))
         }
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
@@ -149,9 +156,9 @@ struct ItemFilterSortSearchBar: View {
     private func actionLabel(title: String, systemImage: String) -> some View {
         HStack(spacing: 4) {
             Image(systemName: systemImage)
-                .font(.body)
+                .font(labelFont(.body))
             Text(title)
-                .font(.subheadline)
+                .font(labelFont(.subheadline))
         }
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())

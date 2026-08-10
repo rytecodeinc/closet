@@ -45,6 +45,7 @@ struct OutfitDetailView: View {
     @State private var pendingShareText: String?
     @State private var pendingShareImage: UIImage?
     @State private var showShareFriendsSheet = false
+    @State private var showShareSentToast = false
     @State private var showDeleteOutfitConfirmation = false
     @State private var showRemoveWornImageConfirmation = false
     /// Set when a worn photo is saved/replaced. Consumed after any collage reset so Worn wins.
@@ -114,9 +115,23 @@ struct OutfitDetailView: View {
     private var shouldSplitFeaturedItemsByWardrobeType: Bool {
         !orderedWishlistFeaturedItems.isEmpty && !orderedClosetFeaturedItems.isEmpty
     }
+
+    /// Parallel to `ItemDetailView.isWishlistItem`: outfit has no closet items (wishlist-only).
+    private var isWishlistOutfit: Bool {
+        orderedClosetFeaturedItems.isEmpty && !orderedWishlistFeaturedItems.isEmpty
+    }
+
+    private var pastWornEventCount: Int {
+        pastWornEvents(for: outfit).count
+    }
+
+    private var showsCalendarActions: Bool {
+        !isReadOnly && !isWishlistOutfit && pastWornEventCount > 0
+    }
     
     var body: some View {
         VStack(spacing: 0) {
+            // Deferred: hide scrollbar to match ItemDetailView (see `.cursor/rules/outfit-detail-hide-scrollbar-deferred.mdc`).
             List {
                 Section {
                     outfitDisplayArea
@@ -130,26 +145,26 @@ struct OutfitDetailView: View {
                                 }
                             }
                         ),
-                        favoriteSelection: isReadOnly ? isLikedByMe : outfit.isFavorite,
+                        favoriteSelection: isViewingOwnContent ? outfit.isFavorite : isLikedByMe,
                         likeCount: isReadOnly ? likeCount : nil,
+                        calendarCount: showsCalendarActions
+                            ? pastWornEventCount
+                            : nil,
                         showsLikeButton: true,
                         isLikeInteractive: isReadOnly ? canToggleSocialLike : true,
+                        showsCalendarButton: showsCalendarActions,
                         showsShareButton: appCapabilities.enablesFriendsAndSharing,
                         showsWornSegment: outfit.wornImage != nil || !isReadOnly,
                         onLike: {
                             if isReadOnly {
                                 toggleSocialLike()
                             } else {
-                                outfit.isFavorite.toggle()
-                                setUpdatedAt(outfit)
-                                do {
-                                    try viewContext.save()
-                                    SyncService.shared.syncOutfitIfNeeded(outfit)
-                                } catch {
-                                    viewContext.rollback()
+                                withAnimation {
+                                    toggleOwnFavorite()
                                 }
                             }
                         },
+                        onCalendar: {},
                         onShare: { showShareFriendsSheet = true }
                     )
                 }
@@ -188,7 +203,8 @@ struct OutfitDetailView: View {
                         OutfitAttributesSectionView(
                             outfit: outfit,
                             activeSheet: $attributesSheet,
-                            isReadOnly: isReadOnly
+                            isReadOnly: isReadOnly,
+                            showsCost: true
                         )
                             .transition(.opacity.combined(with: .slide))
                             .listRowInsets(EdgeInsets(top: 5, leading: 20, bottom: 5, trailing: 20))
@@ -414,10 +430,44 @@ struct OutfitDetailView: View {
             get: { appCapabilities.enablesFriendsAndSharing && showShareFriendsSheet },
             set: { showShareFriendsSheet = $0 }
         )) {
-            ShareOutfitFriendsSheet()
+            if let outfitId = outfit.id {
+                ShareOutfitFriendsSheet(targetId: outfitId) {
+                    showShareSentToastMessage()
+                }
                 .environmentObject(supabaseService)
+            } else {
+                Text("This outfit isn’t ready to share yet.")
+                    .foregroundStyle(.secondary)
+                    .padding()
+            }
+        }
+        .overlay(alignment: .top) {
+            if showShareSentToast {
+                Text("Sent")
+                    .font(.subheadline)
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(.black.opacity(0.8))
+                    .clipShape(Capsule())
+                    .padding(.top, 10)
+                    .padding(.horizontal, 16)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
         }
         .toolbar(.hidden, for: .tabBar)
+    };
+
+    private func showShareSentToastMessage() {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            showShareSentToast = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+            withAnimation(.easeInOut(duration: 0.22)) {
+                showShareSentToast = false
+            }
+        }
     }
 
     /// Sheets / covers that can re-fire `onAppear` without leaving the detail screen.
@@ -432,7 +482,8 @@ struct OutfitDetailView: View {
     }
 
     private var outfitHeroOptionsDialogTitle: String {
-        heroCarouselPage == 0 ? "Outfit" : "Photo"
+        if heroCarouselPage == 0 { return "Outfit" }
+        return outfit.wornImage == nil ? "Add Worn Photo" : "Photo"
     }
 
     @ViewBuilder
@@ -448,32 +499,26 @@ struct OutfitDetailView: View {
             }
             Button("Cancel", role: .cancel) {}
         } else {
+            let hasWornImage = outfit.wornImage != nil
             if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                Button("Retake Photo") {
+                Button(hasWornImage ? "Retake Photo" : "Take Photo") {
                     outfitHeroImagePickerSlot = .worn
                     outfitHeroImagePickerSource = .camera
                     isOutfitHeroImagePickerPresented = true
                 }
             }
-            Button("Replace from Library") {
+            Button(hasWornImage ? "Replace from Library" : "Choose from Library") {
                 outfitHeroImagePickerSlot = .worn
                 outfitHeroImagePickerSource = .photoLibrary
                 isOutfitHeroImagePickerPresented = true
             }
-            if currentOutfitHeroUIImage() != nil {
+            if hasWornImage {
                 Button("Edit Image") {
                     presentOutfitHeroImageCropper()
-                }
-                if appCapabilities.enablesFriendsAndSharing {
-                    Button("Share with Friends") {
-                        showShareFriendsSheet = true
-                    }
                 }
                 Button("Share Image") {
                     shareOutfitImage()
                 }
-            }
-            if outfit.wornImage != nil {
                 Button("Remove Image", role: .destructive) {
                     // Present after the options sheet finishes dismissing.
                     DispatchQueue.main.async {
@@ -739,8 +784,10 @@ struct OutfitDetailView: View {
         setUpdatedAt(outfit)
         do {
             try viewContext.save()
+            print("✅ Deleted Worn photo.")
             if outfit.isDraft != true {
-                SyncService.shared.syncOutfitIfNeeded(outfit)
+                // Same idea as item worn delete: clear R2 + remote URL, skip full outfit upsert.
+                SyncService.shared.syncOutfitWornRemovalIfNeeded(outfit)
             }
         } catch {
             print("Failed to remove worn outfit image: \(error.localizedDescription)")
@@ -768,7 +815,7 @@ struct OutfitDetailView: View {
         do {
             try viewContext.save()
             if outfit.isDraft != true {
-                SyncService.shared.syncOutfitIfNeeded(outfit)
+                SyncService.shared.syncOutfitWornUploadIfNeeded(outfit)
             }
         } catch {
             print("Failed to save worn outfit image: \(error.localizedDescription)")
@@ -886,6 +933,26 @@ struct OutfitDetailView: View {
         let ownerId = outfit.userId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !ownerId.isEmpty, let ownerUUID = UUID(uuidString: ownerId) else { return false }
         return viewerId != ownerUUID
+    }
+
+    /// Owner viewing their own outfit (Closet editable or Profile read-only).
+    private var isViewingOwnContent: Bool {
+        if !isReadOnly { return true }
+        guard let viewerId = authSession.userId else { return false }
+        let ownerId = outfit.userId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard let ownerUUID = UUID(uuidString: ownerId) else { return false }
+        return viewerId == ownerUUID
+    }
+
+    private func toggleOwnFavorite() {
+        outfit.isFavorite.toggle()
+        setUpdatedAt(outfit)
+        do {
+            try viewContext.save()
+            SyncService.shared.syncOutfitIfNeeded(outfit)
+        } catch {
+            viewContext.rollback()
+        }
     }
 
     private func refreshSocialLikeState(outfitId: UUID) async {
@@ -1139,6 +1206,11 @@ struct OutfitShareSelectionView: View {
         !availableAttributes.isEmpty && availableAttributes.isSubset(of: selectedAttributes)
     }
 
+    /// Image + a custom attribute mix (not empty, not all, not the saved default preset).
+    private var isCustomSelectedAttributes: Bool {
+        !selectedAttributes.isEmpty && !allSelected && !isDefaultSelected
+    }
+
     var defaultAttributes: Set<ShareableOutfitAttribute> {
         DefaultOutfitShareAttributes.load()
     }
@@ -1164,6 +1236,18 @@ struct OutfitShareSelectionView: View {
             List {
                 Section {
                     Toggle(isOn: Binding(
+                        get: { selectedAttributes.isEmpty },
+                        set: { newValue in
+                            if newValue {
+                                selectedAttributes.removeAll()
+                            }
+                        }
+                    )) {
+                        Text("Image Only")
+                            .foregroundColor(.black)
+                    }
+
+                    Toggle(isOn: Binding(
                         get: { allSelected },
                         set: { newValue in
                             if newValue {
@@ -1173,7 +1257,7 @@ struct OutfitShareSelectionView: View {
                             }
                         }
                     )) {
-                        Text("All Attributes")
+                        Text("Image + All Attributes")
                             .foregroundColor(.black)
                     }
 
@@ -1189,9 +1273,25 @@ struct OutfitShareSelectionView: View {
                                 }
                             }
                         )) {
-                            Text("Default Attributes")
+                            Text("Image + Default Attributes")
                                 .foregroundColor(.black)
                         }
+                    }
+
+                    Toggle(isOn: Binding(
+                        get: { isCustomSelectedAttributes },
+                        set: { newValue in
+                            if newValue {
+                                if allSelected || isDefaultSelected {
+                                    selectedAttributes.removeAll()
+                                }
+                            } else if isCustomSelectedAttributes {
+                                selectedAttributes.removeAll()
+                            }
+                        }
+                    )) {
+                        Text("Image + Selected Attributes")
+                            .foregroundColor(.black)
                     }
                 }
 
@@ -1246,11 +1346,11 @@ struct OutfitShareSelectionView: View {
                     .padding(.vertical, 8)
                 }
             }
-            .navigationTitle("Select Attributes")
+            .navigationTitle("External Share")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Share") {
+                    Button {
                         let shareText: String?
                         if selectedAttributes.isEmpty {
                             shareText = nil
@@ -1260,6 +1360,9 @@ struct OutfitShareSelectionView: View {
                             shareText = generated.isEmpty ? nil : generated
                         }
                         onShare(shareText)
+                    } label: {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                            .labelStyle(.titleAndIcon)
                     }
                     .fontWeight(.semibold)
                 }

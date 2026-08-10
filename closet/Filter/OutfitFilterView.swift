@@ -103,10 +103,17 @@ struct OutfitFilterView: View {
                 }
             }
             .toolbar {
+                if remoteProfileMode {
+                    ToolbarItem(placement: .principal) {
+                        Text("Filter")
+                            .font(.profileSerif(.headline, weight: .semibold))
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     OutfitFilterApplyButton()
                 }
             }
+            .modifier(OtherUserProfileSerifModifier(isActive: remoteProfileMode))
     }
 
     private func filterAttributeLabel(_ title: String, selectionCount: Int) -> some View {
