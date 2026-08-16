@@ -19,6 +19,8 @@ struct EditProfileView: View {
         sortDescriptors: []
     ) private var allUserProfiles: FetchedResults<UserProfile>
 
+    @State private var draftUsername = ""
+    @State private var baselineUsername = ""
     @State private var draftDisplayName = ""
     @State private var baselineDisplayName = ""
 
@@ -46,7 +48,22 @@ struct EditProfileView: View {
     private var isDirty: Bool {
         let trimmedDraft = draftDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedBaseline = baselineDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmedDraft != trimmedBaseline
+        let displayDirty = trimmedDraft != trimmedBaseline
+        guard canEditUsername else { return displayDirty }
+        let trimmedUsername = draftUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedUsernameBaseline = baselineUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+        return displayDirty || trimmedUsername != trimmedUsernameBaseline
+    }
+
+    /// See UsernameChangePolicy / username-change-cooldown-deferred.mdc
+    private var canEditUsername: Bool {
+        UsernameChangePolicy.canChangeUsername(lastChangedAt: userProfile?.usernameChangedAt)
+    }
+
+    private var usernameCooldownFooter: String? {
+        guard let next = UsernameChangePolicy.nextAllowedChangeDate(after: userProfile?.usernameChangedAt),
+              !canEditUsername else { return nil }
+        return UsernameChangePolicy.lockedMessage(until: next)
     }
 
     private var avatarProfile: PublicUserProfile? {
@@ -67,6 +84,21 @@ struct EditProfileView: View {
             .listRowInsets(EdgeInsets())
             .listRowSeparator(.hidden)
             .listSectionSpacing(0)
+
+            Section {
+                TextField("Username", text: $draftUsername)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled(true)
+                    .textContentType(.username)
+                    .disabled(!canEditUsername)
+                    .foregroundStyle(canEditUsername ? .primary : .secondary)
+            } header: {
+                sectionHeader("USERNAME")
+            } footer: {
+                if let usernameCooldownFooter {
+                    Text(usernameCooldownFooter)
+                }
+            }
 
             Section {
                 TextField("Display name", text: $draftDisplayName)
@@ -118,6 +150,11 @@ struct EditProfileView: View {
         }
         .onAppear {
             loadDraftFromProfile()
+            Task {
+                guard appCapabilities.enablesCloudSync else { return }
+                _ = try? await supabaseService.getUsername(forceRefresh: true)
+                await MainActor.run { loadDraftFromProfile() }
+            }
         }
         .confirmationDialog(
             "Profile Photo",
@@ -238,6 +275,11 @@ struct EditProfileView: View {
     }
 
     private func loadDraftFromProfile() {
+        let username = (userProfile?.username ?? supabaseService.cachedUsername ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        draftUsername = username
+        baselineUsername = username
+
         let name = userProfile?.displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         draftDisplayName = name
         baselineDisplayName = name
@@ -249,10 +291,23 @@ struct EditProfileView: View {
         defer { Task { @MainActor in isSaving = false } }
 
         let repository = UserProfileRepository(context: viewContext)
+        let trimmedUsername = draftUsername.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedName = draftDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let usernameChanged = canEditUsername
+            && trimmedUsername != baselineUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayNameChanged = trimmedName != baselineDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
 
         do {
-            try repository.updateDisplayName(trimmedName, userId: userId.uuidString)
+            if usernameChanged {
+                if appCapabilities.enablesCloudSync {
+                    try await supabaseService.updateUsername(trimmedUsername)
+                } else {
+                    try repository.updateUsername(trimmedUsername, userId: userId.uuidString)
+                }
+            }
+            if displayNameChanged {
+                try repository.updateDisplayName(trimmedName, userId: userId.uuidString)
+            }
             // TODO: Revisit profile style tags — re-enable repository.updateStyleTags when shipping the feature.
 
             await MainActor.run {

@@ -203,7 +203,8 @@ extension SyncEngine {
             categoryId: item.category?.id?.uuidString,
             subcategoryId: item.subcategory?.id?.uuidString,
             sizeId: item.itemSize?.id?.uuidString,
-            locationId: item.location?.id?.uuidString
+            locationId: item.location?.id?.uuidString,
+            linkSectionVisibility: item.linkSectionVisibility
             )
         }
         

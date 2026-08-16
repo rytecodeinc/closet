@@ -1,0 +1,16 @@
+---
+description: Wardrobe names — 1–24 chars, unique per user per type
+globs: closet/Closet View/ClosetView.swift,closet/Wishlist View/WishlistView.swift,closet/Services/CoreDataHelpers.swift,closet/Services/WardrobeBootstrap.swift
+alwaysApply: false
+---
+
+# Wardrobe naming
+
+Use `WardrobeNaming` for create/rename (Closet and Wishlist).
+
+- Normalize: trim, collapse internal whitespace to a single space.
+- Length: **1–24** grapheme clusters (`Character`); truncate typing with `limitingTyping`.
+- Unique among **active** wardrobes of the **same type** (`closet` vs `wishlist`) for the **same user**, case-insensitive. Soft-deleted rows do not count. Rename to the current name is allowed.
+- Defaults (“Closet” / “Wishlist”) follow the same rules — no second of that name.
+- Disable Create/Save until `Validation.isValid`; do not save invalid names.
+- Duplicate copy: `You already have a closet named Travel` (or wishlist).

@@ -63,6 +63,7 @@ struct ColorVisibilityView: View {
         }
         .navigationTitle("Colors")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
         .navigationBarBackButtonHidden(true)
         .disableInteractivePopGesture()
         .toolbar {

@@ -1,5 +1,5 @@
 //
-//  OutfitCalendarView.swift
+//  CalendarView.swift
 //  closet
 //
 //  Created by Dan Warner on 9/20/25.
@@ -10,16 +10,20 @@ import SwiftUI
 import CoreData
 import UIKit
 
-struct OutfitCalendarView: View {
+struct CalendarView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject private var authSession: AuthSession
     @State private var events: [Event] = []
 
     @State private var selectedDate: Date? = nil
     @State private var showingEventDrawer = false
-    @State private var showingCreateEvent = false
     @State private var showingDatePicker = false
     @State private var pickerSelectedDate: Date = Date()
+    /// Set while dismissing the day drawer; applied as a calendar-stack push in sheet `onDismiss`.
+    @State private var pendingEventDetailURI: String?
+    @State private var pendingCreateEventDate: Date?
+    @State private var navigationPath = NavigationPath()
+    @StateObject private var locationDraft = EventLocationDraft()
     
     @State private var currentMonth: Date = Date()
     @State private var dragOffset: CGFloat = 0
@@ -28,7 +32,8 @@ struct OutfitCalendarView: View {
     private let calendar = Calendar.current
     
     var body: some View {
-        GeometryReader { geo in
+        NavigationStack(path: $navigationPath) {
+            GeometryReader { geo in
             ZStack(alignment: .top) {
                 
                 VStack(spacing: 0) {
@@ -89,10 +94,13 @@ struct OutfitCalendarView: View {
                             Image(systemName: "calendar.circle")
                         }
                     }
-                    // create new event
+                    // create new event — push on calendar stack (Closet-style)
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button(action: {
-                            showingCreateEvent = true
+                            locationDraft.reset()
+                            navigationPath.append(
+                                CalendarRoute.createEvent(id: UUID(), initialDate: selectedDate ?? Date())
+                            )
                         }) {
                             Image(systemName: "plus")
                         }
@@ -121,44 +129,61 @@ struct OutfitCalendarView: View {
         .task(id: authSession.userId) {
             fetchEvents()
         }
-        .sheet(isPresented: $showingEventDrawer) {
+        .sheet(isPresented: $showingEventDrawer, onDismiss: {
+            fetchEvents()
+            // Dismiss-then-push: only after the drawer sheet is fully gone.
+            if let pending = pendingEventDetailURI {
+                pendingEventDetailURI = nil
+                DispatchQueue.main.async {
+                    navigationPath.append(CalendarRoute.eventDetail(pending))
+                }
+                return
+            }
+            if let createDate = pendingCreateEventDate {
+                pendingCreateEventDate = nil
+                DispatchQueue.main.async {
+                    locationDraft.reset()
+                    navigationPath.append(
+                        CalendarRoute.createEvent(id: UUID(), initialDate: createDate)
+                    )
+                }
+            }
+        }) {
             Group {
                 if let selectedDate = selectedDate {
-                    NavigationView {
-                        EventDrawerView(
-                            selectedDate: selectedDate,
-                            ownerUserId: authSession.userId?.uuidString,
-                            onDismiss: {
-                                showingEventDrawer = false
-                                self.selectedDate = nil
-                            },
-                            onNavigateDate: { newDate in
-                                self.selectedDate = newDate
-                                self.currentMonth = startOfMonth(for: newDate)
-                            }
-                        )
-                        .onDisappear {
-                            fetchEvents()
+                    EventDrawerView(
+                        selectedDate: selectedDate,
+                        ownerUserId: authSession.userId?.uuidString,
+                        onDismiss: {
+                            showingEventDrawer = false
+                        },
+                        onNavigateDate: { newDate in
+                            self.selectedDate = newDate
+                            self.currentMonth = startOfMonth(for: newDate)
+                        },
+                        onSelectEvent: { event in
+                            pendingEventDetailURI = event.objectID.uriRepresentation().absoluteString
+                            showingEventDrawer = false
+                        },
+                        onCreateEvent: {
+                            pendingCreateEventDate = selectedDate
+                            showingEventDrawer = false
                         }
-                    }
+                    )
                 } else {
                     EmptyView()
                 }
             }
             .presentationDetents([.medium, .large])
         }
-
-        .sheet(isPresented: $showingCreateEvent) {
-            CreateEventView(initialDate: selectedDate ?? Date())
-                .environment(\.managedObjectContext, viewContext)
-                .onDisappear { fetchEvents() }
+        .navigationDestination(for: CalendarRoute.self) { route in
+            calendarDestination(for: route)
         }
         .sheet(isPresented: $showingDatePicker) {
-            NavigationView {
+            NavigationStack {
                 VStack {
                     MonthYearPicker(selection: $pickerSelectedDate)
                 }
-              //  .padding()
                 .navigationTitle("Select Month")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -178,6 +203,56 @@ struct OutfitCalendarView: View {
                 }
             }
             .presentationDetents([.fraction(0.75), .height(300)])
+        }
+        }
+        .environmentObject(locationDraft)
+    }
+    
+    @ViewBuilder
+    private func calendarDestination(for route: CalendarRoute) -> some View {
+        switch route {
+        case .eventDetail(let uriString):
+            if let event = managedEvent(forURI: uriString) {
+                EventDetailView(event: event, navigationPath: $navigationPath)
+                    .environment(\.managedObjectContext, viewContext)
+                    .id(event.objectID)
+                    .onDisappear { fetchEvents() }
+            } else {
+                Text("Event unavailable")
+            }
+        case .createEvent(_, let initialDate):
+            EventAddView(
+                eventToEdit: nil,
+                initialDate: initialDate,
+                navigationPath: $navigationPath
+            )
+            .environment(\.managedObjectContext, viewContext)
+            .environmentObject(locationDraft)
+            .onDisappear { fetchEvents() }
+        case .editEvent(let uriString):
+            if let event = managedEvent(forURI: uriString) {
+                EventAddView(
+                    eventToEdit: event,
+                    navigationPath: $navigationPath
+                )
+                .environment(\.managedObjectContext, viewContext)
+                .environmentObject(locationDraft)
+                .id(event.objectID)
+                .onDisappear { fetchEvents() }
+            } else {
+                Text("Event unavailable")
+            }
+        case .location:
+            LocationSearchView()
+                .environmentObject(locationDraft)
+        case .items(let uriString):
+            if let event = managedEvent(forURI: uriString) {
+                EventIndividualItemSelection(event: event)
+                    .environment(\.managedObjectContext, viewContext)
+                    .id(event.objectID)
+            } else {
+                Text("Event unavailable")
+            }
         }
     }
     
@@ -360,6 +435,16 @@ struct OutfitCalendarView: View {
         calendar.startOfDay(for: date)
     }
 
+    private func managedEvent(forURI uriString: String) -> Event? {
+        guard let url = URL(string: uriString),
+              let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url),
+              let event = try? viewContext.existingObject(with: objectID) as? Event,
+              event.isSoftDeleted != true else {
+            return nil
+        }
+        return event
+    }
+
     
     private func fetchEvents() {
         let request = NSFetchRequest<Event>(entityName: "Event")
@@ -427,8 +512,4 @@ struct MonthYearPicker: UIViewRepresentable {
         }
     }
 }
-
-
-
-
 

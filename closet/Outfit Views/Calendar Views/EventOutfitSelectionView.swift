@@ -169,8 +169,10 @@ struct EventOutfitSelectionView: View {
         
         // Only save context if event is already persisted (not a temporary/new event)
         if !event.objectID.isTemporaryID {
+            setUpdatedAt(event)
             do {
                 try viewContext.save()
+                SyncService.shared.syncEventIfNeeded(event)
             } catch {
                 print("Failed to save outfits to event: \(error)")
             }

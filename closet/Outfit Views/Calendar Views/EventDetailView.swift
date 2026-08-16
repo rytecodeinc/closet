@@ -11,32 +11,14 @@ import UIKit
 
 struct EventDetailView: View {
     @ObservedObject var event: Event
+    @Binding var navigationPath: NavigationPath
     
-    @State private var showingEditView = false
     @State private var showingMapOptions = false
+    /// Bumped when returning from edit so notes/other fields re-render from Core Data.
+    @State private var notesRefreshToken = UUID()
     
     @Environment(\.managedObjectContext) private var viewContext
-    
-    private let dateTimeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateStyle = .medium
-        f.timeStyle = .short
-        return f
-    }()
-    
-    private let dateOnlyFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateStyle = .medium
-        f.timeStyle = .none
-        return f
-    }()
-    
-    // Helper function to format time, hiding :00 when minutes are zero (e.g., "3:00 PM" -> "3 PM")
-    private func formatTime(_ date: Date) -> String {
-        let formatted = dateTimeFormatter.string(from: date)
-        // Remove ":00" if present (handles both "3:00 PM" and "15:00" formats)
-        return formatted.replacingOccurrences(of: ":00", with: "")
-    }
+    @Environment(\.appCapabilities) private var appCapabilities
     
     private var isAllDay: Bool {
         guard let start = event.startDate, let end = event.endDate else { return false }
@@ -93,7 +75,7 @@ struct EventDetailView: View {
     }
 
     private var locationRowContent: some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .top, spacing: 12) {
             Image(systemName: "mappin.and.ellipse")
                 .foregroundColor(.gray)
                 .frame(width: 22)
@@ -114,13 +96,19 @@ struct EventDetailView: View {
                 }
             }
 
-            Spacer()
+            Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
     }
 
     private var itemsSelectionSection: some View {
         EventItemsSelectionSection(items: selectedItems, outfits: selectedOutfits, isReadOnly: true) {}
+    }
+
+    private var displayedNotes: String? {
+        let _ = notesRefreshToken
+        let trimmed = event.notes?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     // MARK: - Date & Time section
@@ -163,44 +151,51 @@ struct EventDetailView: View {
                 .foregroundColor(.gray)
                 .frame(width: 22)
 
-            if isSameDayEvent, let startDate = event.startDate {
-                Group {
-                    if isAllDay {
-                        Text("\(fullDateFormatter.string(from: startDate)) All-day")
-                    } else if let endDate = event.endDate {
-                        Text("\(fullDateFormatter.string(from: startDate)) \(inlineTimeRange(start: startDate, end: endDate))")
-                    } else {
-                        Text("\(fullDateFormatter.string(from: startDate)) \(compactTime(startDate, includePeriod: true))")
-                    }
+            VStack(alignment: .leading, spacing: 2) {
+                if let title = dateTimePrimaryLine {
+                    Text(title)
+                        .foregroundColor(.primary)
                 }
-                .font(.body)
-            } else {
-                VStack(alignment: .leading, spacing: 15) {
-                    if isAllDay {
-                        Text("All-day")
-                            .font(.body)
-                    }
 
-                    if let startDate = event.startDate {
-                        HStack {
-                            Text("Start")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text(isAllDay ? dateOnlyFormatter.string(from: startDate) : formatTime(startDate))
-                        }
-                    }
-
-                    if let endDate = event.endDate {
-                        HStack {
-                            Text("End")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text(isAllDay ? dateOnlyFormatter.string(from: endDate) : formatTime(endDate))
-                        }
-                    }
+                if let subtitle = dateTimeSecondaryLine {
+                    Text(subtitle)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
                 }
             }
+
+            Spacer(minLength: 0)
         }
+    }
+
+    /// Date line (location-style primary).
+    private var dateTimePrimaryLine: String? {
+        guard let startDate = event.startDate else { return nil }
+        if isSameDayEvent {
+            return fullDateFormatter.string(from: startDate)
+        }
+        guard let endDate = event.endDate else {
+            return fullDateFormatter.string(from: startDate)
+        }
+        return "\(fullDateFormatter.string(from: startDate)) – \(fullDateFormatter.string(from: endDate))"
+    }
+
+    /// Start–end time (or All-day), location-style secondary.
+    private var dateTimeSecondaryLine: String? {
+        guard let startDate = event.startDate else { return nil }
+        if isAllDay {
+            return "All-day"
+        }
+        if isSameDayEvent {
+            if let endDate = event.endDate {
+                return inlineTimeRange(start: startDate, end: endDate)
+            }
+            return compactTime(startDate, includePeriod: true)
+        }
+        guard let endDate = event.endDate else {
+            return compactTime(startDate, includePeriod: true)
+        }
+        return "\(compactTime(startDate, includePeriod: true)) – \(compactTime(endDate, includePeriod: true))"
     }
     
     var body: some View {
@@ -232,13 +227,26 @@ struct EventDetailView: View {
                         .padding(.horizontal)
                 }
 
+                // MARK: - Privacy (cloud sync only)
+                if appCapabilities.enablesCloudSync {
+                    Divider()
+                    HStack(alignment: .center, spacing: 12) {
+                        Image(systemName: event.eventVisibility.iconName)
+                            .foregroundColor(.gray)
+                            .frame(width: 22)
+                        Text(event.eventVisibility.menuLabel)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal)
+                }
+
                 // MARK: - Items Selection
                 Divider()
                 itemsSelectionSection
                     .padding(.horizontal)
 
                 // MARK: - Notes/Description
-                if let notes = event.notes?.trimmingCharacters(in: .whitespacesAndNewlines), !notes.isEmpty {
+                if let notes = displayedNotes {
                     Divider()
                     HStack(alignment: .top, spacing: 12) {
                         Image(systemName: "note.text")
@@ -249,22 +257,28 @@ struct EventDetailView: View {
                             .font(.body)
                     }
                     .padding(.horizontal)
+                    .id(notes)
                 }
             }
+            // Outside all rows — same visual clearance as ItemDetail history bottom pad.
+            .padding(.bottom, 4)
         }
+        .scrollBounceBehavior(.basedOnSize)
         .background(Color(.systemBackground))
         .navigationTitle("Event Details")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button("Edit") {
-                    showingEditView = true
+                    navigationPath.append(
+                        CalendarRoute.editEvent(event.objectID.uriRepresentation().absoluteString)
+                    )
                 }
             }
         }
-        .sheet(isPresented: $showingEditView) {
-            CreateEventView(eventToEdit: event)
-                .environment(\.managedObjectContext, viewContext)
+        .onChange(of: navigationPath.count) { _, _ in
+            viewContext.refresh(event, mergeChanges: true)
+            notesRefreshToken = UUID()
         }
         .confirmationDialog("Event Location", isPresented: $showingMapOptions, titleVisibility: .visible) {
             Button("Copy to Clipboard") {

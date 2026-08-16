@@ -16,6 +16,8 @@ struct ProfileView: View {
     /// When this profile is pushed from Friends/Users, reuse the root Profile tab's hide flag
     /// so the tab bar stays hidden for the full push path.
     var sharedTabBarHideState: TabBarHideState? = nil
+    /// Nested other-user profiles append onto the Profile tab stack (no second `NavigationStack`).
+    var sharedNavigationPath: Binding<NavigationPath>? = nil
 
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.appCapabilities) private var appCapabilities
@@ -76,10 +78,6 @@ struct ProfileView: View {
     /// Gap between avatar row and display name.
     private static let profileHeaderNameTopPadding: CGFloat = 8
     private static let profileHeaderActionIconSize: CGFloat = 20
-    /// Layout preview placeholders for other-user header (real bio/tags later).
-    private static let otherUserHeaderPlaceholderBio =
-        "Style is how I express who I am – effortlessly, authentically, and always evolving"
-    private static let otherUserHeaderPlaceholderStyleTags = ["Vintage", "Romantic", "Minimalist"]
     /// Full header template (bio/tags/location/socials/Sizes flanking) — see `.cursor/rules/profile-header-full-template-deferred.mdc`.
 
     @State private var refreshToken = UUID()
@@ -102,13 +100,9 @@ struct ProfileView: View {
     @State private var showOtherUserProfileOptionsDialog = false
     @State private var canShowRedress = false
     @State private var isRedressOutfitPresented = false
-    @State private var isNotificationsPresented = false
-    @State private var isSettingsPresented = false
-    @State private var isEditProfilePresented = false
-    @State private var isUsersPresented = false
-    @State private var isFriendsPresented = false
     @State private var remoteGridRefreshToken = UUID()
     @State private var remoteGridPreferredTab = "Items"
+    @State private var ownEmptyGridPreferredTab = "Items"
     // Deferred: other-user WARDROBE/CALENDAR tab — see `.cursor/rules/other-user-profile-calendar-deferred.mdc`
     // @State private var otherUserContentTab = "WARDROBE"
     @State private var lastOwnFriendshipRefreshAt: Date?
@@ -124,6 +118,43 @@ struct ProfileView: View {
 
     private var remoteWishlists: [VisibleWardrobe] {
         remoteWardrobes.filter { $0.wardrobeType == "wishlist" }
+    }
+
+    /// Closets a friend would see on this profile (public or friends) — earliest `createdAt` first via fetch order.
+    private var friendVisibleUserClosets: [Wardrobe] {
+        userClosets.filter { $0.wardrobeVisibility != .private }
+    }
+
+    /// Wishlists a friend would see on this profile (public or friends).
+    private var friendVisibleUserWishlists: [Wardrobe] {
+        userWishlists.filter { $0.wardrobeVisibility != .private }
+    }
+
+    /// Same order a friend sees: first public/friends closet, else first public/friends wishlist.
+    private var preferredFriendVisibleProfileWardrobe: Wardrobe? {
+        friendVisibleUserClosets.first ?? friendVisibleUserWishlists.first
+    }
+
+    /// First visible closet (public, or friends when RPC includes it), else first visible wishlist — earliest `createdAt`.
+    private var preferredRemoteProfileWardrobe: VisibleWardrobe? {
+        earliestCreatedRemoteWardrobe(in: remoteClosets)
+            ?? earliestCreatedRemoteWardrobe(in: remoteWishlists)
+    }
+
+    private func earliestCreatedRemoteWardrobe(in wardrobes: [VisibleWardrobe]) -> VisibleWardrobe? {
+        wardrobes.sorted { lhs, rhs in
+            switch (lhs.createdAt, rhs.createdAt) {
+            case let (l?, r?):
+                if l != r { return l < r }
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            case (_?, nil):
+                return true
+            case (nil, _?):
+                return false
+            case (nil, nil):
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+        }.first
     }
 
     // Filter user profiles by current user (if authenticated)
@@ -347,23 +378,32 @@ struct ProfileView: View {
         guard currentUserId != nil else { return }
 
         if let selected = selectedProfileWardrobe {
-            let stillValid = userClosets.contains(where: { $0.objectID == selected.objectID })
-                || userWishlists.contains(where: { $0.objectID == selected.objectID })
+            let stillValid = friendVisibleUserClosets.contains(where: { $0.objectID == selected.objectID })
+                || friendVisibleUserWishlists.contains(where: { $0.objectID == selected.objectID })
             if !stillValid {
                 selectedProfileWardrobe = nil
             }
         }
 
         if selectedProfileWardrobe == nil {
-            selectedProfileWardrobe = WardrobeBootstrap.primaryWardrobe(in: userClosets)
+            selectedProfileWardrobe = preferredFriendVisibleProfileWardrobe
         }
     }
 
     private func presentNotificationsIfRequestedFromPush() {
         guard deepLinkRouter.shouldOpenNotifications, !isViewingOtherUser else { return }
-        isNotificationsPresented = true
+        appendProfileRoute(.notifications)
         deepLinkRouter.consumeOpenNotifications()
         PushNotificationService.shared.clearBadge()
+    }
+
+    private func appendProfileRoute(_ route: ProfileRoute) {
+        tabBarHideState.shouldHideTabBar = true
+        if ownsNavigationStack {
+            navigationPath.append(route)
+        } else {
+            sharedNavigationPath?.wrappedValue.append(route)
+        }
     }
 
     /// Avoid hammering the server (and remounting UI) on every Profile tab return.
@@ -402,13 +442,14 @@ struct ProfileView: View {
     }
 
     /// Closet / wishlist picker + lists — shown in the Wardrobes sheet (production only).
+    /// Private wardrobes are omitted so the owner sees the same set a friend would.
     private var profileWardrobesSheetContent: some View {
         VStack(spacing: 0) {
             SelectionPanelHeader(title: "Wardrobes") {
                 Picker("", selection: $selectedProfileWardrobeTab) {
-                    Text("Closet (\(userClosets.count))")
+                    Text("Closet (\(friendVisibleUserClosets.count))")
                         .tag("Closet")
-                    Text("Wishlist (\(userWishlists.count))")
+                    Text("Wishlist (\(friendVisibleUserWishlists.count))")
                         .tag("Wishlist")
                 }
                 .pickerStyle(.segmented)
@@ -417,9 +458,9 @@ struct ProfileView: View {
 
             Group {
                 if selectedProfileWardrobeTab == "Closet" {
-                    profileWardrobePage(wardrobes: userClosets, emptyNoun: "closets")
+                    profileWardrobePage(wardrobes: friendVisibleUserClosets, emptyNoun: "closets")
                 } else {
-                    profileWardrobePage(wardrobes: userWishlists, emptyNoun: "wishlists")
+                    profileWardrobePage(wardrobes: friendVisibleUserWishlists, emptyNoun: "wishlists")
                 }
             }
         }
@@ -445,8 +486,14 @@ struct ProfileView: View {
                         selectProfileWardrobe(wardrobe)
                     } label: {
                         HStack(spacing: 12) {
+                            Image(systemName: wardrobe.wardrobeVisibility.iconName)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 22, alignment: .center)
+                                .accessibilityLabel(wardrobe.wardrobeVisibility.menuLabel)
+
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(wardrobe.name ?? "Untitled")
+                                    .fontWeight(selectedProfileWardrobe?.objectID == wardrobe.objectID ? .bold : .regular)
                                     .foregroundStyle(.primary)
                                 Text(wardrobeSubtitle(for: wardrobe))
                                     .font(.subheadline)
@@ -471,14 +518,10 @@ struct ProfileView: View {
 
     private var shouldHideTabBar: Bool {
         isViewingOtherUser
-            || isNotificationsPresented
-            || isSettingsPresented
-            || isEditProfilePresented
-            || isUsersPresented
-            || isFriendsPresented
             || isRedressOutfitPresented
             || isProfileItemGridInSelectionMode
             || isProfileGridDetailNavigationActive
+            || (ownsNavigationStack && !navigationPath.isEmpty)
     }
 
     /// Own-profile ItemGridView fills the screen and owns nav toolbar items (same as Closet).
@@ -494,26 +537,12 @@ struct ProfileView: View {
         // must join that stack — a second NavigationStack orphans Friends and makes
         // Back from item detail jump to the root profile.
         if ownsNavigationStack {
+            // Single stack for the Profile tab. Nested other-user profiles join this
+            // stack — do not wrap Profile content in another NavigationStack.
             NavigationStack(path: $navigationPath) {
                 profileWithPresentations
-                    .navigationDestination(for: ItemGridFilterRoute.self) { route in
-                        switch route {
-                        case .itemFilter:
-                            ItemFilterView(
-                                filterModel: profileFilterModel,
-                                tabBarHideState: tabBarHideState,
-                                wardrobeType: (selectedProfileWardrobe?.type ?? "closet").lowercased(),
-                                attributesReadOnly: true,
-                                selectedWardrobe: selectedProfileWardrobe
-                            )
-                        case .outfitFilter:
-                            OutfitFilterView(
-                                filterModel: profileOutfitFilterModel,
-                                wardrobeType: (selectedProfileWardrobe?.type ?? "closet").lowercased(),
-                                attributesReadOnly: true,
-                                selectedWardrobe: selectedProfileWardrobe
-                            )
-                        }
+                    .navigationDestination(for: ProfileRoute.self) { route in
+                        profileRouteDestination(route)
                     }
             }
         } else {
@@ -543,33 +572,14 @@ struct ProfileView: View {
                     profileNavigationToolbar()
                 }
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if isViewingOtherUser, appCapabilities.enablesFriendsAndSharing {
-                    otherUserBottomActionsBar
-                }
-            }
             // Keyboard must not resize/push the nested profile scroll (Cancel jump).
             .ignoresSafeArea(isViewingOtherUser ? .keyboard : [])
-            .modifier(OtherUserProfileSerifModifier(isActive: isViewingOtherUser))
             .toolbar(shouldHideTabBar ? .hidden : .automatic, for: .tabBar)
             .onAppear {
-                if isViewingOtherUser || isFriendsPresented || isUsersPresented {
-                    tabBarHideState.shouldHideTabBar = true
-                }
+                tabBarHideState.shouldHideTabBar = shouldHideTabBar
             }
-            .onChange(of: isFriendsPresented) { _, presented in
-                if presented {
-                    tabBarHideState.shouldHideTabBar = true
-                } else if !isUsersPresented && !isProfileGridDetailNavigationActive && !isProfileItemGridInSelectionMode {
-                    tabBarHideState.shouldHideTabBar = false
-                }
-            }
-            .onChange(of: isUsersPresented) { _, presented in
-                if presented {
-                    tabBarHideState.shouldHideTabBar = true
-                } else if !isFriendsPresented && !isProfileGridDetailNavigationActive && !isProfileItemGridInSelectionMode {
-                    tabBarHideState.shouldHideTabBar = false
-                }
+            .onChange(of: navigationPath.count) { _, _ in
+                tabBarHideState.shouldHideTabBar = shouldHideTabBar
             }
             .confirmationDialog(
                 "Profile",
@@ -633,38 +643,116 @@ struct ProfileView: View {
             }
     }
 
+    @ViewBuilder
+    private func profileRouteDestination(_ route: ProfileRoute) -> some View {
+        switch route {
+        case .settings:
+            SettingsView(navigationPath: $navigationPath)
+        case .attributePreferences:
+            AttributePreferencesView(navigationPath: $navigationPath)
+        case .categoryVisibility:
+            CategoryVisibilityView()
+        case .colorVisibility:
+            ColorVisibilityView()
+        case .seasonVisibility:
+            SeasonVisibilityView()
+        case .developerSettings:
+            DeveloperSettingsView(navigationPath: $navigationPath)
+        case .developerSignIn:
+            SignInView()
+        case .developerRegister:
+            RegisterView()
+        case .notifications:
+            UserNotificationsView(tabBarHideState: tabBarHideState)
+        case .users:
+            UsersView(tabBarHideState: tabBarHideState, navigationPath: $navigationPath)
+        case .friends(let userId, let followersCount, let followingCount):
+            FriendsView(
+                userId: userId,
+                followersCount: followersCount,
+                followingCount: followingCount,
+                tabBarHideState: tabBarHideState,
+                navigationPath: $navigationPath
+            )
+        case .editProfile:
+            EditProfileView()
+        case .otherUser(let profile):
+            ProfileView(
+                viewedProfile: profile,
+                sharedTabBarHideState: tabBarHideState,
+                sharedNavigationPath: $navigationPath
+            )
+        case .readOnlyItem(let destination):
+            ReadOnlyItemDetailView(
+                ownerUserId: destination.ownerUserId,
+                wardrobeId: destination.wardrobeId,
+                itemSummary: destination.item,
+                wardrobeType: destination.wardrobeType,
+                ownerProfile: destination.ownerProfile ?? PublicUserProfile(
+                    userId: destination.ownerUserId,
+                    username: supabaseService.cachedUsername ?? "",
+                    displayName: nil
+                ),
+                tabBarHideState: tabBarHideState,
+                navigationPath: $navigationPath
+            )
+        case .readOnlyOutfit(let ownerUserId, let wardrobeId, let outfit, let wardrobeType, let ownerProfile):
+            if outfit.isPendingSuggestion {
+                PendingOutfitDetailView(
+                    recipientUserId: ownerUserId,
+                    wardrobeId: wardrobeId,
+                    suggestionSummary: outfit,
+                    viewerRole: .submitter,
+                    onSuggestionResolved: {
+                        supabaseService.invalidateWardrobeGridOutfitsCache(forUserId: ownerUserId)
+                    },
+                    counterpartUsername: ownerProfile?.username,
+                    counterpartDisplayName: ownerProfile?.displayName,
+                    backButtonTitle: ownerProfile?.username
+                )
+            } else {
+                ReadOnlyOutfitDetailView(
+                    ownerUserId: ownerUserId,
+                    wardrobeId: wardrobeId,
+                    outfitSummary: outfit,
+                    wardrobeType: wardrobeType,
+                    ownerProfile: ownerProfile,
+                    tabBarHideState: tabBarHideState,
+                    navigationPath: $navigationPath
+                )
+            }
+        case .itemRedress(let destination):
+            OutfitAddView(
+                redressRecipient: destination.recipient,
+                preselectedItem: destination.item,
+                preselectedWardrobeType: destination.wardrobeType,
+                sessionID: destination.id
+            )
+            .id(destination.id)
+        case .itemFilter:
+            ItemFilterView(
+                filterModel: profileFilterModel,
+                tabBarHideState: tabBarHideState,
+                wardrobeType: (selectedProfileWardrobe?.type ?? "closet").lowercased(),
+                attributesReadOnly: true,
+                selectedWardrobe: selectedProfileWardrobe
+            )
+        case .outfitFilter:
+            OutfitFilterView(
+                filterModel: profileOutfitFilterModel,
+                wardrobeType: (selectedProfileWardrobe?.type ?? "closet").lowercased(),
+                attributesReadOnly: true,
+                selectedWardrobe: selectedProfileWardrobe
+            )
+        }
+    }
+
     private var profileWithDestinations: some View {
         // Nested other-user profiles join the root NavigationStack — do not re-register
-        // root pushes (Notifications/Settings/…) or they fight Friends → profile and
-        // orphan the intermediate Friends screen / hide "< Friends".
+        // root path destinations or they fight Friends → profile.
         Group {
             if ownsNavigationStack {
                 profileNavigationChrome
-                    .navigationDestination(isPresented: $isRedressOutfitPresented) {
-                        redressOutfitDestination
-                    }
-                    .navigationDestination(isPresented: $isNotificationsPresented) {
-                        UserNotificationsView(tabBarHideState: tabBarHideState)
-                    }
-                    .navigationDestination(isPresented: $isSettingsPresented) {
-                        SettingsView()
-                    }
-                    .navigationDestination(isPresented: $isEditProfilePresented) {
-                        EditProfileView()
-                    }
-                    .navigationDestination(isPresented: $isUsersPresented) {
-                        UsersView(tabBarHideState: tabBarHideState)
-                    }
-                    .navigationDestination(isPresented: $isFriendsPresented) {
-                        if let userId = displayedProfileUserId {
-                            FriendsView(
-                                userId: userId,
-                                followersCount: displayedFollowersCount,
-                                followingCount: displayedFollowingCount,
-                                tabBarHideState: tabBarHideState
-                            )
-                        }
-                    }
             } else {
                 profileNavigationChrome
                     .navigationDestination(isPresented: $isRedressOutfitPresented) {
@@ -678,6 +766,13 @@ struct ProfileView: View {
         profileRootStack
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(UIColor.systemBackground))
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if isViewingOtherUser
+                    && appCapabilities.enablesFriendsAndSharing
+                    && !isRedressOutfitPresented {
+                    otherUserRedressBottomBar
+                }
+            }
             .navigationTitle(profileScreenNavigationTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(Color(UIColor.systemBackground), for: .navigationBar)
@@ -761,12 +856,13 @@ struct ProfileView: View {
                 isDetailNavigationActive: $isProfileGridDetailNavigationActive,
                 isTabActionsBarVisible: $isProfileFilterActionsVisible,
                 onOpenItemFilter: {
-                    tabBarHideState.shouldHideTabBar = true
-                    navigationPath.append(ItemGridFilterRoute.itemFilter)
+                    appendProfileRoute(.itemFilter)
                 },
                 onOpenOutfitFilter: {
-                    tabBarHideState.shouldHideTabBar = true
-                    navigationPath.append(ItemGridFilterRoute.outfitFilter)
+                    appendProfileRoute(.outfitFilter)
+                },
+                onOpenProfileReadOnlyItem: { destination in
+                    appendProfileRoute(.readOnlyItem(destination))
                 },
                 tabBarHideState: tabBarHideState,
                 profileCollapsingHeader: {
@@ -785,6 +881,11 @@ struct ProfileView: View {
             }
             .id(selectedWardrobe.objectID)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        } else if appCapabilities.showsWishlistTab {
+            ownProfileEmptyPublicWardrobesContent
+                .toolbar {
+                    profileNavigationToolbar()
+                }
         } else {
             VStack(spacing: 0) {
                 profileHeaderSection
@@ -816,90 +917,115 @@ struct ProfileView: View {
         }
     }
 
-    /// Own-profile header: avatar, display name, Friends + Edit Profile.
-    /// Full template (bio/tags/location/socials/Sizes/etc.) — `.cursor/rules/profile-header-full-template-deferred.mdc`.
+    /// Own-profile header: avatar left, display name + Friends / Sizes / Edit Profile right.
+    /// Full template (bio/tags/location/socials/etc.) — `.cursor/rules/profile-header-full-template-deferred.mdc`.
     @ViewBuilder
     private var ownProfileHeaderSection: some View {
-        VStack(alignment: .center, spacing: 0) {
+        HStack(alignment: .top, spacing: 16) {
             ownProfileAvatarWithPhotoTap
 
-            // Display name typography — see profile-display-name-font-deferred.mdc
-            Text(displayNameForHeader)
-                .font(.system(.title2, design: .serif).weight(.semibold))
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
-                .padding(.top, Self.profileHeaderNameTopPadding)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(displayNameForHeader)
+                    .font(.headline.weight(.semibold))
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 2)
 
-            ownProfileHeaderActionsRow
-                .padding(.top, Self.otherUserHeaderActionsVerticalSpacing)
+                Text("redress.me/\(profileUsernameText)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 2)
+
+                ownProfileHeaderActionsRow
+                    .padding(.top, 10)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal)
         .padding(.top, Self.profileHeaderTopPadding)
         .padding(.bottom, Self.profileHeaderBottomPadding)
         .id(refreshToken)
     }
 
-    /// Friends + Edit Profile — equal-width outlined buttons (border matches former action-tile circle stroke).
+    /// Friends, Edit, Share — equal-width, equal-height icon-over-label buttons.
     private var ownProfileHeaderActionsRow: some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .bottom, spacing: 8) {
             if appCapabilities.enablesFriendsAndSharing {
                 Button {
-                    tabBarHideState.shouldHideTabBar = true
-                    isFriendsPresented = true
+                    if let userId = displayedProfileUserId {
+                        appendProfileRoute(
+                            .friends(
+                                userId: userId,
+                                followersCount: displayedFollowersCount,
+                                followingCount: displayedFollowingCount
+                            )
+                        )
+                    }
                 } label: {
-                    ownProfileOutlinedHeaderButtonLabel(
+                    ownProfileHeaderIconLabelStack(
                         title: "Friends",
                         systemImage: "person.2"
                     )
                 }
                 .buttonStyle(.plain)
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .accessibilityLabel("Friends")
             }
 
             Button {
-                isEditProfilePresented = true
+                appendProfileRoute(.editProfile)
             } label: {
-                ownProfileOutlinedHeaderButtonLabel(
-                    title: "Edit Profile",
+                ownProfileHeaderIconLabelStack(
+                    title: "Edit",
                     systemImage: "pencil"
                 )
             }
             .buttonStyle(.plain)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             .accessibilityLabel("Edit profile")
+
+            Button {
+                // Share sheet for own profile — wire later.
+            } label: {
+                ownProfileHeaderIconLabelStack(
+                    title: "Share",
+                    systemImage: "square.and.arrow.up"
+                )
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .accessibilityLabel("Share profile")
         }
         .frame(maxWidth: .infinity)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
-    private func ownProfileOutlinedHeaderButtonLabel(title: String, systemImage: String) -> some View {
-        HStack(spacing: 8) {
+    private func ownProfileHeaderIconLabelStack(
+        title: String,
+        systemImage: String,
+        iconRotation: Double = 0
+    ) -> some View {
+        VStack(spacing: 6) {
             Image(systemName: systemImage)
-                .font(.system(size: 15, weight: .semibold, design: .serif))
+                .font(.system(size: 16, weight: .semibold))
+                .rotationEffect(.degrees(iconRotation))
+                .frame(width: 16, height: 16)
             Text(title)
-                .font(.profileSerif(.subheadline, weight: .semibold))
+                .font(.caption2)
                 .lineLimit(1)
-                .minimumScaleFactor(0.85)
         }
         .foregroundStyle(.primary)
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: Self.otherUserHeaderActionCornerRadius, style: .continuous)
-                .fill(Color.clear)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: Self.otherUserHeaderActionCornerRadius, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-        }
     }
 
     private var ownProfileAvatarWithPhotoTap: some View {
         ZStack {
             avatarImageContent(size: Self.profileHeaderAvatarSize)
-                .shadow(color: .black.opacity(0.22), radius: 6, x: 0, y: 3)
 
             Button {
                 isProfilePhotoActionDialogPresented = true
@@ -938,87 +1064,82 @@ struct ProfileView: View {
     /// Gap between display name ↔ action buttons, and action buttons ↔ wardrobe row.
     private static let otherUserHeaderActionsVerticalSpacing: CGFloat = 14
 
-    // MARK: - Other-user header (centered avatar; bio/tags preview; Friends/Redress in bottom bar)
+    // MARK: - Other-user header (avatar left; Friends + Add Friend like own-profile actions)
 
     @ViewBuilder
     private var otherUserProfileHeaderSection: some View {
-        VStack(alignment: .center, spacing: 0) {
+        HStack(alignment: .top, spacing: 16) {
             avatarImageContent(size: Self.profileHeaderAvatarSize)
-                .shadow(color: .black.opacity(0.22), radius: 6, x: 0, y: 3)
 
-            // Display name typography — see profile-display-name-font-deferred.mdc
-            Text(displayNameForHeader)
-                .font(.profileSerif(.title2, weight: .semibold))
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
-                .padding(.top, Self.profileHeaderNameTopPadding)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(displayNameForHeader)
+                    .font(.headline.weight(.semibold))
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 2)
 
-            // Layout preview — replace with real bio/tags when profile fields ship.
-            Text(Self.otherUserHeaderPlaceholderBio)
-                .font(.profileSerif(.subheadline))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 12)
-                .padding(.top, 10)
+                Text("redress.me/\(profileUsernameText)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 2)
 
-            otherUserPlaceholderStyleTagsRow
-                .padding(.top, 12)
+                if appCapabilities.enablesFriendsAndSharing {
+                    otherUserHeaderActionsRow
+                        .padding(.top, 10)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal)
         .padding(.top, Self.profileHeaderTopPadding)
-        .padding(.bottom, Self.otherUserHeaderActionsVerticalSpacing)
+        .padding(.bottom, Self.profileHeaderBottomPadding)
         .id(refreshToken)
     }
 
-    /// Three style chips forced onto one row for layout preview.
-    private var otherUserPlaceholderStyleTagsRow: some View {
-        HStack(spacing: 8) {
-            ForEach(Array(Self.otherUserHeaderPlaceholderStyleTags.enumerated()), id: \.offset) { index, label in
-                Text(otherUserStyleTagDisplayLabel(label))
-                    .font(.profileSerif(.caption))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .background(
-                        ProfileStyleTagsRow.previewChipColor(at: index),
-                        in: Capsule()
+    /// Friends (list) + Add Friend / Remove + Share — equal-width icon-over-label buttons.
+    private var otherUserHeaderActionsRow: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            Button {
+                if let userId = displayedProfileUserId {
+                    appendProfileRoute(
+                        .friends(
+                            userId: userId,
+                            followersCount: displayedFollowersCount,
+                            followingCount: displayedFollowingCount
+                        )
                     )
+                }
+            } label: {
+                ownProfileHeaderIconLabelStack(
+                    title: "Friends",
+                    systemImage: "person.2"
+                )
             }
-        }
-        .frame(maxWidth: .infinity)
-    }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .accessibilityLabel("Friends")
 
-    private func otherUserStyleTagDisplayLabel(_ label: String) -> String {
-        let cleaned = label.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
-        guard !cleaned.isEmpty else { return "#" }
-        return "#\(cleaned.lowercased())"
-    }
-
-    /// Friends / Redress — pinned above the home indicator on other-user profiles.
-    private var otherUserBottomActionsBar: some View {
-        otherUserActionsRow
-            .padding(.horizontal, 8)
-            .padding(.top, 8)
-            .padding(.bottom, 6)
-            .background {
-                Color(.systemBackground)
-                    .shadow(color: .black.opacity(0.08), radius: 8, y: -2)
-                    .ignoresSafeArea(edges: .bottom)
-            }
-            .accessibilityElement(children: .contain)
-    }
-
-    /// Add/Remove/Friends + Redress — icon above label (tab-bar style).
-    private var otherUserActionsRow: some View {
-        HStack(alignment: .top, spacing: 0) {
             otherUserFriendshipButton
-                .frame(maxWidth: .infinity)
-            otherUserRedressButton
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+
+            Button {
+                // Share sheet for this user's profile — wire later.
+            } label: {
+                ownProfileHeaderIconLabelStack(
+                    title: "Share",
+                    systemImage: "square.and.arrow.up"
+                )
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .accessibilityLabel("Share profile")
         }
         .frame(maxWidth: .infinity)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var otherUserFriendshipButton: some View {
@@ -1027,12 +1148,7 @@ struct ProfileView: View {
         let accessibility: String
         let showsConnectedState: Bool
 
-        if isMutualFriendWithViewedUser {
-            title = "Friends"
-            systemImage = "checkmark"
-            accessibility = "Friends"
-            showsConnectedState = true
-        } else if isFollowingViewedUser {
+        if isFollowingViewedUser || isMutualFriendWithViewedUser {
             title = "Remove"
             systemImage = "person.badge.minus"
             accessibility = "Remove friend"
@@ -1051,10 +1167,9 @@ struct ProfileView: View {
                 Task { await sendFriendRequestToViewedUser() }
             }
         } label: {
-            otherUserBottomBarActionLabel(
+            ownProfileHeaderIconLabelStack(
                 title: title,
-                systemImage: systemImage,
-                style: .outlinedCircle
+                systemImage: systemImage
             )
         }
         .buttonStyle(.plain)
@@ -1068,11 +1183,7 @@ struct ProfileView: View {
             guard enabled else { return }
             isRedressOutfitPresented = true
         } label: {
-            otherUserBottomBarActionLabel(
-                title: "Redress",
-                redressSymbol: true,
-                style: enabled ? .filledCayenneCircle : .outlinedCircleDisabled
-            )
+            otherUserOutlinedRedressHeaderButtonLabel(enabled: enabled)
         }
         .buttonStyle(.plain)
         .allowsHitTesting(enabled)
@@ -1080,60 +1191,36 @@ struct ProfileView: View {
         .accessibilityHint(enabled ? "" : "Unavailable")
     }
 
-    private enum OtherUserBottomBarIconStyle {
-        case outlinedCircle
-        case outlinedCircleDisabled
-        case filledCayenneCircle
+    private var otherUserRedressBottomBar: some View {
+        otherUserRedressButton
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 10)
+            .frame(maxWidth: .infinity)
+            .background(Color(UIColor.systemBackground))
     }
 
-    private func otherUserBottomBarActionLabel(
-        title: String,
-        systemImage: String? = nil,
-        redressSymbol: Bool = false,
-        style: OtherUserBottomBarIconStyle
-    ) -> some View {
-        let circleSize = Self.profileHeaderActionIconSize + 18
-        let iconForeground: Color = {
-            switch style {
-            case .filledCayenneCircle: return .white
-            case .outlinedCircleDisabled: return .secondary
-            case .outlinedCircle: return .primary
-            }
-        }()
-
-        return VStack(spacing: 6) {
-            ZStack {
-                Circle()
-                    .fill(style == .filledCayenneCircle ? AnyShapeStyle(Color.cayenne.gradient) : AnyShapeStyle(Color.clear))
-                    .frame(width: circleSize, height: circleSize)
-                if style != .filledCayenneCircle {
-                    Circle()
-                        .strokeBorder(Color.primary.opacity(style == .outlinedCircleDisabled ? 0.12 : 0.18), lineWidth: 1)
-                        .frame(width: circleSize, height: circleSize)
-                }
-                Group {
-                    if redressSymbol {
-                        Image("Redress.SFSymbol")
-                            .resizable()
-                            .renderingMode(.template)
-                            .scaledToFit()
-                            .frame(width: Self.profileHeaderActionIconSize, height: Self.profileHeaderActionIconSize)
-                    } else if let systemImage {
-                        Image(systemName: systemImage)
-                            .font(.system(size: 18, weight: .semibold, design: .serif))
-                            .frame(width: Self.profileHeaderActionIconSize, height: Self.profileHeaderActionIconSize)
-                    }
-                }
-                .foregroundStyle(iconForeground)
-            }
-            Text(title)
-                .font(.profileSerif(.caption2, weight: .semibold))
-                .foregroundStyle(Color.black)
+    private func otherUserOutlinedRedressHeaderButtonLabel(enabled: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image("Redress.SFSymbol")
+                .resizable()
+                .renderingMode(.template)
+                .scaledToFit()
+                .frame(width: 18, height: 18)
+            Text("Redress")
+                .font(.body.weight(.semibold))
                 .lineLimit(1)
-                .minimumScaleFactor(0.75)
+                .minimumScaleFactor(0.85)
         }
+        .foregroundStyle(enabled ? Color.white : Color.white.opacity(0.7))
         .frame(maxWidth: .infinity)
-        .contentShape(Rectangle())
+        .padding(.horizontal, 18)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: Self.otherUserHeaderActionCornerRadius, style: .continuous)
+                .fill(enabled ? AnyShapeStyle(Color.cayenne.gradient) : AnyShapeStyle(Color.cayenne.opacity(0.45)))
+        )
+        .opacity(enabled ? 1 : 0.7)
     }
 
     private var isRedressHeaderActionEnabled: Bool {
@@ -1223,21 +1310,25 @@ struct ProfileView: View {
     private func profileNavigationToolbar() -> some ToolbarContent {
         ToolbarItem(placement: .navigationBarLeading) {
             Button {
-                isSettingsPresented = true
+                appendProfileRoute(.settings)
             } label: {
                 Image(systemName: "gearshape")
             }
         }
         ToolbarItemGroup(placement: .navigationBarTrailing) {
             if appCapabilities.enablesFriendsAndSharing {
-                UserNotificationsBellButton(isPresented: $isNotificationsPresented)
+                UserNotificationsBellButton {
+                    appendProfileRoute(.notifications)
+                }
             }
-            Button {
-                isUsersPresented = true
-            } label: {
-                Image(systemName: "plus")
+            if appCapabilities.enablesCloudSync {
+                Button {
+                    appendProfileRoute(.users)
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .accessibilityLabel("Add friend")
             }
-            .accessibilityLabel("Add friend")
         }
     }
 
@@ -1248,9 +1339,9 @@ struct ProfileView: View {
         } label: {
             HStack(spacing: 4) {
                 Text(profileWardrobeNavigationTitle)
-                    .font(.system(.headline, design: .serif))
+                    .font(.headline)
                 Image(systemName: "chevron.down")
-                    .font(.system(.caption, design: .serif))
+                    .font(.caption)
             }
         }
         .buttonStyle(.plain)
@@ -1275,16 +1366,17 @@ struct ProfileView: View {
                 .multilineTextAlignment(.center)
                 .padding()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if remoteWardrobes.isEmpty {
+        } else if preferredRemoteProfileWardrobe == nil {
             otherUserEmptyPublicWardrobesContent
         } else if let wardrobe = selectedRemoteWardrobe, let ownerId = viewedProfile?.userId {
-            RemoteProfileWardrobeGridView(
+            RemoteProfileView(
                 ownerUserId: ownerId,
                 wardrobe: wardrobe,
                 ownerProfile: viewedProfile,
                 refreshToken: remoteGridRefreshToken,
                 preferredTab: $remoteGridPreferredTab,
                 tabBarHideState: tabBarHideState,
+                navigationPath: sharedNavigationPath,
                 profileCollapsingHeader: {
                     profileHeaderSection
                 },
@@ -1353,6 +1445,32 @@ struct ProfileView: View {
     ]
     */
 
+    /// Own profile with no public wardrobes: same nested chrome; wardrobe bar still opens the picker.
+    private var ownProfileEmptyPublicWardrobesContent: some View {
+        ProfileNestedScrollContainer(
+            selectedTab: $ownEmptyGridPreferredTab,
+            header: profileHeaderSection,
+            sticky: VStack(spacing: 0) {
+                profileWardrobeBar
+                Picker("", selection: $ownEmptyGridPreferredTab) {
+                    Text("Items (0)").tag("Items")
+                    Text("Outfits (0)").tag("Outfits")
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .disabled(true)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
+                .background(Color(.systemBackground))
+            }
+            .background(Color(.systemBackground)),
+            itemsPage: emptyPublicWardrobeTabMessage,
+            outfitsPage: emptyPublicWardrobeTabMessage,
+            snapsHeaderCollapse: true
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     /// Other-user profile with no public wardrobes: same UIKit nested chrome as a populated grid.
     private var otherUserEmptyPublicWardrobesContent: some View {
         ProfileNestedScrollContainer(
@@ -1368,14 +1486,13 @@ struct ProfileView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .disabled(true)
-                .background(SerifSegmentedPickerConfigurer())
                 .padding(.horizontal, 14)
                 .padding(.bottom, 8)
                 .background(Color(.systemBackground))
             }
             .background(Color(.systemBackground)),
-            itemsPage: emptyRemoteWardrobeTabMessage,
-            outfitsPage: emptyRemoteWardrobeTabMessage,
+            itemsPage: emptyPublicWardrobeTabMessage,
+            outfitsPage: emptyPublicWardrobeTabMessage,
             onRefresh: {
                 await loadRemoteWardrobes()
             },
@@ -1384,7 +1501,7 @@ struct ProfileView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var emptyRemoteWardrobeTabMessage: some View {
+    private var emptyPublicWardrobeTabMessage: some View {
         ScrollView(showsIndicators: false) {
             Text("No public wardrobes")
                 .foregroundStyle(.secondary)
@@ -1403,7 +1520,7 @@ struct ProfileView: View {
                     .accessibilityLabel(WardrobeVisibility.private.menuLabel)
 
                 Text("Closet")
-                    .font(.profileSerif(.headline))
+                    .font(.profileSerif(.headline, weight: .bold))
                     .foregroundStyle(.primary)
             }
             Spacer(minLength: 0)
@@ -1431,7 +1548,7 @@ struct ProfileView: View {
                 } label: {
                     HStack(spacing: 4) {
                         Text(wardrobe.name)
-                            .font(.profileSerif(.headline))
+                            .font(.profileSerif(.headline, weight: .bold))
                         Image(systemName: "chevron.down")
                             .font(.profileSerif(.caption))
                     }
@@ -1455,7 +1572,6 @@ struct ProfileView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .background(SerifSegmentedPickerConfigurer())
             }
 
             Group {
@@ -1466,7 +1582,6 @@ struct ProfileView: View {
                 }
             }
         }
-        .profileSerifTypography()
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
     }
@@ -1488,7 +1603,7 @@ struct ProfileView: View {
                         HStack(spacing: 12) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(wardrobe.name)
-                                    .font(.profileSerif(.body))
+                                    .font(.profileSerif(.body, weight: selectedRemoteWardrobe?.id == wardrobe.id ? .bold : .regular))
                                     .foregroundStyle(.primary)
                                 Text(wardrobe.wardrobeType == "wishlist" ? "Wishlist" : "Closet")
                                     .font(.profileSerif(.subheadline))
@@ -1524,7 +1639,7 @@ struct ProfileView: View {
             selectedRemoteWardrobe = nil
         }
         if selectedRemoteWardrobe == nil {
-            selectedRemoteWardrobe = remoteClosets.first ?? remoteWardrobes.first
+            selectedRemoteWardrobe = preferredRemoteProfileWardrobe
         }
     }
 

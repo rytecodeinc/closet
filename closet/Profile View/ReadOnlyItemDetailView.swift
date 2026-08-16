@@ -19,6 +19,8 @@ struct ReadOnlyItemDetailView: View {
     var ownerProfile: PublicUserProfile? = nil
     /// Shared with Profile / Closet grid — same pattern as `ItemFilterView`.
     var tabBarHideState: TabBarHideState? = nil
+    /// When set, pairs / outfit / Redress append `ProfileRoute` (no nested `item:`).
+    var navigationPath: Binding<NavigationPath>? = nil
 
     @Environment(\.appCapabilities) private var appCapabilities
     @Environment(\.managedObjectContext) private var viewContext
@@ -63,7 +65,7 @@ struct ReadOnlyItemDetailView: View {
         detail?.outfits ?? []
     }
 
-    /// Own-profile read-only detail can read local Core Data links; other users have no link payload yet.
+    /// Own-profile read-only detail can read local Core Data links; other users use RPC `links`.
     private var localOwnedItem: Item? {
         guard isViewingOwnContent else { return nil }
         let request: NSFetchRequest<Item> = Item.fetchRequest()
@@ -80,9 +82,23 @@ struct ReadOnlyItemDetailView: View {
         supabaseService.cachedViewedUserIsFriend(forUserId: ownerUserId) == true
     }
 
-    private var namedItemLinks: [Link] {
-        guard let item = localOwnedItem else { return [] }
-        return ((item.links as? Set<Link>) ?? [])
+    private var namedItemLinks: [VisibleItemLink] {
+        let source: [VisibleItemLink]
+        if isViewingOwnContent, let item = localOwnedItem {
+            source = ((item.links as? Set<Link>) ?? []).compactMap { link in
+                guard let id = link.id else { return nil }
+                return VisibleItemLink(
+                    id: id,
+                    name: link.name,
+                    url: link.url?.absoluteString,
+                    type: link.itemLinkType.rawValue,
+                    visibility: link.itemLinkVisibility.rawValue
+                )
+            }
+        } else {
+            source = detail?.links ?? []
+        }
+        return source
             .filter { !($0.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .filter {
                 $0.itemLinkVisibility.isVisibleOnPublicProfile(
@@ -93,19 +109,19 @@ struct ReadOnlyItemDetailView: View {
             .sorted { ($0.name ?? "") < ($1.name ?? "") }
     }
 
-    private func namedItemLinks(for type: ItemLinkType) -> [Link] {
+    private func namedItemLinks(for type: ItemLinkType) -> [VisibleItemLink] {
         namedItemLinks.filter { $0.itemLinkType == type }
     }
 
     @ViewBuilder
-    private func readOnlyLinkRow(_ link: Link) -> some View {
+    private func readOnlyLinkRow(_ link: VisibleItemLink) -> some View {
         ItemLinkNameHostRow(
             name: link.name ?? "",
-            host: link.url?.host,
+            host: link.urlValue?.host,
             nameLeadingInset: ItemLinkRowMetrics.detailNameLeadingInset,
-            onRowTap: link.url.map { url in { openURL(url) } }
+            onRowTap: link.urlValue.map { url in { openURL(url) } }
         ) {
-            if link.url != nil {
+            if link.urlValue != nil {
                 ItemLinkExternalArrow()
             }
         }
@@ -121,7 +137,7 @@ struct ReadOnlyItemDetailView: View {
                         ItemLinkSectionTitle(type: linkType)
                             .padding(.vertical, ItemLinkRowMetrics.headerVerticalPadding)
 
-                        ForEach(links, id: \.objectID) { link in
+                        ForEach(links, id: \.id) { link in
                             VStack(spacing: 0) {
                                 readOnlyLinkRow(link)
                                     .padding(.vertical, ItemLinkRowMetrics.rowVerticalPadding)
@@ -194,6 +210,10 @@ struct ReadOnlyItemDetailView: View {
     }
 
     var body: some View {
+        withNestedItemDestinations(itemDetailChrome)
+    }
+
+    private var itemDetailChrome: some View {
         Group {
             if let loadError, detail == nil, !isLoading {
                 Text(loadError)
@@ -262,34 +282,6 @@ struct ReadOnlyItemDetailView: View {
                 isPresented: $isImageFullScreen
             )
         }
-        .navigationDestination(item: $selectedPairedItem) { item in
-            ReadOnlyItemDetailView(
-                ownerUserId: ownerUserId,
-                wardrobeId: wardrobeId,
-                itemSummary: item,
-                wardrobeType: normalizedWardrobeType,
-                ownerProfile: ownerProfile ?? resolvedOwnerProfile,
-                tabBarHideState: tabBarHideState
-            )
-        }
-        .navigationDestination(item: $selectedOutfit) { outfit in
-            ReadOnlyOutfitDetailView(
-                ownerUserId: ownerUserId,
-                wardrobeId: wardrobeId,
-                outfitSummary: outfit,
-                tabBarHideState: tabBarHideState
-            )
-        }
-        .navigationDestination(item: $redressDestination) { destination in
-            // Stay on parent Profile NavigationStack — same as Friends → other-user profile.
-            OutfitAddView(
-                redressRecipient: destination.recipient,
-                preselectedItem: destination.item,
-                preselectedWardrobeType: destination.wardrobeType,
-                sessionID: destination.id
-            )
-            .id(destination.id)
-        }
         .sheet(isPresented: $showViewAllPairsSheet) {
             NavigationStack {
                 RemoteVisibleItemsGridSheet(
@@ -297,7 +289,7 @@ struct ReadOnlyItemDetailView: View {
                     items: pairedItems,
                     onSelect: { item in
                         showViewAllPairsSheet = false
-                        selectedPairedItem = item
+                        DispatchQueue.main.async { openPairedItem(item) }
                     }
                 )
             }
@@ -311,12 +303,82 @@ struct ReadOnlyItemDetailView: View {
                     outfits: outfits,
                     onSelect: { outfit in
                         showViewAllOutfitsSheet = false
-                        selectedOutfit = outfit
+                        DispatchQueue.main.async { openOutfit(outfit) }
                     }
                 )
             }
             .presentationDetents(outfits.count > 6 ? [.medium, .large] : [.medium])
             .presentationDragIndicator(.visible)
+        }
+    }
+
+    @ViewBuilder
+    private func withNestedItemDestinations<Content: View>(_ content: Content) -> some View {
+        if navigationPath != nil {
+            content
+        } else {
+            content
+                .navigationDestination(item: $selectedPairedItem) { item in
+                    ReadOnlyItemDetailView(
+                        ownerUserId: ownerUserId,
+                        wardrobeId: wardrobeId,
+                        itemSummary: item,
+                        wardrobeType: normalizedWardrobeType,
+                        ownerProfile: ownerProfile ?? resolvedOwnerProfile,
+                        tabBarHideState: tabBarHideState
+                    )
+                }
+                .navigationDestination(item: $selectedOutfit) { outfit in
+                    ReadOnlyOutfitDetailView(
+                        ownerUserId: ownerUserId,
+                        wardrobeId: wardrobeId,
+                        outfitSummary: outfit,
+                        tabBarHideState: tabBarHideState
+                    )
+                }
+                .navigationDestination(item: $redressDestination) { destination in
+                    OutfitAddView(
+                        redressRecipient: destination.recipient,
+                        preselectedItem: destination.item,
+                        preselectedWardrobeType: destination.wardrobeType,
+                        sessionID: destination.id
+                    )
+                    .id(destination.id)
+                }
+        }
+    }
+
+    private func openPairedItem(_ item: VisibleWardrobeItem) {
+        if let navigationPath {
+            navigationPath.wrappedValue.append(
+                ProfileRoute.readOnlyItem(
+                    ProfileReadOnlyItemDestination(
+                        ownerUserId: ownerUserId,
+                        wardrobeId: wardrobeId,
+                        item: item,
+                        wardrobeType: normalizedWardrobeType,
+                        ownerProfile: ownerProfile ?? resolvedOwnerProfile
+                    )
+                )
+            )
+        } else {
+            selectedPairedItem = item
+        }
+    }
+
+    private func openOutfit(_ outfit: VisibleWardrobeOutfit) {
+        if let navigationPath {
+            navigationPath.wrappedValue.append(
+                ProfileRoute.readOnlyOutfit(
+                    ownerUserId: ownerUserId,
+                    wardrobeId: wardrobeId,
+                    outfit: outfit,
+                    wardrobeType: normalizedWardrobeType,
+                    ownerProfile: ownerProfile ?? resolvedOwnerProfile
+                )
+            )
+        } else {
+            selectedOutfit = outfit
         }
     }
 
@@ -387,7 +449,7 @@ struct ReadOnlyItemDetailView: View {
                                 RedressFeaturedItemsSubsectionRow(
                                     pairedItems: pairedItems,
                                     isReadOnly: true,
-                                    onSelectItem: { selectedPairedItem = $0 },
+                                    onSelectItem: { openPairedItem($0) },
                                     onViewAll: { showViewAllPairsSheet = true }
                                 )
                                 .transition(.opacity.combined(with: .slide))
@@ -418,7 +480,7 @@ struct ReadOnlyItemDetailView: View {
                             if isOutfitsExpanded {
                                 RemoteOutfitsSubsectionRow(
                                     outfits: outfits,
-                                    onSelectOutfit: { selectedOutfit = $0 },
+                                    onSelectOutfit: { openOutfit($0) },
                                     onViewAll: { showViewAllOutfitsSheet = true }
                                 )
                                 .transition(.opacity.combined(with: .slide))
@@ -489,12 +551,17 @@ struct ReadOnlyItemDetailView: View {
 
     private func openRedress() {
         guard canRedress else { return }
-        redressDestination = ItemRedressDestination(
+        let destination = ItemRedressDestination(
             id: UUID(),
             recipient: resolvedOwnerProfile,
             item: itemForRedress,
             wardrobeType: normalizedWardrobeType
         )
+        if let navigationPath {
+            navigationPath.wrappedValue.append(ProfileRoute.itemRedress(destination))
+        } else {
+            redressDestination = destination
+        }
     }
 
     private var hasAttributeContent: Bool {
@@ -843,14 +910,6 @@ struct ReadOnlyItemDetailView: View {
             }
         }
     }
-}
-
-/// Nested Redress push from read-only item detail (`navigationDestination(item:)`).
-private struct ItemRedressDestination: Identifiable, Hashable {
-    let id: UUID
-    let recipient: PublicUserProfile
-    let item: VisibleWardrobeItem
-    let wardrobeType: String
 }
 
 // MARK: - Read-only attribute rows (matches AttributesSectionView read-only styling)

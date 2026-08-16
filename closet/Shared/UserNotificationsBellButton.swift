@@ -69,7 +69,7 @@ private struct RemoteSquareThumbnailView: View {
 }
 
 struct UserNotificationsBellButton: View {
-    @Binding var isPresented: Bool
+    var onTap: () -> Void
 
     @EnvironmentObject private var supabaseService: SupabaseService
     @EnvironmentObject private var authSession: AuthSession
@@ -78,17 +78,15 @@ struct UserNotificationsBellButton: View {
 
     var body: some View {
         Button {
-            isPresented = true
+            onTap()
         } label: {
             bellLabel
         }
         .task(id: authSession.userId) {
             await refreshUnreadCount()
         }
-        .onChange(of: isPresented) { _, presented in
-            if !presented {
-                Task { await refreshUnreadCount() }
-            }
+        .onAppear {
+            Task { await refreshUnreadCount() }
         }
     }
 
@@ -146,9 +144,13 @@ struct UserNotificationsView: View {
     @State private var notificationsError: String?
     @State private var respondingNotificationIds: Set<UUID> = []
     @State private var selectedPendingRedress: PendingRedressNavigationDestination?
+    @State private var selectedLikedOutfitURI: String?
+    @State private var selectedLikedItemURI: String?
     @State private var selectedProfile: PublicUserProfile?
     @State private var actorProfilesByUserId: [UUID: PublicUserProfile] = [:]
     @State private var openingSuggestionId: UUID?
+    @State private var openingLikedOutfitId: UUID?
+    @State private var openingLikedItemId: UUID?
     @State private var suggestionThumbnailURLs: [UUID: URL] = [:]
 
     private var filteredNotifications: [NotificationRecord] {
@@ -170,6 +172,26 @@ struct UserNotificationsView: View {
                     },
                     backButtonTitle: "Notifications"
                 )
+            }
+            .navigationDestination(item: $selectedLikedOutfitURI) { uriString in
+                Group {
+                    if let outfit = managedOutfit(forURI: uriString) {
+                        OutfitDetailView(outfit: outfit)
+                    } else {
+                        Text("This outfit is no longer available.")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationDestination(item: $selectedLikedItemURI) { uriString in
+                Group {
+                    if let item = managedItem(forURI: uriString) {
+                        ItemDetailView(item: item)
+                    } else {
+                        Text("This item is no longer available.")
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             .navigationDestination(item: $selectedProfile) { profile in
                 // Keep binding until system pop — same as FriendsView → profile.
@@ -274,6 +296,23 @@ struct UserNotificationsView: View {
         HStack(spacing: 12) {
             actorAvatarButton(for: notification)
 
+            if isOutfitLikeNotification(notification) {
+                Button {
+                    openLikedOutfitIfNeeded(from: notification)
+                } label: {
+                    notificationTextAndThumbnail(notification)
+                }
+                .buttonStyle(.plain)
+                .disabled(openingLikedOutfitId == likedOutfitId(for: notification))
+            } else {
+                notificationTextAndThumbnail(notification)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func notificationTextAndThumbnail(_ notification: NotificationRecord) -> some View {
+        HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 notificationPrimaryLine(notification)
 
@@ -294,7 +333,7 @@ struct UserNotificationsView: View {
 
             trailingContentThumbnail(for: notification)
         }
-        .padding(.vertical, 4)
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder
@@ -322,10 +361,11 @@ struct UserNotificationsView: View {
     private func notificationPrimaryLine(_ notification: NotificationRecord) -> some View {
         let name = actorDisplayName(for: notification)
         let suffix = notificationActionSuffix(for: notification)
-        let isOutfitSuggestion = notification.type == "outfit_suggestion"
+        let linksActionSuffix = notification.type == "outfit_suggestion"
+            || isOutfitLikeNotification(notification)
 
         // Single Text flow so wrapping stays left-aligned (HStack + Buttons right-align wrap).
-        Text(notificationTitleAttributed(name: name, suffix: suffix, outfitSuggestion: isOutfitSuggestion))
+        Text(notificationTitleAttributed(name: name, suffix: suffix, linksActionSuffix: linksActionSuffix))
             .font(.headline)
             .foregroundStyle(.primary)
             .tint(.primary)
@@ -339,7 +379,11 @@ struct UserNotificationsView: View {
                     }
                     return .handled
                 case "closet-notification-action":
-                    openOutfitSuggestionIfNeeded(from: notification)
+                    if isOutfitLikeNotification(notification) {
+                        openLikedOutfitIfNeeded(from: notification)
+                    } else {
+                        openOutfitSuggestionIfNeeded(from: notification)
+                    }
                     return .handled
                 default:
                     return .systemAction
@@ -350,7 +394,7 @@ struct UserNotificationsView: View {
     private func notificationTitleAttributed(
         name: String,
         suffix: String,
-        outfitSuggestion: Bool
+        linksActionSuffix: Bool
     ) -> AttributedString {
         var namePart = AttributedString(name)
         namePart.font = .headline
@@ -360,8 +404,8 @@ struct UserNotificationsView: View {
         var suffixPart = AttributedString(suffix)
         suffixPart.font = .headline
         suffixPart.foregroundColor = .primary
-        if outfitSuggestion {
-            suffixPart.link = URL(string: "closet-notification-action://suggestion")
+        if linksActionSuffix {
+            suffixPart.link = URL(string: "closet-notification-action://content")
         }
 
         return namePart + suffixPart
@@ -405,6 +449,34 @@ struct UserNotificationsView: View {
             }
             .buttonStyle(.plain)
             .disabled(isOpening)
+        } else if isOutfitLikeNotification(notification) {
+            let isOpening = openingLikedOutfitId == likedOutfitId(for: notification)
+            ZStack {
+                RemoteSquareThumbnailView(url: contentLikeImageURL(for: notification))
+                if isOpening {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.black.opacity(0.25))
+                    ProgressView()
+                        .tint(.white)
+                }
+            }
+        } else if isItemLikeNotification(notification) {
+            let isOpening = openingLikedItemId == likedContentId(for: notification)
+            Button {
+                openLikedItemIfNeeded(from: notification)
+            } label: {
+                ZStack {
+                    RemoteSquareThumbnailView(url: contentLikeImageURL(for: notification))
+                    if isOpening {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.black.opacity(0.25))
+                        ProgressView()
+                            .tint(.white)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(isOpening)
         } else if notification.type == "content_like" || notification.type == "content_share" {
             RemoteSquareThumbnailView(url: contentLikeImageURL(for: notification))
         }
@@ -414,6 +486,108 @@ struct UserNotificationsView: View {
         let isOpening = openingSuggestionId == suggestionId(for: notification)
         guard !isOpening else { return }
         Task { await openOutfitSuggestion(from: notification) }
+    }
+
+    private func isOutfitLikeNotification(_ notification: NotificationRecord) -> Bool {
+        notification.type == "content_like" && notification.payload?["target_type"] == "outfit"
+    }
+
+    private func isItemLikeNotification(_ notification: NotificationRecord) -> Bool {
+        notification.type == "content_like" && notification.payload?["target_type"] == "item"
+    }
+
+    private func likedContentId(for notification: NotificationRecord) -> UUID? {
+        notification.payload?["target_id"].flatMap(UUID.init(uuidString:))
+    }
+
+    private func likedOutfitId(for notification: NotificationRecord) -> UUID? {
+        likedContentId(for: notification)
+    }
+
+    private func openLikedOutfitIfNeeded(from notification: NotificationRecord) {
+        guard isOutfitLikeNotification(notification),
+              let outfitId = likedOutfitId(for: notification),
+              openingLikedOutfitId != outfitId else { return }
+
+        openingLikedOutfitId = outfitId
+        notificationsError = nil
+
+        guard let outfit = localOutfit(id: outfitId) else {
+            openingLikedOutfitId = nil
+            notificationsError = "Could not open this outfit."
+            return
+        }
+
+        selectedLikedOutfitURI = outfit.objectID.uriRepresentation().absoluteString
+        openingLikedOutfitId = nil
+    }
+
+    private func openLikedItemIfNeeded(from notification: NotificationRecord) {
+        guard isItemLikeNotification(notification),
+              let itemId = likedContentId(for: notification),
+              openingLikedItemId != itemId else { return }
+
+        openingLikedItemId = itemId
+        notificationsError = nil
+
+        guard let item = localItem(id: itemId) else {
+            openingLikedItemId = nil
+            notificationsError = "Could not open this item."
+            return
+        }
+
+        selectedLikedItemURI = item.objectID.uriRepresentation().absoluteString
+        openingLikedItemId = nil
+    }
+
+    private func localItem(id: UUID) -> Item? {
+        let request = NSFetchRequest<Item>(entityName: "Item")
+        request.fetchLimit = 1
+        var predicates = [
+            NSPredicate(format: "id == %@", id as CVarArg),
+            NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil"),
+            NSPredicate(format: "isDraft != YES")
+        ]
+        if let userId = authSession.userId?.uuidString {
+            predicates.append(NSPredicate(format: "userId == %@", userId))
+        }
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
+        return try? viewContext.fetch(request).first
+    }
+
+    private func localOutfit(id: UUID) -> Outfit? {
+        let request = NSFetchRequest<Outfit>(entityName: "Outfit")
+        request.fetchLimit = 1
+        var predicates = [
+            NSPredicate(format: "id == %@", id as CVarArg),
+            NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil"),
+            NSPredicate(format: "isDraft != YES")
+        ]
+        if let userId = authSession.userId?.uuidString {
+            predicates.append(NSPredicate(format: "userId == %@", userId))
+        }
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
+        return try? viewContext.fetch(request).first
+    }
+
+    private func managedOutfit(forURI uriString: String) -> Outfit? {
+        guard let url = URL(string: uriString),
+              let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url),
+              let outfit = try? viewContext.existingObject(with: objectID) as? Outfit,
+              outfit.isSoftDeleted != true else {
+            return nil
+        }
+        return outfit
+    }
+
+    private func managedItem(forURI uriString: String) -> Item? {
+        guard let url = URL(string: uriString),
+              let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url),
+              let item = try? viewContext.existingObject(with: objectID) as? Item,
+              item.isSoftDeleted != true else {
+            return nil
+        }
+        return item
     }
 
     private func actorUserId(for notification: NotificationRecord) -> UUID? {
@@ -633,6 +807,13 @@ struct UserNotificationsView: View {
 
         do {
             var fetched = try await supabaseService.fetchNotifications()
+            let actorIds = fetched.compactMap { actorUserId(for: $0) }
+
+            await MainActor.run {
+                notifications = fetched
+                actorProfilesByUserId.merge(supabaseService.cachedPublicProfiles(userIds: actorIds)) { _, new in new }
+                isLoadingNotifications = false
+            }
 
             if markPassiveAsRead {
                 let idsToMarkRead = fetched
@@ -640,15 +821,12 @@ struct UserNotificationsView: View {
                     .map(\.id)
 
                 if !idsToMarkRead.isEmpty {
-                    for notificationId in idsToMarkRead {
-                        try await supabaseService.markNotificationRead(id: notificationId)
+                    try? await supabaseService.markNotificationsRead(ids: idsToMarkRead)
+                    fetched = (try? await supabaseService.fetchNotifications()) ?? fetched
+                    await MainActor.run {
+                        notifications = fetched
                     }
-                    fetched = try await supabaseService.fetchNotifications()
                 }
-            }
-
-            await MainActor.run {
-                notifications = fetched
             }
             if fetched.contains(where: { $0.type == "friend_accepted" }) {
                 await supabaseService.refreshOwnFriendshipStateFromServer()
@@ -671,16 +849,16 @@ struct UserNotificationsView: View {
 
     private func loadActorProfiles(for notifications: [NotificationRecord]) async {
         let userIds = Array(Set(notifications.compactMap { actorUserId(for: $0) }))
-        guard !userIds.isEmpty else {
-            await MainActor.run { actorProfilesByUserId = [:] }
-            return
+        guard !userIds.isEmpty else { return }
+
+        var profilesById = supabaseService.cachedPublicProfiles(userIds: userIds)
+        await MainActor.run {
+            actorProfilesByUserId.merge(profilesById) { _, new in new }
         }
 
-        var profilesById: [UUID: PublicUserProfile] = [:]
-
-        // Prefer friends cache when available (works even before get_public_profiles is applied).
-        if let friends = try? await supabaseService.fetchFriends() {
-            for friend in friends where userIds.contains(friend.userId) {
+        let missingAfterCache = userIds.filter { profilesById[$0] == nil }
+        if !missingAfterCache.isEmpty, let friends = try? await supabaseService.fetchFriends() {
+            for friend in friends where missingAfterCache.contains(friend.userId) {
                 profilesById[friend.userId] = friend
             }
         }
@@ -693,24 +871,16 @@ struct UserNotificationsView: View {
             }
         }
 
-        // Seed any remaining IDs from notification payload so avatar initials still work.
-        for notification in notifications {
-            guard let userId = actorUserId(for: notification), profilesById[userId] == nil else { continue }
-            profilesById[userId] = PublicUserProfile(
-                userId: userId,
-                username: resolvedActorUsername(for: notification),
-                displayName: nil,
-                avatarUrl: nil
-            )
-        }
+        supabaseService.rememberPublicProfiles(Array(profilesById.values))
 
         await MainActor.run {
-            actorProfilesByUserId = profilesById
+            actorProfilesByUserId.merge(profilesById) { _, new in new }
         }
     }
 
     private func notificationRequiresAction(_ notification: NotificationRecord) -> Bool {
         notification.type == "friend_request"
+            || notification.type == "outfit_suggestion"
     }
 
     private func loadSuggestionThumbnailURLs(for notifications: [NotificationRecord]) async {

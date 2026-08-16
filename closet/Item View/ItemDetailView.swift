@@ -50,6 +50,7 @@ struct ItemDetailView: View {
     @State private var pendingShareText: String?
     @State private var pendingShareImage: UIImage?
     @State private var showShareFriendsSheet = false
+    @State private var showWornStatsSheet = false
     @State private var selectedImageType: ImageType = .front
     /// Inline hero carousel: 0 = front, 1 = worn (fixed slots; fullscreen still skips empty slots).
     @State private var heroCarouselPage: Int = 0
@@ -258,6 +259,10 @@ struct ItemDetailView: View {
     }
 
     private func handleLinksSectionHeaderTap() {
+        if !isReadOnly && itemLinkCount == 0 {
+            attributesSheet = .link
+            return
+        }
         withAnimation {
             isLinksExpanded.toggle()
         }
@@ -389,7 +394,7 @@ struct ItemDetailView: View {
                                     }
                                 }
                             },
-                            onCalendar: {},
+                            onCalendar: { showWornStatsSheet = true },
                             onShare: { showShareFriendsSheet = true },
                             onMoveToCloset: { showAddToClosetConfirmation = true }
                         )
@@ -675,6 +680,7 @@ struct ItemDetailView: View {
                    let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url),
                    let outfit = try? viewContext.existingObject(with: objectID) as? Outfit {
                     OutfitDetailView(outfit: outfit)
+                        .id(outfit.objectID)
                         .onAppear {
                             print("🧭 [ItemDetailView] OutfitDetailView appeared; resetting selectedOutfitURIForNavigation to nil. outfitURI=\(uriString)")
                             selectedOutfitURIForNavigation = nil
@@ -758,6 +764,9 @@ struct ItemDetailView: View {
         }
         .sheet(isPresented: $showShareSelectionSheet, onDismiss: handleShareSelectionSheetDismissed) {
             shareSelectionSheetContent
+        }
+        .sheet(isPresented: $showWornStatsSheet) {
+            ItemWearDetailsSheet(item: item)
         }
     }
 
@@ -908,10 +917,8 @@ struct ItemDetailView: View {
             set: { showShareFriendsSheet = $0 }
         )) {
             if let itemId = item.id {
-                ShareItemFriendsSheet(targetId: itemId) {
-                    showAddToClosetToast(message: "Sent")
-                }
-                .environmentObject(supabaseService)
+                ShareItemFriendsSheet(targetId: itemId)
+                    .environmentObject(supabaseService)
             } else {
                 Text("This item isn’t ready to share yet.")
                     .foregroundStyle(.secondary)
@@ -1029,6 +1036,7 @@ struct ItemDetailView: View {
             || isCropEditorPresented
             || isImageFullScreen
             || showShareSelectionSheet
+            || showWornStatsSheet
             || showPairItemSelection
             || showViewAllPairsSheet
             || showViewAllOutfitsSheet
@@ -2412,6 +2420,8 @@ struct ShareSelectionView: View {
                         Text("Image + Selected Attributes")
                             .foregroundColor(.black)
                     }
+                } header: {
+                    Text("Details")
                 }
                 
                 Section {
@@ -2480,8 +2490,10 @@ struct ShareSelectionView: View {
                         }
                         onShare(shareText)
                     } label: {
-                        Label("Share", systemImage: "square.and.arrow.up")
-                            .labelStyle(.titleAndIcon)
+                        HStack(spacing: 4) {
+                            Image(systemName: "square.and.arrow.up")
+                            Text("Share")
+                        }
                     }
                     .fontWeight(.semibold)
                 }

@@ -1,34 +1,19 @@
 ---
-description: Deferred — calendar worn count window + worn-history sheet
-globs: closet/Shared/SocialEngagementActionsRow.swift,closet/Item View/ItemDetailView.swift,closet/Outfit Views/OutfitDetailView.swift,closet/Services/CoreDataHelpers.swift,closet/Outfit Views/Calendar Views/**/*.swift
+description: Deferred — remaining calendar worn-history work (outfit, windowed badge, history list)
+globs: closet/Shared/SocialEngagementActionsRow.swift,closet/Item View/ItemDetailView.swift,closet/Item View/ItemWearDetailsSheet.swift,closet/Outfit Views/OutfitDetailView.swift,closet/Services/CoreDataHelpers.swift,closet/Outfit Views/Calendar Views/**/*.swift
 alwaysApply: false
 ---
 
-# Deferred: calendar icon worn count + worn-history sheet
+# Deferred: remaining calendar worn stats
 
-**Status:** Deferred. Baseline chrome exists; tap → sheet and time-windowed stats are not implemented.
+**Status:** Partially done. Owned closet `ItemDetailView` calendar icon / worn count opens `ItemWearDetailsSheet`. Badge count is still lifetime `pastWornEvents` (not a rolling window). `onCalendar` is still a no-op on outfits.
 
-## Current baseline
+## Still parked
 
-- Calendar after heart, before share on owned closet `ItemDetailView` and closet-context `OutfitDetailView`.
-- **Hidden when** `pastWornEvents` is empty (no icon / count until there is at least one completed wear).
-- Count = full `pastWornEvents(…).count` (no rolling year/month window yet).
-- `onCalendar` is still a no-op.
-- Not shown on `ReadOnlyItemDetailView` / read-only outfit detail.
-
-## Goal when revisiting
-
-1. **Count window (TBD with product):** limit wears to one of:
-   - rolling last 12 months, or
-   - current calendar year, or
-   - current month
-2. Keep badge count and sheet filter in sync.
-3. **Implement calendar sheet** on tap (`onCalendar`):
-   - **Stats** for the chosen window (e.g. wear count; expand later as needed)
-   - **Previously worn history** similar to History “Worn to …” rows, but distinct styling
-   - Possibly deep-link / navigate to the related calendar event
-4. Decide whether the icon stays hidden at 0 after the sheet exists, or shows `0` always once the sheet is the entry point for empty state.
-5. Apply the same behavior to item and outfit detail.
+1. Align badge count with a product window (30 days vs lifetime vs calendar year) if desired.
+2. Optional full previously-worn history list / deep-link to the event.
+3. Same sheet on `OutfitDetailView`.
+4. Empty-state calendar (show icon at 0 wears) if the sheet should exist without history.
 
 ## When done
 

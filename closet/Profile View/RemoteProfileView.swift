@@ -1,5 +1,5 @@
 //
-//  RemoteProfileWardrobeGridView.swift
+//  RemoteProfileView.swift
 //  closet
 //
 //  Read-only Items / Outfits grid for another user's public wardrobe (Supabase RPCs).
@@ -7,13 +7,14 @@
 
 import SwiftUI
 
-struct RemoteProfileWardrobeGridView: View {
+struct RemoteProfileView: View {
     let ownerUserId: UUID
     let wardrobe: VisibleWardrobe
     var ownerProfile: PublicUserProfile? = nil
     var refreshToken: UUID = UUID()
     @Binding var preferredTab: String
     var tabBarHideState: TabBarHideState? = nil
+    var navigationPath: Binding<NavigationPath>? = nil
     private let profileCollapsingHeader: AnyView
     private let profileStickyPrefix: AnyView
 
@@ -38,6 +39,8 @@ struct RemoteProfileWardrobeGridView: View {
     @State private var showItemFilter = false
     @State private var showOutfitFilter = false
     @State private var isRedressFilterActive = false
+    @State private var isLikesFilterActive = false
+    @State private var likedItemIds: Set<UUID> = []
 
     private static let pagedTabMinHeight: CGFloat = 280
     private static let tabActionsBarHeight: CGFloat = 44
@@ -62,8 +65,21 @@ struct RemoteProfileWardrobeGridView: View {
         return isRedressFilterActive || !pendingViewerSuggestions.isEmpty
     }
 
+    private var showsLikesFilterAction: Bool {
+        guard appCapabilities.enablesFriendsAndSharing else { return false }
+        return isLikesFilterActive || !likedItemIdsInWardrobe.isEmpty
+    }
+
+    private var likedItemIdsInWardrobe: Set<UUID> {
+        Set(items.map(\.id)).intersection(likedItemIds)
+    }
+
     private var displayedItems: [VisibleWardrobeItem] {
-        Self.filteredAndSortedItems(items, filter: itemFilterModel)
+        var list = Self.filteredAndSortedItems(items, filter: itemFilterModel)
+        if isLikesFilterActive {
+            list = list.filter { likedItemIds.contains($0.id) }
+        }
+        return list
     }
 
     private var displayedOutfits: [VisibleWardrobeOutfit] {
@@ -100,6 +116,7 @@ struct RemoteProfileWardrobeGridView: View {
         refreshToken: UUID = UUID(),
         preferredTab: Binding<String>,
         tabBarHideState: TabBarHideState? = nil,
+        navigationPath: Binding<NavigationPath>? = nil,
         @ViewBuilder profileCollapsingHeader: () -> some View = { EmptyView() },
         @ViewBuilder profileStickyPrefix: () -> some View = { EmptyView() }
     ) {
@@ -109,8 +126,35 @@ struct RemoteProfileWardrobeGridView: View {
         self.refreshToken = refreshToken
         self._preferredTab = preferredTab
         self.tabBarHideState = tabBarHideState
+        self.navigationPath = navigationPath
         self.profileCollapsingHeader = AnyView(profileCollapsingHeader())
         self.profileStickyPrefix = AnyView(profileStickyPrefix())
+    }
+
+    private func openRemoteItem(_ item: VisibleWardrobeItem) {
+        navigationPath?.wrappedValue.append(
+            ProfileRoute.readOnlyItem(
+                ProfileReadOnlyItemDestination(
+                    ownerUserId: ownerUserId,
+                    wardrobeId: wardrobe.id,
+                    item: item,
+                    wardrobeType: wardrobeType,
+                    ownerProfile: ownerProfile
+                )
+            )
+        )
+    }
+
+    private func openRemoteOutfit(_ outfit: VisibleWardrobeOutfit) {
+        navigationPath?.wrappedValue.append(
+            ProfileRoute.readOnlyOutfit(
+                ownerUserId: ownerUserId,
+                wardrobeId: wardrobe.id,
+                outfit: outfit,
+                wardrobeType: wardrobeType,
+                ownerProfile: ownerProfile
+            )
+        )
     }
 
     var body: some View {
@@ -129,10 +173,10 @@ struct RemoteProfileWardrobeGridView: View {
             searchSessionActive: isActionBarSearchActive
         )
         .ignoresSafeArea(.keyboard)
-        .profileSerifTypography()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: "\(wardrobe.id.uuidString)-\(refreshToken.uuidString)") {
             isRedressFilterActive = false
+            isLikesFilterActive = false
             await loadGridData(forceRefresh: true)
         }
         .onAppear {
@@ -144,41 +188,8 @@ struct RemoteProfileWardrobeGridView: View {
             if newTab != "Outfits", isRedressFilterActive {
                 isRedressFilterActive = false
             }
-        }
-        .navigationDestination(item: $selectedItem) { item in
-            ReadOnlyItemDetailView(
-                ownerUserId: ownerUserId,
-                wardrobeId: wardrobe.id,
-                itemSummary: item,
-                wardrobeType: wardrobeType,
-                ownerProfile: ownerProfile,
-                tabBarHideState: tabBarHideState
-            )
-        }
-        .navigationDestination(item: $selectedOutfit) { outfit in
-            if outfit.isPendingSuggestion {
-                PendingOutfitDetailView(
-                    recipientUserId: ownerUserId,
-                    wardrobeId: wardrobe.id,
-                    suggestionSummary: outfit,
-                    viewerRole: .submitter,
-                    onSuggestionResolved: {
-                        selectedOutfit = nil
-                        Task {
-                            await loadViewerPendingSuggestions(forceRefresh: true)
-                        }
-                    },
-                    counterpartUsername: ownerProfile?.username,
-                    counterpartDisplayName: ownerProfile?.displayName,
-                    backButtonTitle: ownerProfile?.username
-                )
-            } else {
-                ReadOnlyOutfitDetailView(
-                    ownerUserId: ownerUserId,
-                    wardrobeId: wardrobe.id,
-                    outfitSummary: outfit,
-                    tabBarHideState: tabBarHideState
-                )
+            if newTab != "Items", isLikesFilterActive {
+                isLikesFilterActive = false
             }
         }
         .navigationDestination(isPresented: $showItemFilter) {
@@ -218,7 +229,6 @@ struct RemoteProfileWardrobeGridView: View {
         }
         .pickerStyle(.segmented)
         .labelsHidden()
-        .background(SerifSegmentedPickerConfigurer())
         .padding(.horizontal, 14)
         .padding(.bottom, 8)
         .background(Color(.systemBackground))
@@ -237,6 +247,10 @@ struct RemoteProfileWardrobeGridView: View {
                     showItemFilter = true
                 },
                 onDismissSearch: { dismissActionBarSearch(clearQueries: true) },
+                onLikes: showsLikesFilterAction
+                    ? { isLikesFilterActive.toggle() }
+                    : nil,
+                isLikesFilterActive: isLikesFilterActive,
                 activeFilterCount: remoteItemActiveFilterCount,
                 barHeight: Self.tabActionsBarHeight
             )
@@ -321,21 +335,12 @@ struct RemoteProfileWardrobeGridView: View {
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: Self.pagedTabMinHeight)
         } else if displayedItems.isEmpty {
-            Text("No matching items")
+            Text(isLikesFilterActive ? "No liked items" : "No matching items")
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: Self.pagedTabMinHeight)
         } else {
-            LazyVGrid(columns: gridColumns, spacing: 2) {
-                ForEach(displayedItems) { item in
-                    RemoteProfileItemCell(item: item)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            selectedItem = item
-                        }
-                }
-            }
-            .padding(.top, 2)
+            remoteThreeColumnItemsGrid(displayedItems)
         }
     }
 
@@ -370,7 +375,7 @@ struct RemoteProfileWardrobeGridView: View {
                     RemoteProfileOutfitCell(outfit: outfit)
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            selectedOutfit = outfit
+                            openRemoteOutfit(outfit)
                         }
                 }
             }
@@ -412,6 +417,33 @@ struct RemoteProfileWardrobeGridView: View {
         .background(Color(.systemBackground))
     }
 
+    private func remoteThreeColumnItemsGrid(_ items: [VisibleWardrobeItem]) -> some View {
+        let rowCount = max((items.count + 2) / 3, 0)
+        return VStack(spacing: 2) {
+            ForEach(0..<rowCount, id: \.self) { row in
+                HStack(spacing: 2) {
+                    ForEach(0..<3, id: \.self) { column in
+                        let index = row * 3 + column
+                        if index < items.count {
+                            let item = items[index]
+                            RemoteProfileItemCell(item: item)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    openRemoteItem(item)
+                                }
+                        } else {
+                            Color.clear
+                                .aspectRatio(1, contentMode: .fit)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.top, 2)
+        .frame(maxWidth: .infinity, alignment: .top)
+        .id(items.map(\.id))
+    }
+
     private var pendingViewerSuggestionsGrid: some View {
         let suggestions = displayedPendingViewerSuggestions
         let rowCount = (suggestions.count + 2) / 3
@@ -425,7 +457,7 @@ struct RemoteProfileWardrobeGridView: View {
                             RemotePendingRedressOutfitCell(suggestion: suggestion)
                                 .contentShape(Rectangle())
                                 .onTapGesture {
-                                    selectedOutfit = suggestion.asGridOutfit()
+                                    openRemoteOutfit(suggestion.asGridOutfit())
                                 }
                         } else {
                             Color.clear
@@ -489,15 +521,37 @@ struct RemoteProfileWardrobeGridView: View {
             items = fetchedItems
             outfits = fetchedOutfits
             loadError = nil
+            await loadLikedItemIds()
         } catch is CancellationError {
             return
         } catch {
             if Self.isCancellationError(error) { return }
             await loadViewerPendingSuggestions(forceRefresh: forceRefresh)
+            await loadLikedItemIds()
             if items.isEmpty && outfits.isEmpty {
                 loadError = error.localizedDescription
             }
             print("⚠️ Failed to load remote wardrobe grid: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    private func loadLikedItemIds() async {
+        guard appCapabilities.enablesFriendsAndSharing else {
+            likedItemIds = []
+            isLikesFilterActive = false
+            return
+        }
+        do {
+            likedItemIds = try await supabaseService.fetchMyLikedItemIds(ownedBy: ownerUserId)
+        } catch is CancellationError {
+            return
+        } catch {
+            if Self.isCancellationError(error) { return }
+            print("⚠️ Failed to load liked items for owner: \(error.localizedDescription)")
+        }
+        if likedItemIdsInWardrobe.isEmpty {
+            isLikesFilterActive = false
         }
     }
 

@@ -82,6 +82,7 @@ struct CategoryVisibilityView: View {
         }
         .navigationTitle("Categories")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
         .navigationBarBackButtonHidden(true)
         .disableInteractivePopGesture()
         .toolbar {

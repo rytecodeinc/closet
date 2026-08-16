@@ -1,0 +1,59 @@
+---
+description: Calendar tab owns one NavigationStack with a path — like ClosetView / WishlistView
+globs: closet/Outfit Views/CalendarView.swift,closet/Outfit Views/Calendar Views/**/*.swift,closet/ContentView.swift
+alwaysApply: false
+---
+
+# Calendar navigation (Closet-aligned)
+
+## Stack ownership
+
+- `ContentView` presents **bare** `CalendarView()` (no wrapper `NavigationStack`).
+- **One** `NavigationStack(path:)` **inside** `CalendarView`, same as Closet / Wishlist.
+- Path: **Calendar → EventDetail and/or EventAdd/Edit → Location or Items**.
+- Do **not** nest `NavigationStack` inside `EventDetailView` / `EventAddView`.
+- Do **not** register Location / Items with `navigationDestination(item:)` on Event Add.
+
+## Path routes (`CalendarRoute`)
+
+Register **all** of these on Calendar’s stack with `navigationDestination(for: CalendarRoute.self)`:
+
+| Push | Route |
+|---|---|
+| Calendar → EventDetail | `.eventDetail(uri)` |
+| Calendar → EventAdd (create) | `.createEvent(id:initialDate:)` |
+| EventDetail → EventAdd (edit) | `.editEvent(uri)` |
+| EventAdd → Location | `.location` |
+| EventAdd → Items | `.items(uri)` |
+
+Leave values on the path until system Back / `dismiss()` pops them. Do **not** nil path entries in `onAppear`.
+
+Event Add and Event Detail only **append** routes (via `navigationPath`). They do not present Location or Items themselves.
+
+Location search writes back through `EventLocationDraft` on the stack (`environmentObject`), not through nested destinations or parent closures.
+
+## Presentation
+
+- Create and edit are **pushes** on the calendar path (not sheets).
+- Day drawer may stay a sheet; dismiss-then-**append** create/detail onto the path.
+
+## If a mid-stack push freezes or blank-pops
+
+Symptom: tap Location/Items (or any second hop) freezes (`_UIToolbarContentView.width == 0`) **or** flashes blank and pops.
+
+**Look for this first** (this is what was wrong, and what fixed it):
+
+1. Tab wrapped in `ContentView` as `NavigationStack { SomeView() }` while Closet/Wishlist **own** `NavigationStack(path:)` inside the tab view.
+2. Nested `navigationDestination(item:)` on a **mid-stack** screen (Event Add presenting Location) while the parent also used `item:` (Calendar presenting Event Add).
+3. Mixing lifetime rules: nil parent on appear (orphans Event Add) vs keep child binding (freeze) vs nil child on appear (blank pop). No combination of those `item:` rules was stable on Calendar.
+
+**Do this** (proven fix):
+
+- Bare tab view in `ContentView`.
+- Owned `NavigationStack(path:)` inside the tab.
+- One `navigationDestination(for: SomeRoute.self)` on that stack.
+- Mid-stack screens only `path.append` — they do not attach their own destinations.
+
+**Do not retry** on this stack: `NavigationLink(destination:)`, `navigationDestination(isPresented:)`, nested `item:` on Event Add, nilling Location on appear, or sheets-unless the product asks for a sheet.
+
+Closet ItemGrid `item:` + clear-on-appear still works because ItemGrid is the **root** of its owned path stack, not a pushed child. Do not copy that onto Event Add.

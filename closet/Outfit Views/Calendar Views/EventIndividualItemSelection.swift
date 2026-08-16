@@ -46,6 +46,10 @@ struct EventIndividualItemSelection: View {
     @FocusState private var isSearchFocused: Bool
     @State private var searchDebounceTask: Task<Void, Never>?
     @State private var didInitialize = false
+    @State private var isSelectedFilterActive = false
+    @State private var showDiscardAlert = false
+    @State private var originalItemIDs: [UUID] = []
+    @State private var originalOutfitIDs: Set<UUID> = []
 
     private static let searchDebounceNanos: UInt64 = 250_000_000
 
@@ -76,6 +80,34 @@ struct EventIndividualItemSelection: View {
 
     private var wardrobeTitle: String {
         selectedWardrobe?.name ?? "Select Closet"
+    }
+
+    private var hasSelectedItems: Bool { !selectedItemIDs.isEmpty }
+    private var hasSelectedOutfits: Bool { !selectedOutfitsById.isEmpty }
+
+    private var showsSelectedFilter: Bool {
+        contentSegment == .items ? hasSelectedItems : hasSelectedOutfits
+    }
+
+    private var hasUnsavedChanges: Bool {
+        selectedItemIDs != originalItemIDs
+            || Set(selectedOutfitsById.keys) != originalOutfitIDs
+    }
+
+    private var displayedItems: [Item] {
+        if isSelectedFilterActive {
+            return selectedItemIDs.compactMap { selectedItemsById[$0] }
+        }
+        return closetItems
+    }
+
+    private var displayedOutfits: [Outfit] {
+        if isSelectedFilterActive {
+            return selectedOutfitsById.values.sorted {
+                ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast)
+            }
+        }
+        return outfits
     }
 
     private var itemFilterKey: String {
@@ -156,6 +188,7 @@ struct EventIndividualItemSelection: View {
             didInitialize = true
             bootstrapWardrobeIfNeeded()
             preselectExistingContent()
+            captureOriginalSelection()
             refreshContent()
         }
         .onChange(of: selectedWardrobe) { _, wardrobe in
@@ -186,7 +219,30 @@ struct EventIndividualItemSelection: View {
             bootstrapWardrobeIfNeeded()
             refreshContent()
         }
-        .presentationDetents([.medium, .large])
+        .onChange(of: contentSegment) { _, _ in
+            if !showsSelectedFilter {
+                isSelectedFilterActive = false
+            }
+            dismissSearch(clearQueries: false)
+        }
+        .onChange(of: selectedItemIDs.count) { _, count in
+            if contentSegment == .items, count == 0 {
+                isSelectedFilterActive = false
+            }
+        }
+        .onChange(of: selectedOutfitsById.count) { _, count in
+            if contentSegment == .outfits, count == 0 {
+                isSelectedFilterActive = false
+            }
+        }
+        .alert("Discard Changes?", isPresented: $showDiscardAlert) {
+            Button("Discard", role: .destructive) {
+                dismiss()
+            }
+            Button("Keep Editing", role: .cancel) {}
+        } message: {
+            Text("You have unsaved edits. Going back will discard them.")
+        }
     }
 
     // MARK: - Header
@@ -198,11 +254,16 @@ struct EventIndividualItemSelection: View {
         )
         .overlay {
             HStack {
-                Button("Back") {
-                    dismiss()
+                Button {
+                    attemptCancel()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text("Cancel")
+                    }
                 }
                 Spacer()
-                Button("Done") {
+                Button("Save") {
                     saveSelection()
                     dismiss()
                 }
@@ -235,6 +296,10 @@ struct EventIndividualItemSelection: View {
                 isSearchFocused: $isSearchFocused,
                 onFilter: { showItemFilter = true },
                 onDismissSearch: { dismissSearch(clearQueries: true) },
+                onSelectedFilter: showsSelectedFilter
+                    ? { isSelectedFilterActive.toggle() }
+                    : nil,
+                isSelectedFilterActive: isSelectedFilterActive,
                 activeFilterCount: filterModel.activeFilterCount
             )
         } else {
@@ -245,6 +310,10 @@ struct EventIndividualItemSelection: View {
                 isSearchFocused: $isSearchFocused,
                 onFilter: { showOutfitFilter = true },
                 onDismissSearch: { dismissSearch(clearQueries: true) },
+                onSelectedFilter: showsSelectedFilter
+                    ? { isSelectedFilterActive.toggle() }
+                    : nil,
+                isSelectedFilterActive: isSelectedFilterActive,
                 activeFilterCount: outfitFilterModel.activeFilterCount,
                 searchPlaceholder: "Name, category, tag"
             )
@@ -255,7 +324,17 @@ struct EventIndividualItemSelection: View {
 
     @ViewBuilder
     private var itemsContent: some View {
-        if selectedWardrobe == nil {
+        if isSelectedFilterActive {
+            if displayedItems.isEmpty {
+                emptyState(
+                    icon: "checkmark.circle",
+                    title: "No selected items",
+                    message: "Items tied to this event will appear here."
+                )
+            } else {
+                itemsGrid(displayedItems)
+            }
+        } else if selectedWardrobe == nil {
             emptyState(
                 icon: "cabinet",
                 title: "Select a wardrobe",
@@ -268,35 +347,23 @@ struct EventIndividualItemSelection: View {
                 message: "Add items to this wardrobe or adjust your filters."
             )
         } else {
-            ScrollView {
-                LazyVGrid(columns: itemGridColumns, spacing: 2) {
-                    ForEach(closetItems, id: \.objectID) { item in
-                        ZStack(alignment: .topTrailing) {
-                            Button {
-                                toggleItemSelection(item)
-                            } label: {
-                                ItemView(item: item)
-                                    .frame(width: itemSquareSize, height: itemSquareSize)
-                                    .border(isItemSelected(item) ? Color.blue : Color.clear, width: 2)
-                            }
-                            .buttonStyle(.plain)
-
-                            if isItemSelected(item) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(.blue)
-                                    .font(.system(size: 20))
-                                    .padding(4)
-                            }
-                        }
-                    }
-                }
-            }
+            itemsGrid(closetItems)
         }
     }
 
     @ViewBuilder
     private var outfitsContent: some View {
-        if selectedWardrobe == nil {
+        if isSelectedFilterActive {
+            if displayedOutfits.isEmpty {
+                emptyState(
+                    icon: "checkmark.circle",
+                    title: "No selected outfits",
+                    message: "Outfits tied to this event will appear here."
+                )
+            } else {
+                outfitsGrid(displayedOutfits)
+            }
+        } else if selectedWardrobe == nil {
             emptyState(
                 icon: "cabinet",
                 title: "Select a wardrobe",
@@ -309,26 +376,56 @@ struct EventIndividualItemSelection: View {
                 message: "Create an outfit in this wardrobe or adjust your filters."
             )
         } else {
-            ScrollView {
-                LazyVGrid(columns: outfitGridColumns, spacing: 2) {
-                    ForEach(outfits, id: \.objectID) { outfit in
-                        ZStack(alignment: .topTrailing) {
-                            Button {
-                                toggleOutfitSelection(outfit)
-                            } label: {
-                                outfitThumbnail(outfit)
-                                    .frame(width: outfitSquareSize, height: outfitSquareSize)
-                                    .clipped()
-                                    .border(isOutfitSelected(outfit) ? Color.blue : Color.clear, width: 2)
-                            }
-                            .buttonStyle(.plain)
+            outfitsGrid(outfits)
+        }
+    }
 
-                            if isOutfitSelected(outfit) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(.blue)
-                                    .font(.system(size: 20))
-                                    .padding(6)
-                            }
+    private func itemsGrid(_ items: [Item]) -> some View {
+        ScrollView {
+            LazyVGrid(columns: itemGridColumns, spacing: 2) {
+                ForEach(items, id: \.objectID) { item in
+                    ZStack(alignment: .topTrailing) {
+                        Button {
+                            toggleItemSelection(item)
+                        } label: {
+                            ItemView(item: item)
+                                .frame(width: itemSquareSize, height: itemSquareSize)
+                                .border(isItemSelected(item) ? Color.blue : Color.clear, width: 2)
+                        }
+                        .buttonStyle(.plain)
+
+                        if isItemSelected(item) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.blue)
+                                .font(.system(size: 20))
+                                .padding(4)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func outfitsGrid(_ outfits: [Outfit]) -> some View {
+        ScrollView {
+            LazyVGrid(columns: outfitGridColumns, spacing: 2) {
+                ForEach(outfits, id: \.objectID) { outfit in
+                    ZStack(alignment: .topTrailing) {
+                        Button {
+                            toggleOutfitSelection(outfit)
+                        } label: {
+                            outfitThumbnail(outfit)
+                                .frame(width: outfitSquareSize, height: outfitSquareSize)
+                                .clipped()
+                                .border(isOutfitSelected(outfit) ? Color.blue : Color.clear, width: 2)
+                        }
+                        .buttonStyle(.plain)
+
+                        if isOutfitSelected(outfit) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.blue)
+                                .font(.system(size: 20))
+                                .padding(6)
                         }
                     }
                 }
@@ -372,6 +469,19 @@ struct EventIndividualItemSelection: View {
     }
 
     // MARK: - Selection
+
+    private func captureOriginalSelection() {
+        originalItemIDs = selectedItemIDs
+        originalOutfitIDs = Set(selectedOutfitsById.keys)
+    }
+
+    private func attemptCancel() {
+        if hasUnsavedChanges {
+            showDiscardAlert = true
+        } else {
+            dismiss()
+        }
+    }
 
     private func isItemSelected(_ item: Item) -> Bool {
         guard let id = item.id else { return false }
@@ -586,8 +696,10 @@ struct EventIndividualItemSelection: View {
         syncEventUserIdFromLinkedEntities(event)
 
         if !event.objectID.isTemporaryID {
+            setUpdatedAt(event)
             do {
                 try viewContext.save()
+                SyncService.shared.syncEventIfNeeded(event)
             } catch {
                 print("Failed to save event selection: \(error)")
             }

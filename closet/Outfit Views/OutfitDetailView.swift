@@ -45,7 +45,6 @@ struct OutfitDetailView: View {
     @State private var pendingShareText: String?
     @State private var pendingShareImage: UIImage?
     @State private var showShareFriendsSheet = false
-    @State private var showShareSentToast = false
     @State private var showDeleteOutfitConfirmation = false
     @State private var showRemoveWornImageConfirmation = false
     /// Set when a worn photo is saved/replaced. Consumed after any collage reset so Worn wins.
@@ -131,7 +130,6 @@ struct OutfitDetailView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            // Deferred: hide scrollbar to match ItemDetailView (see `.cursor/rules/outfit-detail-hide-scrollbar-deferred.mdc`).
             List {
                 Section {
                     outfitDisplayArea
@@ -261,6 +259,7 @@ struct OutfitDetailView: View {
                 }
             }
             .listStyle(.plain)
+            .scrollIndicators(.hidden)
         }
         .navigationTitle("Outfit Details")
         .navigationBarTitleDisplayMode(.inline)
@@ -431,44 +430,16 @@ struct OutfitDetailView: View {
             set: { showShareFriendsSheet = $0 }
         )) {
             if let outfitId = outfit.id {
-                ShareOutfitFriendsSheet(targetId: outfitId) {
-                    showShareSentToastMessage()
-                }
-                .environmentObject(supabaseService)
+                ShareOutfitFriendsSheet(targetId: outfitId)
+                    .environmentObject(supabaseService)
             } else {
                 Text("This outfit isn’t ready to share yet.")
                     .foregroundStyle(.secondary)
                     .padding()
             }
         }
-        .overlay(alignment: .top) {
-            if showShareSentToast {
-                Text("Sent")
-                    .font(.subheadline)
-                    .foregroundColor(.white)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(.black.opacity(0.8))
-                    .clipShape(Capsule())
-                    .padding(.top, 10)
-                    .padding(.horizontal, 16)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
-        }
         .toolbar(.hidden, for: .tabBar)
     };
-
-    private func showShareSentToastMessage() {
-        withAnimation(.easeInOut(duration: 0.18)) {
-            showShareSentToast = true
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
-            withAnimation(.easeInOut(duration: 0.22)) {
-                showShareSentToast = false
-            }
-        }
-    }
 
     /// Sheets / covers that can re-fire `onAppear` without leaving the detail screen.
     private var isCoveringModalPresented: Bool {

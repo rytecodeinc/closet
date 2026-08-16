@@ -11,6 +11,7 @@ import CoreData
 
 struct ClosetView: View {
     @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.appCapabilities) private var appCapabilities
     @EnvironmentObject private var authSession: AuthSession
     @StateObject var filterModel = ItemFilterModel()
     @StateObject var outfitFilterModel = OutfitFilterModel()
@@ -39,9 +40,23 @@ struct ClosetView: View {
     @State private var renameTargetWardrobe: Wardrobe?
     @State private var renameDraft: String = ""
     @State private var isItemGridInSelectionMode = false
+    @State private var isItemGridReplacingNavTitle = false
     @State private var wardrobePendingDelete: Wardrobe?
     @State private var showDeleteWardrobeConfirmation = false
     @State private var navigationPath = NavigationPath()
+
+    private var newClosetNameValidation: WardrobeNaming.Validation {
+        WardrobeNaming.validate(newClosetName, type: "closet", existing: userClosets)
+    }
+
+    private var renameClosetNameValidation: WardrobeNaming.Validation {
+        WardrobeNaming.validate(
+            renameDraft,
+            type: "closet",
+            existing: userClosets,
+            excluding: renameTargetWardrobe?.objectID
+        )
+    }
     
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -74,7 +89,15 @@ struct ClosetView: View {
                 .alert("New Wardrobe", isPresented: $isCreatingNewCloset) {
                     createClosetAlertButtons()
                 } message: {
-                    Text("Enter a name for your new closet")
+                    Text(newClosetNameValidation.alertMessage(emptyPrompt: "Enter a name for your new closet"))
+                }
+                .onChange(of: newClosetName) { _, value in
+                    let limited = WardrobeNaming.limitingTyping(value)
+                    if limited != value { newClosetName = limited }
+                }
+                .onChange(of: renameDraft) { _, value in
+                    let limited = WardrobeNaming.limitingTyping(value)
+                    if limited != value { renameDraft = limited }
                 }
                 .sheet(isPresented: $showClosetSheet) {
                     closetSelectionSheet()
@@ -96,6 +119,7 @@ private extension ClosetView {
                     wardrobeType: "closet",
                     selectedWardrobe: selected,
                     isInSelectionMode: $isItemGridInSelectionMode,
+                    isReplacingNavigationTitle: $isItemGridReplacingNavTitle,
                     onOpenItemFilter: {
                         tabBarHideState.shouldHideTabBar = true
                         navigationPath.append(ItemGridFilterRoute.itemFilter)
@@ -118,8 +142,12 @@ private extension ClosetView {
     @ToolbarContentBuilder
     func navigationBarToolbar() -> some ToolbarContent {
         ToolbarItem(placement: .principal) {
-            // Only show closetSelectionButton when NOT in item selection mode
-            if !isItemGridInSelectionMode {
+            if isItemGridReplacingNavTitle {
+                EmptyView()
+            } else if isItemGridInSelectionMode {
+                Text(selectedWardrobe?.name ?? "Select Closet")
+                    .font(.headline)
+            } else {
                 closetSelectionButton()
             }
         }
@@ -186,6 +214,7 @@ private extension ClosetView {
                 }
                 showClosetSheet = false
             }
+            .disabled(!newClosetNameValidation.isValid)
             Button("Cancel", role: .cancel) { }
         }
     }
@@ -283,12 +312,13 @@ private extension ClosetView {
                 renameTargetWardrobe = nil
                 renameDraft = ""
             }
+            .disabled(!renameClosetNameValidation.isValid)
             Button("Cancel", role: .cancel) {
                 renameTargetWardrobe = nil
                 renameDraft = ""
             }
         } message: {
-            Text("Enter a new name for this wardrobe")
+            Text(renameClosetNameValidation.alertMessage(emptyPrompt: "Enter a new name for this wardrobe"))
         }
         .alert(
             wardrobeDeleteAlertTitle(pendingDelete: wardrobePendingDelete, fallbackTitle: "Delete Closet?"),
@@ -315,14 +345,18 @@ private extension ClosetView {
     }
 
     private func createNewCloset(named name: String) -> Wardrobe? {
-        let normalized = WardrobeNaming.normalizedUserName(name)
-        guard !normalized.isEmpty else { return nil }
+        guard case .valid(let normalized) = WardrobeNaming.validate(
+            name,
+            type: "closet",
+            existing: userClosets
+        ) else { return nil }
 
         let newCloset = Wardrobe(context: viewContext)
         newCloset.id = UUID()
         newCloset.type = "closet"
         newCloset.name = normalized
-        newCloset.wardrobeVisibility = .public
+        // Public only when cloud sync can surface wardrobes; TestFlight stays private.
+        newCloset.wardrobeVisibility = appCapabilities.enablesCloudSync ? .public : .private
         
         // Set userId for sync
         if let userId = authSession.userId?.uuidString {
@@ -381,8 +415,12 @@ private extension ClosetView {
     }
     
     private func updateWardrobeName(_ wardrobe: Wardrobe, to newName: String) {
-        let normalized = WardrobeNaming.normalizedUserName(newName)
-        guard !normalized.isEmpty else { return }
+        guard case .valid(let normalized) = WardrobeNaming.validate(
+            newName,
+            type: "closet",
+            existing: userClosets,
+            excluding: wardrobe.objectID
+        ) else { return }
 
         wardrobe.name = normalized
         

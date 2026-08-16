@@ -163,7 +163,8 @@ enum WardrobeBootstrap {
         w.type = type
         w.userId = uid
         w.isDefault = false
-        w.wardrobeVisibility = .public
+        // Public only when cloud sync can surface wardrobes; TestFlight stays private.
+        w.wardrobeVisibility = AppEnvironment.capabilities.enablesCloudSync ? .public : .private
         let now = Date()
         w.timestamp = now
         setCreatedAndUpdatedAt(w)

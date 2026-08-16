@@ -29,13 +29,16 @@ ALTER TABLE public.wardrobes
 -- public → everyone; friends → accepted friends only; private → never via these RPCs.
 
 -- 3) Wardrobe list
+DROP FUNCTION IF EXISTS public.get_visible_wardrobes(uuid);
+
 CREATE OR REPLACE FUNCTION public.get_visible_wardrobes(p_user_id uuid)
 RETURNS TABLE (
   id uuid,
   name text,
   type text,
   visibility text,
-  is_default boolean
+  is_default boolean,
+  created_at timestamptz
 )
 LANGUAGE sql
 SECURITY DEFINER
@@ -57,7 +60,7 @@ $$
         )
     ) AS value
   )
-  SELECT w.id, w.name, w.type, w.visibility, w.is_default
+  SELECT w.id, w.name, w.type, w.visibility, w.is_default, w.created_at
   FROM public.wardrobes w
   CROSS JOIN viewer_is_friend f
   WHERE w.user_id = p_user_id
@@ -66,7 +69,7 @@ $$
       w.visibility = 'public'
       OR (f.value AND w.visibility = 'friends')
     )
-  ORDER BY lower(coalesce(w.type, '')), w.is_default DESC, w.name;
+  ORDER BY w.created_at ASC NULLS LAST, lower(coalesce(w.type, '')), w.name;
 $$;
 
 GRANT EXECUTE ON FUNCTION public.get_visible_wardrobes(uuid) TO authenticated;

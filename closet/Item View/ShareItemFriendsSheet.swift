@@ -43,7 +43,6 @@ struct ShareFriendsPickerSheet: View {
     let targetId: UUID
     var onSent: (() -> Void)? = nil
 
-    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var supabaseService: SupabaseService
     @EnvironmentObject private var authSession: AuthSession
 
@@ -51,17 +50,17 @@ struct ShareFriendsPickerSheet: View {
     @State private var displayedFriends: [PublicUserProfile] = []
     @State private var searchText = ""
     @State private var isLoading = false
-    @State private var isSending = false
+    @State private var sendingRecipientId: UUID?
+    @State private var sentRecipientIds: Set<UUID> = []
     @State private var loadError: String?
     @State private var sendError: String?
-    @State private var selectedFriend: PublicUserProfile?
+
+    private var isSending: Bool {
+        sendingRecipientId != nil
+    }
 
     private var isSearchActive: Bool {
         !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private var canSend: Bool {
-        selectedFriend != nil && !isSending
     }
 
     var body: some View {
@@ -74,17 +73,16 @@ struct ShareFriendsPickerSheet: View {
                 mainContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if authSession.isAuthenticated, selectedFriend != nil {
-                    sendComposerBar
-                }
-            }
             .toolbar(.hidden, for: .navigationBar)
             .background(Color(.systemBackground))
         }
         .presentationDetents([.medium, .large])
         .task {
             await loadFriends()
+        }
+        .onAppear {
+            sendingRecipientId = nil
+            sentRecipientIds = []
         }
         // Same pattern as UsersView Add Friend: debounce search updates so the list
         // does not rebuild (and remount avatars) on every keystroke.
@@ -118,47 +116,6 @@ struct ShareFriendsPickerSheet: View {
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity)
         .background(Color(.systemBackground))
-    }
-
-    private var sendComposerBar: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Text(sendPromptText)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            Button {
-                Task { await sendTapped() }
-            } label: {
-                if isSending {
-                    ProgressView()
-                        .controlSize(.small)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                } else {
-                    Label("Share", systemImage: "paperplane.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .labelStyle(.titleAndIcon)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                }
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.white)
-            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .disabled(!canSend)
-            .opacity(canSend ? 1 : 0.45)
-            .accessibilityLabel("Share")
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(Color(UIColor.secondarySystemBackground))
-    }
-
-    private var sendPromptText: String {
-        let username = selectedFriend?.username.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let label = username.isEmpty ? "friend" : username
-        return "Share this \(contentKind.noun) with \(label)"
     }
 
     @ViewBuilder
@@ -199,21 +156,15 @@ struct ShareFriendsPickerSheet: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(displayedFriends) { friend in
-                    Button {
-                        if selectedFriend?.userId == friend.userId {
-                            selectedFriend = nil
-                        } else {
-                            selectedFriend = friend
-                        }
-                    } label: {
-                        ShareItemFriendRow(
-                            profile: friend,
-                            isSelected: selectedFriend?.userId == friend.userId
-                        )
+                    ShareItemFriendRow(
+                        profile: friend,
+                        isSendingThisRow: sendingRecipientId == friend.userId,
+                        isSent: sentRecipientIds.contains(friend.userId),
+                        isDisabled: isSending && sendingRecipientId != friend.userId
+                    ) {
+                        Task { await sendTapped(to: friend) }
                     }
-                    .buttonStyle(.plain)
                     .listRowBackground(Color(.systemBackground))
-                    .disabled(isSending)
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
@@ -224,10 +175,9 @@ struct ShareFriendsPickerSheet: View {
         .background(Color(.systemBackground))
     }
 
-    private func sendTapped() async {
-        guard let recipient = selectedFriend else { return }
+    private func sendTapped(to recipient: PublicUserProfile) async {
         await MainActor.run {
-            isSending = true
+            sendingRecipientId = recipient.userId
             sendError = nil
         }
         do {
@@ -237,13 +187,12 @@ struct ShareFriendsPickerSheet: View {
                 targetId: targetId
             )
             await MainActor.run {
-                isSending = false
-                onSent?()
-                dismiss()
+                sendingRecipientId = nil
+                sentRecipientIds.insert(recipient.userId)
             }
         } catch {
             await MainActor.run {
-                isSending = false
+                sendingRecipientId = nil
                 sendError = error.localizedDescription
             }
         }
@@ -269,10 +218,6 @@ struct ShareFriendsPickerSheet: View {
         }
         await MainActor.run {
             displayedFriends = filtered
-            if let selected = selectedFriend,
-               !filtered.contains(where: { $0.userId == selected.userId }) {
-                selectedFriend = nil
-            }
         }
     }
 
@@ -313,10 +258,17 @@ struct ShareFriendsPickerSheet: View {
 
 private struct ShareItemFriendRow: View {
     let profile: PublicUserProfile
-    var isSelected: Bool = false
+    var isSendingThisRow: Bool = false
+    var isSent: Bool = false
+    var isDisabled: Bool = false
+    var onShare: () -> Void
 
     private var trimmedDisplayName: String {
         profile.displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private var shareControlDisabled: Bool {
+        isSent || isDisabled || isSendingThisRow
     }
 
     var body: some View {
@@ -336,14 +288,42 @@ private struct ShareItemFriendRow: View {
 
             Spacer(minLength: 8)
 
-            if isSelected {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(.tint)
-                    .accessibilityLabel("Selected")
+            Button {
+                onShare()
+            } label: {
+                if isSendingThisRow {
+                    ProgressView()
+                        .controlSize(.small)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                } else if isSent {
+                    Label("Sent", systemImage: "checkmark")
+                        .font(.subheadline.weight(.semibold))
+                        .labelStyle(.titleAndIcon)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                } else {
+                    Label("Share", systemImage: "paperplane.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .labelStyle(.titleAndIcon)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                }
             }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white)
+            .background(
+                (isSent ? Color.secondary : Color.accentColor),
+                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+            )
+            .disabled(shareControlDisabled)
+            .opacity(isDisabled && !isSendingThisRow && !isSent ? 0.45 : 1)
+            .accessibilityLabel(
+                isSent
+                    ? "Sent to \(profile.username)"
+                    : "Share with \(profile.username)"
+            )
         }
-        .contentShape(Rectangle())
         .padding(.vertical, 4)
     }
 }

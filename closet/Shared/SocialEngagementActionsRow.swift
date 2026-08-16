@@ -230,7 +230,11 @@ struct SocialEngagementActionsRow: View {
 
                     if showsCalendarButton {
                         if let calendarCount {
-                            countText(calendarCount)
+                            Button(action: onCalendar) {
+                                countText(calendarCount)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(calendarAccessibilityLabel)
                         } else {
                             Color.clear.frame(width: actionColumnWidth, height: 1)
                         }

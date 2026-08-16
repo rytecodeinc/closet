@@ -35,6 +35,7 @@ struct PendingOutfitDetailView: View {
     @State private var isItemsSectionExpanded = true
     @State private var isAttributesExpanded = false
     @State private var isHistoryExpanded = false
+    @State private var heroCarouselPage = 0
     @State private var isOutfitImageFullScreen = false
     @State private var fullscreenPageIndex = 0
     @State private var localItemSheet: PendingOutfitLocalItemSheet?
@@ -68,6 +69,10 @@ struct PendingOutfitDetailView: View {
 
     private var collageURL: URL? {
         detail?.collageImageURL ?? suggestionSummary.collageImageURL
+    }
+
+    private var wornURL: URL? {
+        urlFrom(suggestionSummary.wornImageUrl)
     }
 
     private var historyCaption: String? {
@@ -109,11 +114,6 @@ struct PendingOutfitDetailView: View {
         viewerRole == .recipient && suggesterProfile != nil
     }
 
-    private var redressNavUsernameCaption: String {
-        let raw = resolvedCounterpartUsername
-        return raw.hasPrefix("@") ? raw : "@\(raw)"
-    }
-
     private var resolvedCounterpartUsername: String {
         if let counterpartUsername {
             let trimmed = counterpartUsername.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -126,17 +126,6 @@ struct PendingOutfitDetailView: View {
             if !caption.isEmpty, caption != "Someone" { return caption }
         }
         return "user"
-    }
-
-    private var redressPrincipalTitle: some View {
-        VStack(spacing: 1) {
-            Text("Redress")
-                .font(.headline)
-            Text(redressNavUsernameCaption)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .accessibilityElement(children: .combine)
     }
 
     private var sanitizedBackButtonTitle: String? {
@@ -177,7 +166,7 @@ struct PendingOutfitDetailView: View {
                 listContent
             }
         }
-        .navigationTitle("")
+        .navigationTitle("Redress")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(sanitizedBackButtonTitle != nil)
         .toolbar(.hidden, for: .tabBar)
@@ -195,12 +184,17 @@ struct PendingOutfitDetailView: View {
                     .accessibilityLabel("Back to \(sanitizedBackButtonTitle)")
                 }
             }
-            ToolbarItem(placement: .principal) {
-                redressPrincipalTitle
-            }
         }
         .task(id: suggestionSummary.id) {
             await loadDetail()
+        }
+        .onAppear {
+            heroCarouselPage = 0
+        }
+        .onChange(of: wornURL?.absoluteString) { _, _ in
+            if wornURL == nil, heroCarouselPage == 1 {
+                heroCarouselPage = 0
+            }
         }
         .navigationDestination(item: $profileToView) { profile in
             ProfileView(viewedProfile: profile)
@@ -283,6 +277,8 @@ struct PendingOutfitDetailView: View {
                 Section {
                     suggestionHeroDisplayArea
 
+                    pendingHeroToolbarRow
+
                     redressActionsEngagementRow
                 }
                 .listRowInsets(EdgeInsets(.zero))
@@ -321,17 +317,46 @@ struct PendingOutfitDetailView: View {
                 )
             }
             .listStyle(.plain)
+            .scrollIndicators(.hidden)
         }
     }
 
     private var heroImageURLs: [URL] {
-        if let collage = collageURL { return [collage] }
-        return []
+        var urls: [URL] = []
+        if let collage = collageURL { urls.append(collage) }
+        if let worn = wornURL, !urls.contains(worn) { urls.append(worn) }
+        return urls
+    }
+
+    private func urlFrom(_ string: String?) -> URL? {
+        guard let string, let url = URL(string: string) else { return nil }
+        return url
     }
 
     private var suggestionHeroDisplayArea: some View {
         Group {
-            if let url = collageURL {
+            if wornURL != nil {
+                TabView(selection: $heroCarouselPage) {
+                    Group {
+                        if let url = collageURL {
+                            suggestionHeroImage(url: url)
+                        } else {
+                            suggestionPlaceholder
+                        }
+                    }
+                    .tag(0)
+
+                    Group {
+                        if let url = wornURL {
+                            suggestionHeroImage(url: url)
+                        } else {
+                            suggestionWornPlaceholder
+                        }
+                    }
+                    .tag(1)
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+            } else if let url = collageURL {
                 suggestionHeroImage(url: url)
             } else {
                 suggestionPlaceholder
@@ -380,16 +405,25 @@ struct PendingOutfitDetailView: View {
             }
     }
 
-    /// Optional suggester chip (recipient) and Decline/Accept or Withdraw/Edit actions.
-    private var redressActionsEngagementRow: some View {
-        VStack(spacing: 10) {
-            if showsSuggesterLeadingControl, let profile = suggesterProfile {
-                HStack(spacing: 12) {
-                    suggesterLeadingControl(profile: profile)
-                    Spacer(minLength: 0)
+    private var suggestionWornPlaceholder: some View {
+        Rectangle()
+            .fill(Color.gray.opacity(0.2))
+            .frame(width: screenWidth, height: screenWidth)
+            .overlay {
+                VStack(spacing: 10) {
+                    Image(systemName: "person.crop.square.badge.camera")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: 40))
+                    Text("No worn photo")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.secondary)
                 }
             }
+    }
 
+    /// Optional suggester chip (recipient) and Decline/Accept or Withdraw/Edit actions.
+    private var redressActionsEngagementRow: some View {
+        Group {
             if showsActionButtonsRow {
                 Group {
                     if showsRecipientActions {
@@ -398,13 +432,53 @@ struct PendingOutfitDetailView: View {
                         redressSubmitterActionsRow
                     }
                 }
-                .padding(.top, showsSuggesterLeadingControl ? 6 : 0)
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Color(.systemBackground))
             }
+        }
+    }
+
+    private var pendingHeroToolbarRow: some View {
+        HStack(spacing: 12) {
+            if showsSuggesterLeadingControl, let profile = suggesterProfile {
+                suggesterLeadingControl(profile: profile)
+            }
+            Spacer(minLength: 12)
+            Picker("", selection: heroSegmentSelection) {
+                ForEach(pendingHeroSegments, id: \.self) { segment in
+                    Image(systemName: segment.systemImage)
+                        .tag(segment)
+                        .accessibilityLabel(segment.accessibilityLabel)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: wornURL != nil ? 140 : 70)
         }
         .foregroundStyle(.primary)
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
         .background(Color(.systemBackground))
+    }
+
+    private var pendingHeroSegments: [SocialEngagementToolbarSegment] {
+        wornURL != nil
+            ? SocialEngagementToolbarSegment.allCases
+            : [.tshirt]
+    }
+
+    private var heroSegmentSelection: Binding<SocialEngagementToolbarSegment> {
+        Binding(
+            get: { heroCarouselPage == 0 ? .tshirt : .worn },
+            set: { segment in
+                withAnimation {
+                    heroCarouselPage = segment == .tshirt ? 0 : 1
+                }
+            }
+        )
     }
 
     private func suggesterLeadingControl(profile: PublicUserProfile) -> some View {
@@ -522,13 +596,8 @@ struct PendingOutfitDetailView: View {
                         ProgressView()
                             .tint(.white)
                     } else {
-                        Image("Redress.SFSymbol")
-                            .resizable()
-                            .scaledToFit()
-                            .foregroundStyle(.white)
-                            .frame(width: 16, height: 16)
-                            .fixedSize(horizontal: true, vertical: true)
-                            .transaction { $0.animation = nil }
+                        Image(systemName: "hanger")
+                            .font(.subheadline.weight(.semibold))
                         Text("Accept")
                             .font(.subheadline.weight(.semibold))
                     }

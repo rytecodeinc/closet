@@ -13,10 +13,22 @@ struct VisibleWardrobe: Decodable, Identifiable, Hashable {
     let type: String?
     let visibility: String
     let isDefault: Bool
+    let createdAt: Date?
 
     enum CodingKeys: String, CodingKey {
         case id, name, type, visibility
         case isDefault = "is_default"
+        case createdAt = "created_at"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        type = try c.decodeIfPresent(String.self, forKey: .type)
+        visibility = try c.decode(String.self, forKey: .visibility)
+        isDefault = try c.decodeIfPresent(Bool.self, forKey: .isDefault) ?? false
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt)
     }
 
     var wardrobeType: String {
@@ -294,6 +306,7 @@ struct VisibleItemDetail: Decodable, Identifiable, Hashable {
     let photos: [VisibleItemPhoto]
     let pairedItems: [VisibleWardrobeItem]
     let outfits: [VisibleWardrobeOutfit]
+    let links: [VisibleItemLink]
 
     enum CodingKeys: String, CodingKey {
         case id = "item_id"
@@ -304,6 +317,7 @@ struct VisibleItemDetail: Decodable, Identifiable, Hashable {
         case sizeValue = "size_value"
         case pairedItems = "paired_items"
         case outfits
+        case links
     }
 
     init(from decoder: Decoder) throws {
@@ -318,6 +332,32 @@ struct VisibleItemDetail: Decodable, Identifiable, Hashable {
         photos = try c.decodeIfPresent([VisibleItemPhoto].self, forKey: .photos) ?? []
         pairedItems = try c.decodeIfPresent([VisibleWardrobeItem].self, forKey: .pairedItems) ?? []
         outfits = try c.decodeIfPresent([VisibleWardrobeOutfit].self, forKey: .outfits) ?? []
+        links = try c.decodeIfPresent([VisibleItemLink].self, forKey: .links) ?? []
+    }
+}
+
+struct VisibleItemLink: Decodable, Identifiable, Hashable {
+    let id: UUID
+    let name: String?
+    let url: String?
+    let type: String?
+    let visibility: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, url, type, visibility
+    }
+
+    var itemLinkType: ItemLinkType {
+        ItemLinkType.resolving(type)
+    }
+
+    var itemLinkVisibility: WardrobeVisibility {
+        WardrobeVisibility(rawValue: visibility ?? "") ?? itemLinkType.defaultVisibility
+    }
+
+    var urlValue: URL? {
+        guard let url, let parsed = URL(string: url) else { return nil }
+        return parsed
     }
 }
 

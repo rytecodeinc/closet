@@ -29,12 +29,11 @@ extension EnvironmentValues {
 }
 
 extension View {
-    /// Serif typography for other-user Profile (SwiftUI text + segmented picker titles).
+    /// Profile typography environment (system default; serif branding deferred).
     func profileSerifTypography() -> some View {
         self
-            .environment(\.usesProfileSerifTypography, true)
-            .environment(\.font, Font.system(.body, design: .serif))
-            .environment(\.selectionTitleFontDesign, .serif)
+            .environment(\.usesProfileSerifTypography, false)
+            .environment(\.selectionTitleFontDesign, .default)
     }
 }
 
@@ -52,8 +51,9 @@ struct OtherUserProfileSerifModifier: ViewModifier {
 }
 
 extension Font {
+    /// Profile chrome type — system default (serif branding deferred).
     static func profileSerif(_ style: Font.TextStyle, weight: Font.Weight = .regular) -> Font {
-        .system(style, design: .serif).weight(weight)
+        .system(style, design: .default).weight(weight)
     }
 }
 
@@ -89,10 +89,7 @@ struct SerifSegmentedPickerConfigurer: UIViewRepresentable {
 
         func applySerifIfNeeded() {
             guard let segmented = nearestSegmentedControl() else { return }
-            let base = UIFont.systemFont(ofSize: pointSize, weight: .regular)
-            let font = base.fontDescriptor.withDesign(.serif)
-                .map { UIFont(descriptor: $0, size: pointSize) }
-                ?? base
+            let font = UIFont.systemFont(ofSize: pointSize, weight: .regular)
             segmented.setTitleTextAttributes([.font: font], for: .normal)
             segmented.setTitleTextAttributes([.font: font], for: .selected)
         }

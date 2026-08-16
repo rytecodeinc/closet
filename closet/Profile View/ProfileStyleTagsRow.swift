@@ -26,7 +26,7 @@ struct ProfileStyleTagsRow: View {
         ProfileStyleTagFlowLayout(horizontalSpacing: 8, verticalSpacing: 8) {
             ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
                 Text(displayLabel(label))
-                    .font(.system(.caption, design: .serif))
+                    .font(.system(.caption))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .padding(.horizontal, 14)

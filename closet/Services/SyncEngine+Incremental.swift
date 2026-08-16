@@ -153,4 +153,42 @@ extension SyncEngine {
         try await syncOutfit(objectID: objectID, userId: userId)
         print("✅ Auto-synced outfit: \(syncState.name)")
     }
+
+    /// Background needsSync check + event push.
+    func syncEventIfNeeded(objectID: NSManagedObjectID, eventId: UUID, userId: UUID) async throws {
+        let syncState = try await performOnSyncContext { ctx -> (needsSync: Bool, name: String)? in
+            let request: NSFetchRequest<Event> = Event.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", eventId as CVarArg)
+            request.fetchLimit = 1
+            guard let refreshed = try ctx.fetch(request).first else { return nil }
+
+            if refreshed.userId == nil || refreshed.userId?.isEmpty == true {
+                refreshed.userId = userId.uuidString
+                try ctx.save()
+            }
+            if (refreshed.visibility ?? "").isEmpty {
+                refreshed.visibility = WardrobeVisibility.private.rawValue
+                try ctx.save()
+            }
+
+            let needsSync: Bool
+            if refreshed.syncedAt == nil {
+                needsSync = true
+            } else if let updatedAt = refreshed.updatedAt, let syncedAt = refreshed.syncedAt {
+                needsSync = updatedAt >= syncedAt
+            } else {
+                needsSync = true
+            }
+            return (needsSync, refreshed.name ?? "unnamed")
+        }
+
+        guard let syncState else {
+            print("⚠️ Could not find event with ID \(eventId) for sync")
+            return
+        }
+        guard syncState.needsSync else { return }
+
+        try await syncEvent(objectID: objectID, userId: userId)
+        print("✅ Auto-synced event: \(syncState.name)")
+    }
 }

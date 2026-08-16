@@ -1,0 +1,22 @@
+---
+description: Deferred — revisit username 30-day change cooldown (product/policy)
+globs: closet/Profile View/EditProfileView.swift,closet/Services/SupabaseService.swift,closet/Shared/UsernameChangePolicy.swift,SUPABASE_USERNAME_CHANGE_COOLDOWN.sql
+alwaysApply: false
+---
+
+# Deferred: username change cooldown
+
+**Status:** Implemented (30 days). `SUPABASE_USERNAME_CHANGE_COOLDOWN.sql` **has been applied** (live). Revisit later for product/policy tweaks only. Do not change unless the user asks. Do not treat “run username cooldown SQL” as a launch blocker.
+
+## Current behavior
+
+- Users may change username **once every 30 days**.
+- Enforced in Postgres (`username_changed_at` + `enforce_username_change_cooldown` trigger) via `SUPABASE_USERNAME_CHANGE_COOLDOWN.sql`.
+- Client mirrors this in `UsernameChangePolicy`, Edit Profile (disabled field + footer), Sign-In username edit, and `SupabaseService.updateUsername`.
+- Core Data `UserProfile.usernameChangedAt` stores the last change for offline / UX.
+
+## When revisiting
+
+- Confirm interval (30 days vs other), messaging, and whether **first set at signup** should start the clock (today it does once `username_changed_at` is set by the trigger).
+- Whether TestFlight / non-cloud builds should enforce the same local cooldown.
+- Admin override / support reset path if needed.

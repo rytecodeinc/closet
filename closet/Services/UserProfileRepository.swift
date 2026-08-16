@@ -145,21 +145,33 @@ class UserProfileRepository {
     /// - Parameters:
     ///   - username: The username to set
     ///   - userId: Optional user ID from Supabase session. If nil, will try to get from profile.
-    func updateUsername(_ username: String, userId: String? = nil) throws {
+    ///   - usernameChangedAt: Optional server timestamp; defaults to now when the name actually changes.
+    ///   - enforceCooldown: When true, rejects changes within the 30-day window (see UsernameChangePolicy).
+    func updateUsername(
+        _ username: String,
+        userId: String? = nil,
+        usernameChangedAt: Date? = nil,
+        enforceCooldown: Bool = true
+    ) throws {
         let profile = getOrCreateProfile(userId: userId)
         let next = username.trimmingCharacters(in: .whitespacesAndNewlines)
         let current = (profile.username ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if current == next {
-            if let userId = userId, !userId.isEmpty, profile.userId != userId {
-                profile.userId = userId
-                guard context.hasChanges else { return }
-                try context.save()
-            }
-            return
-        }
 
-        profile.username = next
-        profile.updatedAt = Date()
+        if current != next {
+            if enforceCooldown,
+               !UsernameChangePolicy.canChangeUsername(lastChangedAt: profile.usernameChangedAt) {
+                throw NSError(
+                    domain: "UserProfileRepository",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: UsernameChangePolicy.cooldownErrorMessage]
+                )
+            }
+            profile.username = next
+            profile.usernameChangedAt = usernameChangedAt ?? Date()
+            profile.updatedAt = Date()
+        } else if let usernameChangedAt {
+            profile.usernameChangedAt = usernameChangedAt
+        }
 
         if let userId = userId, !userId.isEmpty {
             profile.userId = userId
@@ -168,7 +180,9 @@ class UserProfileRepository {
         guard context.hasChanges else { return }
         try context.save()
 
-        SyncService.shared.syncUserProfileIfNeeded(profile)
+        if current != next {
+            SyncService.shared.syncUserProfileIfNeeded(profile)
+        }
     }
     
     /// Updates the user's display name

@@ -58,6 +58,18 @@ extension Wardrobe {
     }
 }
 
+extension Event {
+    /// Defaults to `.private` when unset (calendar events are private by default).
+    var eventVisibility: WardrobeVisibility {
+        get {
+            WardrobeVisibility(rawValue: visibility ?? "") ?? .private
+        }
+        set {
+            visibility = newValue.rawValue
+        }
+    }
+}
+
 enum WardrobeVisibilityPersistence {
     static func apply(_ visibility: WardrobeVisibility, to wardrobe: Wardrobe, userId: String?) {
         wardrobe.wardrobeVisibility = visibility

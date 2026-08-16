@@ -21,6 +21,7 @@ struct ReadOnlyOutfitDetailView: View {
     var ownerProfile: PublicUserProfile? = nil
     /// Shared with Profile / Closet grid — same pattern as `ItemFilterView`.
     var tabBarHideState: TabBarHideState? = nil
+    var navigationPath: Binding<NavigationPath>? = nil
 
     @Environment(\.appCapabilities) private var appCapabilities
     @Environment(\.managedObjectContext) private var viewContext
@@ -95,6 +96,10 @@ struct ReadOnlyOutfitDetailView: View {
     }
 
     var body: some View {
+        withNestedItemDestinations(outfitDetailChrome)
+    }
+
+    private var outfitDetailChrome: some View {
         Group {
             if isLoading {
                 ProgressView("Loading outfit…")
@@ -150,16 +155,6 @@ struct ReadOnlyOutfitDetailView: View {
             await loadDetail()
             await refreshLikeState()
         }
-        .navigationDestination(item: $selectedItem) { item in
-            ReadOnlyItemDetailView(
-                ownerUserId: ownerUserId,
-                wardrobeId: wardrobeId,
-                itemSummary: item,
-                wardrobeType: wardrobeType.lowercased() == "wishlist" ? "wishlist" : "closet",
-                ownerProfile: ownerProfile,
-                tabBarHideState: tabBarHideState
-            )
-        }
         .fullScreenCover(isPresented: $isOutfitImageFullScreen) {
             RemoteOutfitFullScreenView(
                 imageURLs: heroImageURLs,
@@ -175,6 +170,43 @@ struct ReadOnlyOutfitDetailView: View {
             if wornURL == nil, heroCarouselPage == 1 {
                 heroCarouselPage = 0
             }
+        }
+    }
+
+    @ViewBuilder
+    private func withNestedItemDestinations<Content: View>(_ content: Content) -> some View {
+        if navigationPath != nil {
+            content
+        } else {
+            content
+                .navigationDestination(item: $selectedItem) { item in
+                    ReadOnlyItemDetailView(
+                        ownerUserId: ownerUserId,
+                        wardrobeId: wardrobeId,
+                        itemSummary: item,
+                        wardrobeType: wardrobeType.lowercased() == "wishlist" ? "wishlist" : "closet",
+                        ownerProfile: ownerProfile,
+                        tabBarHideState: tabBarHideState
+                    )
+                }
+        }
+    }
+
+    private func openItem(_ item: VisibleWardrobeItem) {
+        if let navigationPath {
+            navigationPath.wrappedValue.append(
+                ProfileRoute.readOnlyItem(
+                    ProfileReadOnlyItemDestination(
+                        ownerUserId: ownerUserId,
+                        wardrobeId: wardrobeId,
+                        item: item,
+                        wardrobeType: wardrobeType.lowercased() == "wishlist" ? "wishlist" : "closet",
+                        ownerProfile: ownerProfile
+                    )
+                )
+            )
+        } else {
+            selectedItem = item
         }
     }
 
@@ -244,6 +276,7 @@ struct ReadOnlyOutfitDetailView: View {
                 )
             }
             .listStyle(.plain)
+            .scrollIndicators(.hidden)
         }
     }
 
@@ -429,11 +462,13 @@ struct ReadOnlyOutfitDetailView: View {
         LazyVGrid(columns: featuredItemsGridColumns, spacing: 4) {
             ForEach(itemThumbs) { thumb in
                 Button {
-                    selectedItem = VisibleWardrobeItem(
-                        id: thumb.id,
-                        name: thumb.name,
-                        thumbnailUrl: thumb.thumbnailUrl,
-                        imageUrl: nil
+                    openItem(
+                        VisibleWardrobeItem(
+                            id: thumb.id,
+                            name: thumb.name,
+                            thumbnailUrl: thumb.thumbnailUrl,
+                            imageUrl: nil
+                        )
                     )
                 } label: {
                     RemoteReadOnlyOutfitItemCell(thumb: thumb, usesClearBackground: true)

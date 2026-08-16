@@ -1,20 +1,21 @@
 ---
-description: Deferred — other-user items filter bar “Likes” (items I liked)
-globs: closet/Profile View/RemoteProfileWardrobeGridView.swift,closet/Filter/ItemFilterSortSearchBar.swift,closet/Filter/ItemFilterModel.swift
+description: Other-user items bar Likes filter (viewer’s likes)
+globs: closet/Profile View/RemoteProfileView.swift,closet/Filter/ItemFilterSortSearchBar.swift,closet/Services/SupabaseService.swift
 alwaysApply: false
 ---
 
-# Deferred: other-user items bar — Likes filter
+# Other-user items bar — Likes filter
 
-**Status:** Parked. Do not add a Likes control on the other-user Items filter/sort/search bar unless the user asks.
+**Status:** Implemented. Apply `SUPABASE_MY_LIKED_ITEMS_FOR_OWNER.sql` if the RPC is not live yet.
 
-## Product intent
+## Behavior
 
-On **other-user profile → Items**, add a **Likes** action on the filter/sort/search bar that filters the grid to items **the signed-in user has liked** (not the owner’s likes).
+- **Items** tab on another user’s profile: **Likes** appears on the filter/sort/search bar only if the signed-in viewer has liked **at least one item in the current wardrobe** (or the Likes filter is already on).
+- Toggle filters the grid to items **the viewer** liked (`content_likes`), not the owner’s likes.
+- Heart + cayenne selected state, same pattern as Redress on Outfits.
+- Reloads liked IDs after pull-to-refresh and when returning from item detail (like/unlike).
+- Outfits tab is unchanged.
 
-## When revisiting
+## Data
 
-1. UI: bar action (toggle/badge pattern similar to Redress on Outfits if useful).
-2. Data: reuse content-like state for `(viewer, item)` on that owner’s wardrobe grid; ensure RPC/cache supports filtering by viewer likes.
-3. Scope: Items tab only unless Outfits is requested later.
-4. Remove this rule once shipped or explicitly won’t-do.
+`get_my_liked_item_ids_for_owner(p_owner_id)` → item IDs liked by `auth.uid()` that belong to that owner; client intersects with the visible wardrobe grid.

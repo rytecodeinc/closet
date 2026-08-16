@@ -13,10 +13,15 @@ struct SetLinkView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
+    @Environment(\.appCapabilities) private var appCapabilities
 
     @State private var links: [Link] = []
     @State private var formRoute: LinkFormRoute?
     @State private var visibilityRevision = 0
+
+    private var showsLinkPrivacy: Bool {
+        appCapabilities.enablesCloudSync
+    }
 
     var body: some View {
         NavigationStack {
@@ -78,14 +83,16 @@ struct SetLinkView: View {
         let visibility = item.displayedLinkSectionVisibility(for: linkType, links: links(for: linkType))
         return HStack(spacing: 12) {
             HStack(spacing: ItemLinkRowMetrics.privacyIconLabelSpacing) {
-                ItemLinkVisibilityIconMenu(
-                    visibility: visibility,
-                    font: .caption,
-                    accessibilityPrefix: linkType.displayName
-                ) { option in
-                    updateSectionVisibility(option, for: linkType)
+                if showsLinkPrivacy {
+                    ItemLinkVisibilityIconMenu(
+                        visibility: visibility,
+                        font: .caption,
+                        accessibilityPrefix: linkType.displayName
+                    ) { option in
+                        updateSectionVisibility(option, for: linkType)
+                    }
+                    .id("\(linkType.rawValue)-\(visibility.rawValue)-\(visibilityRevision)")
                 }
-                .id("\(linkType.rawValue)-\(visibility.rawValue)-\(visibilityRevision)")
 
                 ItemLinkSectionTitle(type: linkType)
             }
@@ -130,12 +137,14 @@ struct SetLinkView: View {
         } label: {
             HStack(spacing: 8) {
                 HStack(spacing: ItemLinkRowMetrics.privacyIconLabelSpacing) {
-                    ItemLinkVisibilityIconMenu(
-                        visibility: link.itemLinkVisibility,
-                        font: .caption,
-                        accessibilityPrefix: link.name ?? link.itemLinkType.displayName
-                    ) { visibility in
-                        updateRowVisibility(visibility, for: link)
+                    if showsLinkPrivacy {
+                        ItemLinkVisibilityIconMenu(
+                            visibility: link.itemLinkVisibility,
+                            font: .caption,
+                            accessibilityPrefix: link.name ?? link.itemLinkType.displayName
+                        ) { visibility in
+                            updateRowVisibility(visibility, for: link)
+                        }
                     }
 
                     Text(link.name ?? "")
@@ -143,7 +152,7 @@ struct SetLinkView: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
-                .padding(.leading, ItemLinkRowMetrics.detailNameLeadingInset)
+                .padding(.leading, showsLinkPrivacy ? ItemLinkRowMetrics.detailNameLeadingInset : 0)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 HStack(spacing: 4) {

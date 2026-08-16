@@ -58,6 +58,7 @@ struct SeasonVisibilityView: View {
         }
         .navigationTitle("Seasons")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
         .navigationBarBackButtonHidden(true)
         .disableInteractivePopGesture()
         .toolbar {

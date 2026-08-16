@@ -11,6 +11,7 @@ import CoreData
 
 struct WishlistView: View {
     @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.appCapabilities) private var appCapabilities
     @EnvironmentObject private var authSession: AuthSession
     @StateObject var filterModel = ItemFilterModel()
     @StateObject var outfitFilterModel = OutfitFilterModel()
@@ -39,9 +40,23 @@ struct WishlistView: View {
     @State private var renameTargetWardrobe: Wardrobe?
     @State private var renameDraft: String = ""
     @State private var isItemGridInSelectionMode = false
+    @State private var isItemGridReplacingNavTitle = false
     @State private var wardrobePendingDelete: Wardrobe?
     @State private var showDeleteWardrobeConfirmation = false
     @State private var navigationPath = NavigationPath()
+
+    private var newWishlistNameValidation: WardrobeNaming.Validation {
+        WardrobeNaming.validate(newWishlistName, type: "wishlist", existing: userWishlists)
+    }
+
+    private var renameWishlistNameValidation: WardrobeNaming.Validation {
+        WardrobeNaming.validate(
+            renameDraft,
+            type: "wishlist",
+            existing: userWishlists,
+            excluding: renameTargetWardrobe?.objectID
+        )
+    }
     
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -74,7 +89,15 @@ struct WishlistView: View {
                 .alert("New Wishlist", isPresented: $isCreatingNewWishlist) {
                     createWishlistAlertButtons()
                 } message: {
-                    Text("Enter a name for your new wishlist")
+                    Text(newWishlistNameValidation.alertMessage(emptyPrompt: "Enter a name for your new wishlist"))
+                }
+                .onChange(of: newWishlistName) { _, value in
+                    let limited = WardrobeNaming.limitingTyping(value)
+                    if limited != value { newWishlistName = limited }
+                }
+                .onChange(of: renameDraft) { _, value in
+                    let limited = WardrobeNaming.limitingTyping(value)
+                    if limited != value { renameDraft = limited }
                 }
                 .sheet(isPresented: $showWishlistSheet) {
                     wishlistSelectionSheet()
@@ -96,6 +119,7 @@ private extension WishlistView {
                     wardrobeType: "wishlist",
                     selectedWardrobe: selected,
                     isInSelectionMode: $isItemGridInSelectionMode,
+                    isReplacingNavigationTitle: $isItemGridReplacingNavTitle,
                     onOpenItemFilter: {
                         tabBarHideState.shouldHideTabBar = true
                         navigationPath.append(ItemGridFilterRoute.itemFilter)
@@ -118,8 +142,12 @@ private extension WishlistView {
     @ToolbarContentBuilder
     func navigationBarToolbar() -> some ToolbarContent {
         ToolbarItem(placement: .principal) {
-            // Only show wishlistSelectionButton when NOT in item selection mode
-            if !isItemGridInSelectionMode {
+            if isItemGridReplacingNavTitle {
+                EmptyView()
+            } else if isItemGridInSelectionMode {
+                Text(selectedWishlist?.name ?? "Select Wishlist")
+                    .font(.headline)
+            } else {
                 wishlistSelectionButton()
             }
         }
@@ -184,6 +212,7 @@ private extension WishlistView {
                 }
                 showWishlistSheet = false
             }
+            .disabled(!newWishlistNameValidation.isValid)
             Button("Cancel", role: .cancel) { }
         }
     }
@@ -280,12 +309,13 @@ private extension WishlistView {
                 renameTargetWardrobe = nil
                 renameDraft = ""
             }
+            .disabled(!renameWishlistNameValidation.isValid)
             Button("Cancel", role: .cancel) {
                 renameTargetWardrobe = nil
                 renameDraft = ""
             }
         } message: {
-            Text("Enter a new name for this wishlist")
+            Text(renameWishlistNameValidation.alertMessage(emptyPrompt: "Enter a new name for this wishlist"))
         }
         .alert(
             wardrobeDeleteAlertTitle(pendingDelete: wardrobePendingDelete, fallbackTitle: "Delete Wishlist?"),
@@ -312,14 +342,18 @@ private extension WishlistView {
     }
 
     private func createNewWishlist(named name: String) -> Wardrobe? {
-        let normalized = WardrobeNaming.normalizedUserName(name)
-        guard !normalized.isEmpty else { return nil }
+        guard case .valid(let normalized) = WardrobeNaming.validate(
+            name,
+            type: "wishlist",
+            existing: userWishlists
+        ) else { return nil }
 
         let newWishlist = Wardrobe(context: viewContext)
         newWishlist.id = UUID()
         newWishlist.type = "wishlist"
         newWishlist.name = normalized
-        newWishlist.wardrobeVisibility = .public
+        // Public only when cloud sync can surface wardrobes; TestFlight stays private.
+        newWishlist.wardrobeVisibility = appCapabilities.enablesCloudSync ? .public : .private
         
         // Set userId for sync
         if let userId = authSession.userId?.uuidString {
@@ -370,8 +404,12 @@ private extension WishlistView {
     }
     
     private func updateWardrobeName(_ wardrobe: Wardrobe, to newName: String) {
-        let normalized = WardrobeNaming.normalizedUserName(newName)
-        guard !normalized.isEmpty else { return }
+        guard case .valid(let normalized) = WardrobeNaming.validate(
+            newName,
+            type: "wishlist",
+            existing: userWishlists,
+            excluding: wardrobe.objectID
+        ) else { return }
 
         wardrobe.name = normalized
         

@@ -17,6 +17,10 @@ struct EventDrawerView: View {
     let ownerUserId: String?
     let onDismiss: () -> Void
     let onNavigateDate: (Date) -> Void
+    /// Open event detail on the calendar stack (caller dismisses this sheet, then pushes).
+    let onSelectEvent: (Event) -> Void
+    /// Create event on the calendar stack (caller dismisses this sheet, then pushes).
+    let onCreateEvent: () -> Void
 
     private let calendar = Calendar.current
     private let dateFormatter: DateFormatter = {
@@ -25,23 +29,22 @@ struct EventDrawerView: View {
         return formatter
     }()
 
-    @State private var showingCreateEvent = false
-    @State private var selectedEventForNavigation: Event?
-    @State private var navigateToOutfits = false
-    @State private var navigateToItems = false
-
     @FetchRequest private var events: FetchedResults<Event>
 
     init(
         selectedDate: Date,
         ownerUserId: String?,
         onDismiss: @escaping () -> Void,
-        onNavigateDate: @escaping (Date) -> Void
+        onNavigateDate: @escaping (Date) -> Void,
+        onSelectEvent: @escaping (Event) -> Void,
+        onCreateEvent: @escaping () -> Void
     ) {
         self.selectedDate = selectedDate
         self.ownerUserId = ownerUserId
         self.onDismiss = onDismiss
         self.onNavigateDate = onNavigateDate
+        self.onSelectEvent = onSelectEvent
+        self.onCreateEvent = onCreateEvent
         
         let startOfDay = Calendar.current.startOfDay(for: selectedDate)
         let endOfDay = Calendar.current.date(byAdding: .day, value: 1, to: startOfDay)!
@@ -91,7 +94,7 @@ struct EventDrawerView: View {
 
                         Spacer(minLength: 0)
 
-                        Button(action: { showingCreateEvent = true }) {
+                        Button(action: { onCreateEvent() }) {
                             Image(systemName: "plus")
                                 .font(.body)
                                 .foregroundColor(.blue)
@@ -124,14 +127,15 @@ struct EventDrawerView: View {
                 } else {
                     List {
                         ForEach(events, id: \.objectID) { event in
-                            NavigationLink(destination: EventDetailView(event: event)
-                                .environment(\.managedObjectContext, viewContext)) {
-                                    EventRowView(event: event)
-                                }
-                               /* .listRowBackground(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(Color.blue.opacity(0.1))
-                                )*/
+                            Button {
+                                onSelectEvent(event)
+                            } label: {
+                                EventRowView(event: event)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
                         }
                         .onDelete { indexSet in
                             for index in indexSet {
@@ -145,22 +149,12 @@ struct EventDrawerView: View {
                 
                 Spacer()
             }
-            .sheet(isPresented: $showingCreateEvent) {
-                CreateEventView(initialDate: selectedDate)
-                    .environment(\.managedObjectContext, viewContext)
-            }
         }
         .background(
             Color(.systemBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
                 .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: -5)
         )
-       /* .gesture(
-            DragGesture()
-                .onEnded { value in
-                    if value.translation.height > 100 { onDismiss() }
-                }
-        )*/
     }
 
     private func navigateDate(_ direction: Int) {
@@ -171,11 +165,11 @@ struct EventDrawerView: View {
     
     private func deleteEvent(_ event: Event) {
         withAnimation {
-            // Soft delete the event (for sync)
             softDelete(event)
             
             do {
                 try viewContext.save()
+                SyncService.shared.syncEventIfNeeded(event)
             } catch {
                 print("Error deleting event: \(error)")
             }
@@ -189,7 +183,11 @@ struct EventDrawerView: View {
 
 // MARK: - Event Row View
 struct EventRowView: View {
+    @Environment(\.appCapabilities) private var appCapabilities
     let event: Event
+
+    /// Fits widest compact start label (e.g. "12PM") so AM/PM columns align across rows.
+    private static let startTimeColumnWidth: CGFloat = 52
 
     private var isAllDay: Bool {
         guard let start = event.startDate, let end = event.endDate else { return false }
@@ -242,29 +240,31 @@ struct EventRowView: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Group {
-                if let compactStartTimeLabel {
-                    Text(compactStartTimeLabel)
-                        .font(.headline)
-                        .foregroundColor(.primary)
-                        .padding(.horizontal, 2)
-                } else {
-                    Text(" ")
-                        .font(.headline)
-                        .hidden()
-                        .padding(.horizontal, 2)
-                }
-            }
-            .padding(.top, 5)
-            .fixedSize()
+        HStack(alignment: .top, spacing: 8) {
+            Text(compactStartTimeLabel ?? " ")
+                .font(.headline)
+                .foregroundColor(.primary)
+                .multilineTextAlignment(.trailing)
+                .frame(width: Self.startTimeColumnWidth, alignment: .trailing)
+                .padding(.top, 5)
+                .opacity(compactStartTimeLabel == nil ? 0 : 1)
+                .accessibilityHidden(compactStartTimeLabel == nil)
 
             VStack(alignment: .leading, spacing: 5) {
-                Text(event.name ?? "Untitled Event")
-                    .font(.headline)
-                    .foregroundColor(.primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 5)
+                HStack(alignment: .center, spacing: 6) {
+                    if appCapabilities.enablesCloudSync {
+                        Image(systemName: event.eventVisibility.iconName)
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                            .frame(width: 14, alignment: .center)
+                    }
+
+                    Text(event.name ?? "Untitled Event")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.top, 5)
 
                 HStack(alignment: .center, spacing: 6) {
                     Image(systemName: "clock")
@@ -357,8 +357,8 @@ struct EventRowView: View {
 
 
 /*
-// MARK: - Create Event View
-struct CreateEventView: View {
+// MARK: - Event Add View (legacy stub; real implementation is EventAddView.swift)
+struct EventAddView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
     

@@ -7,6 +7,8 @@ import SwiftUI
 import CoreData
 
 struct DeveloperSettingsView: View {
+    @Binding var navigationPath: NavigationPath
+
     @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject private var authSession: AuthSession
     @EnvironmentObject private var supabaseService: SupabaseService
@@ -43,24 +45,31 @@ struct DeveloperSettingsView: View {
     var body: some View {
         List {
             Section {
-                NavigationLink {
-                    SignInView()
+                Button {
+                    navigationPath.append(ProfileRoute.developerSignIn)
                 } label: {
                     HStack {
                         Image(systemName: "lock")
                         Text("Sign In")
+                            .foregroundColor(.primary)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .foregroundColor(.gray)
+                            .font(.caption)
                     }
                 }
 
-                NavigationLink {
-                    RegisterView()
-                        .environmentObject(supabaseService)
-                        .environmentObject(authSession)
-                        .environment(\.managedObjectContext, viewContext)
+                Button {
+                    navigationPath.append(ProfileRoute.developerRegister)
                 } label: {
                     HStack {
                         Image(systemName: "person.badge.plus")
                         Text("Registration flow")
+                            .foregroundColor(.primary)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .foregroundColor(.gray)
+                            .font(.caption)
                     }
                 }
 
@@ -166,6 +175,7 @@ struct DeveloperSettingsView: View {
         }
         .navigationTitle("Developer Settings")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
         .alert(seedCatalogAlertTitle, isPresented: $showSeedCatalogAlert) {
             Button("OK", role: .cancel) {}
         } message: {

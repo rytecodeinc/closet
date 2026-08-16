@@ -151,6 +151,7 @@ class SupabaseService: ObservableObject {
     private var hasLoadedFriendCountCache = false
     /// Session-scoped caches for remote friend profiles (cleared on sign-out).
     private var friendsListCache: [PublicUserProfile]?
+    private var publicProfilesByUserId: [UUID: PublicUserProfile] = [:]
     private var friendshipsCache: [FriendshipRecord]?
     private var visibleWardrobesCache: [UUID: [VisibleWardrobe]] = [:]
     private var visibleWardrobeItemsCache: [String: [VisibleWardrobeItem]] = [:]
@@ -472,6 +473,7 @@ class SupabaseService: ObservableObject {
             )
         }
         friendsListCache = profiles
+        rememberPublicProfiles(profiles)
         return profiles
     }
 
@@ -485,26 +487,74 @@ class SupabaseService: ObservableObject {
                           userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
         }
 
-        let response = try await client
-            .rpc("get_public_profiles", params: ["p_user_ids": uniqueIds.map(\.uuidString)])
-            .execute()
-
-        struct ProfileRow: Decodable {
-            let user_id: UUID
-            let username: String
-            let display_name: String?
-            let avatar_url: String?
+        var byId: [UUID: PublicUserProfile] = [:]
+        var missing: [UUID] = []
+        for id in uniqueIds {
+            if let cached = publicProfilesByUserId[id] {
+                byId[id] = cached
+            } else {
+                missing.append(id)
+            }
         }
 
-        let rows = try JSONDecoder().decode([ProfileRow].self, from: response.data)
-        return rows.map { row in
-            PublicUserProfile(
-                userId: row.user_id,
-                username: row.username,
-                displayName: row.display_name,
-                avatarUrl: row.avatar_url
-            )
+        if !missing.isEmpty {
+            let response = try await client
+                .rpc("get_public_profiles", params: ["p_user_ids": missing.map(\.uuidString)])
+                .execute()
+
+            struct ProfileRow: Decodable {
+                let user_id: UUID
+                let username: String
+                let display_name: String?
+                let avatar_url: String?
+            }
+
+            let rows = try JSONDecoder().decode([ProfileRow].self, from: response.data)
+            let fetched = rows.map { row in
+                PublicUserProfile(
+                    userId: row.user_id,
+                    username: row.username,
+                    displayName: row.display_name,
+                    avatarUrl: row.avatar_url
+                )
+            }
+            rememberPublicProfiles(fetched)
+            for profile in fetched {
+                byId[profile.userId] = profile
+            }
         }
+
+        return uniqueIds.compactMap { byId[$0] }
+    }
+
+    func cachedPublicProfile(userId: UUID) -> PublicUserProfile? {
+        publicProfilesByUserId[userId]
+    }
+
+    func cachedPublicProfiles(userIds: [UUID]) -> [UUID: PublicUserProfile] {
+        var result: [UUID: PublicUserProfile] = [:]
+        for id in Set(userIds) {
+            if let profile = publicProfilesByUserId[id] {
+                result[id] = profile
+            }
+        }
+        return result
+    }
+
+    func rememberPublicProfiles(_ profiles: [PublicUserProfile]) {
+        for profile in profiles {
+            if let existing = publicProfilesByUserId[profile.userId],
+               hasAvatarURL(existing),
+               !hasAvatarURL(profile) {
+                continue
+            }
+            publicProfilesByUserId[profile.userId] = profile
+        }
+    }
+
+    private func hasAvatarURL(_ profile: PublicUserProfile) -> Bool {
+        let raw = profile.avatarUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !raw.isEmpty
     }
 
     /// Profiles the current user has sent a pending friend request to.
@@ -676,6 +726,7 @@ class SupabaseService: ObservableObject {
     private func clearVisibleProfileCaches() {
         friendsListCache = nil
         friendshipsCache = nil
+        publicProfilesByUserId = [:]
         visibleWardrobesCache = [:]
         visibleWardrobeItemsCache = [:]
         visibleWardrobeOutfitsCache = [:]
@@ -994,7 +1045,7 @@ class SupabaseService: ObservableObject {
         let response = try await client
             .rpc("get_visible_wardrobes", params: ["p_user_id": userId.uuidString])
             .execute()
-        let wardrobes = try JSONDecoder().decode([VisibleWardrobe].self, from: response.data)
+        let wardrobes = try Self.supabaseTimestamptzDecoder().decode([VisibleWardrobe].self, from: response.data)
         visibleWardrobesCache[userId] = wardrobes
         return wardrobes
     }
@@ -1122,6 +1173,25 @@ class SupabaseService: ObservableObject {
         return rows.first ?? ContentLikeState(likeCount: 0, likedByMe: false)
     }
 
+    func fetchMyLikedItemIds(ownedBy ownerUserId: UUID) async throws -> Set<UUID> {
+        guard currentUser != nil else {
+            throw NSError(domain: "SupabaseService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+        let response = try await client
+            .rpc(
+                "get_my_liked_item_ids_for_owner",
+                params: ["p_owner_id": ownerUserId.uuidString]
+            )
+            .execute()
+        struct LikedItemIdRow: Decodable {
+            let itemId: UUID
+            enum CodingKeys: String, CodingKey { case itemId = "item_id" }
+        }
+        let rows = try JSONDecoder().decode([LikedItemIdRow].self, from: response.data)
+        return Set(rows.map(\.itemId))
+    }
+
     func toggleContentLike(targetType: ContentLikeTargetType, targetId: UUID) async throws -> ContentLikeState {
         guard currentUser != nil else {
             throw NSError(domain: "SupabaseService", code: -1,
@@ -1241,10 +1311,15 @@ class SupabaseService: ObservableObject {
     /// Marks a notification as read by id (sets is_read = true).
     /// RLS on notifications ensures a user can only update their own notifications.
     func markNotificationRead(id: UUID) async throws {
+        try await markNotificationsRead(ids: [id])
+    }
+
+    func markNotificationsRead(ids: [UUID]) async throws {
+        guard !ids.isEmpty else { return }
         _ = try await client
             .from("notifications")
             .update(["is_read": true])
-            .eq("id", value: id.uuidString)
+            .in("id", values: ids.map(\.uuidString))
             .execute()
     }
 
@@ -1704,6 +1779,7 @@ class SupabaseService: ObservableObject {
     
     /// Updates the user's username in user_profiles table
     /// - Parameter username: The new username (3-30 characters, alphanumeric and underscores only)
+    /// - Note: Limited to once every 30 days (`UsernameChangePolicy` + DB trigger). Revisit: username-change-cooldown-deferred.mdc
     func updateUsername(_ username: String) async throws {
         guard let userId = currentUser?.id else {
             throw NSError(domain: "SupabaseService", code: -1, 
@@ -1728,6 +1804,22 @@ class SupabaseService: ObservableObject {
             throw NSError(domain: "SupabaseService", code: -1, 
                          userInfo: [NSLocalizedDescriptionKey: "Username can only contain letters, numbers, and underscores"])
         }
+
+        let lastChangedAt = try await fetchUsernameChangedAt(userId: userId)
+        guard UsernameChangePolicy.canChangeUsername(lastChangedAt: lastChangedAt) else {
+            if let next = UsernameChangePolicy.nextAllowedChangeDate(after: lastChangedAt) {
+                throw NSError(
+                    domain: "SupabaseService",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: UsernameChangePolicy.lockedMessage(until: next)]
+                )
+            }
+            throw NSError(
+                domain: "SupabaseService",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: UsernameChangePolicy.cooldownErrorMessage]
+            )
+        }
         
         let now = ISO8601DateFormatter().string(from: Date())
         
@@ -1742,21 +1834,42 @@ class SupabaseService: ObservableObject {
             
             // Update cached username
             self.cachedUsername = trimmedUsername
+            let changedAt = Date()
             
             // Sync to Core Data (via SyncService) - await to ensure it completes
-            await SyncService.shared.syncUsernameToCoreData(trimmedUsername)
+            await SyncService.shared.syncUsernameToCoreData(trimmedUsername, usernameChangedAt: changedAt)
             
             print("✅ Username updated to: \(trimmedUsername)")
         } catch {
             // Check if error is due to unique constraint violation (message may be in userInfo or localizedDescription)
             let message = (error as NSError).userInfo[NSLocalizedDescriptionKey] as? String
                 ?? error.localizedDescription
-            if message.lowercased().contains("unique") || message.lowercased().contains("duplicate") || message.contains("user_profiles_username_key") {
+            let lower = message.lowercased()
+            if lower.contains("unique") || lower.contains("duplicate") || message.contains("user_profiles_username_key") {
                 throw NSError(domain: "SupabaseService", code: -1,
                              userInfo: [NSLocalizedDescriptionKey: "Username is already taken"])
             }
+            if lower.contains("once every 30 days") || lower.contains("username can only be changed") {
+                throw NSError(
+                    domain: "SupabaseService",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: UsernameChangePolicy.cooldownErrorMessage]
+                )
+            }
             throw error
         }
+    }
+
+    /// Last time the signed-in user changed username (server), if any.
+    func fetchUsernameChangedAt(userId: UUID? = nil) async throws -> Date? {
+        guard let userId = userId ?? currentUser?.id else { return nil }
+        let response = try await client.from("user_profiles")
+            .select("username_changed_at")
+            .eq("user_id", value: userId.uuidString)
+            .limit(1)
+            .execute()
+        let rows = try Self.supabaseTimestamptzDecoder().decode([UsernameChangedAtRow].self, from: response.data)
+        return rows.first?.username_changed_at
     }
     
     /// Updates the user's display name in user_profiles table
@@ -1827,14 +1940,14 @@ class SupabaseService: ObservableObject {
             return cached
         }
         
-        // Fetch from server (display_name + avatar_url + style_tags)
+        // Fetch from server (display_name + avatar_url + style_tags + username_changed_at)
         let response = try await client.from("user_profiles")
-            .select("user_id, username, display_name, avatar_url, style_tags")
+            .select("user_id, username, display_name, avatar_url, style_tags, username_changed_at")
             .eq("user_id", value: userId.uuidString)
             .execute()
         
         // Decode response
-        let decoder = JSONDecoder()
+        let decoder = Self.supabaseTimestamptzDecoder()
         let data: Data = response.data
         
         // Handle empty response gracefully
@@ -1871,7 +1984,10 @@ class SupabaseService: ObservableObject {
                 self.cachedUsername = username
                 
                 // Sync to Core Data (via SyncService) - await to ensure it completes
-                await SyncService.shared.syncUsernameToCoreData(username)
+                await SyncService.shared.syncUsernameToCoreData(
+                    username,
+                    usernameChangedAt: profile.username_changed_at
+                )
             }
             
             // Sync display_name if available
@@ -2198,6 +2314,11 @@ private struct SupabaseUserProfile: Codable {
     let display_name: String?
     let avatar_url: String?
     let style_tags: [String]?
+    let username_changed_at: Date?
     let created_at: String?
     let updated_at: String?
+}
+
+private struct UsernameChangedAtRow: Codable {
+    let username_changed_at: Date?
 }

@@ -16,6 +16,7 @@ private enum AddFriendSegment: String, CaseIterable, Identifiable {
 
 struct UsersView: View {
     var tabBarHideState: TabBarHideState? = nil
+    var navigationPath: Binding<NavigationPath>? = nil
 
     @EnvironmentObject private var supabaseService: SupabaseService
     @EnvironmentObject private var authSession: AuthSession
@@ -46,6 +47,17 @@ struct UsersView: View {
     }
 
     var body: some View {
+        if navigationPath != nil {
+            usersChrome
+        } else {
+            usersChrome
+                .navigationDestination(item: $selectedProfile) { profile in
+                    ProfileView(viewedProfile: profile, sharedTabBarHideState: tabBarHideState)
+                }
+        }
+    }
+
+    private var usersChrome: some View {
         VStack(spacing: 0) {
             Picker("", selection: $selectedSegment) {
                 ForEach(AddFriendSegment.allCases) { segment in
@@ -79,9 +91,6 @@ struct UsersView: View {
         .toolbarBackground(Color(UIColor.systemBackground), for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .modifier(NavigationBarHairlineHidden(backgroundColor: UIColor.systemBackground))
-        .navigationDestination(item: $selectedProfile) { profile in
-            ProfileView(viewedProfile: profile, sharedTabBarHideState: tabBarHideState)
-        }
         .task(id: supabaseService.friendshipEpoch) {
             await loadConnectedFriends()
             await loadOutgoingPendingRequests()
@@ -194,6 +203,14 @@ struct UsersView: View {
         .background(Color(.systemBackground))
     }
 
+    private func openProfile(_ profile: PublicUserProfile) {
+        if let navigationPath {
+            navigationPath.wrappedValue.append(ProfileRoute.otherUser(profile))
+        } else {
+            selectedProfile = profile
+        }
+    }
+
     private enum RowContext {
         case search
         case pending
@@ -203,7 +220,7 @@ struct UsersView: View {
     private func userRow(_ profile: PublicUserProfile, context: RowContext) -> some View {
         HStack(spacing: 12) {
             Button {
-                selectedProfile = profile
+                openProfile(profile)
             } label: {
                 HStack(spacing: 12) {
                     PublicUserProfileAvatarView(profile: profile, size: 44)

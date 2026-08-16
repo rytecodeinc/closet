@@ -1,0 +1,30 @@
+---
+description: Deferred — expand numeric/size catalogs beyond women’s dress even sizes
+globs: closet/Item View/Add Item/Set Attributes/SetSizeView.swift,closet/Selection Views/Size Selection/**/*.swift,closet/Default Data/DataSeeder.swift,closet/Services/ReferenceDataBootstrap.swift,closet/Shared/HowToOnboardingView.swift
+alwaysApply: false
+---
+
+# Deferred: size catalog beyond women’s dress numeric
+
+**Status:** Parked. Do not expand unless the user asks.
+
+## Current baseline
+
+`SizeType` on the size sheet is Alpha / Numeric / Shoe (`SetSizeView`). Seeded scales:
+
+- **Alpha (XXS-XXL)** — XXS–XXL
+- **US Numeric** — `00, 0, 2 … 16` (women’s even dress sizes only)
+- **US Shoe** — 5–13 including halves
+
+Seeded in `DataSeeder` / `ReferenceDataBootstrap`. Numeric is treated as one scale for Dresses/Bottoms/Suits, not men’s waist/chest, EU, UK, kids, etc.
+
+## Goal when revisiting — pick one (or both)
+
+1. **Onboarding preset seeding** — ask gender / clothing profile (or “what I wear”) and seed the size catalogs that match (e.g. women’s dress + US shoe vs men’s waist/inseam + broader shoe). Keep the size sheet simple for that user.
+2. **Expand the size sheet** — add all common sizing types/scales in Select Size (men’s waist, inseam, jacket, EU/UK numeric, kids, plus-size range, etc.) so one account can mix catalogs without onboarding.
+
+Either path must stay compatible with independent sizes (`user_id, value, scale`) and existing items tagged `US Numeric`.
+
+## When done
+
+Remove this rule.

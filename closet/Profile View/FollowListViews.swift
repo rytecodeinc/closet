@@ -27,6 +27,7 @@ struct FriendsView: View {
     var initialSegment: FriendsSegment = .followers
     /// Shared with Profile — same pattern as `ItemFilterView` / read-only detail.
     var tabBarHideState: TabBarHideState? = nil
+    var navigationPath: Binding<NavigationPath>? = nil
 
     @EnvironmentObject private var supabaseService: SupabaseService
 
@@ -46,13 +47,15 @@ struct FriendsView: View {
         followersCount: Int,
         followingCount: Int,
         initialSegment: FriendsSegment = .followers,
-        tabBarHideState: TabBarHideState? = nil
+        tabBarHideState: TabBarHideState? = nil,
+        navigationPath: Binding<NavigationPath>? = nil
     ) {
         self.userId = userId
         self.followersCount = followersCount
         self.followingCount = followingCount
         self.initialSegment = initialSegment
         self.tabBarHideState = tabBarHideState
+        self.navigationPath = navigationPath
         _selectedSegment = State(initialValue: initialSegment)
     }
 
@@ -65,6 +68,17 @@ struct FriendsView: View {
     }
 
     var body: some View {
+        if navigationPath != nil {
+            friendsChrome
+        } else {
+            friendsChrome
+                .navigationDestination(item: $selectedProfile) { profile in
+                    ProfileView(viewedProfile: profile, sharedTabBarHideState: tabBarHideState)
+                }
+        }
+    }
+
+    private var friendsChrome: some View {
         VStack(spacing: 0) {
             Picker("", selection: $selectedSegment) {
                 Text("Followers (\(followersCount))").tag(FriendsSegment.followers)
@@ -110,10 +124,6 @@ struct FriendsView: View {
         .toolbarBackground(Color(UIColor.secondarySystemBackground), for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .modifier(NavigationBarHairlineHidden(backgroundColor: UIColor.secondarySystemBackground))
-        .navigationDestination(item: $selectedProfile) { profile in
-            // Stay on the parent Profile NavigationStack (no nested stack).
-            ProfileView(viewedProfile: profile, sharedTabBarHideState: tabBarHideState)
-        }
         .task(id: supabaseService.friendshipEpoch) {
             await loadAll()
         }
@@ -168,7 +178,7 @@ struct FriendsView: View {
                 } else {
                     List(profiles) { profile in
                         Button {
-                            selectedProfile = profile
+                            openProfile(profile)
                         } label: {
                             profileRow(profile)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -204,6 +214,14 @@ struct FriendsView: View {
             Spacer(minLength: 0)
         }
         .padding(.vertical, 4)
+    }
+
+    private func openProfile(_ profile: PublicUserProfile) {
+        if let navigationPath {
+            navigationPath.wrappedValue.append(ProfileRoute.otherUser(profile))
+        } else {
+            selectedProfile = profile
+        }
     }
 
     private func filtered(_ profiles: [PublicUserProfile], query: String) -> [PublicUserProfile] {

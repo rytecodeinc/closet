@@ -59,6 +59,8 @@
         <attribute name="isSoftDeleted" optional="YES" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
         <attribute name="syncedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="notes" optional="YES" attributeType="String"/>
+        <!-- private | friends | public — default private (see EventVisibility / WardrobeVisibility raw values) -->
+        <attribute name="visibility" optional="YES" attributeType="String" defaultValueString="private"/>
         <relationship name="items" optional="YES" toMany="YES" deletionRule="Nullify" ordered="YES" destinationEntity="Item" inverseName="events" inverseEntity="Item"/>
         <relationship name="outfits" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Outfit" inverseName="events" inverseEntity="Outfit"/>
     </entity>
@@ -271,6 +273,7 @@
         <attribute name="weightKg" optional="YES" attributeType="Double" usesScalarValueType="YES"/>
         <attribute name="weightUnit" optional="YES" attributeType="String"/>
         <attribute name="username" optional="YES" attributeType="String"/>
+        <attribute name="usernameChangedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="displayName" optional="YES" attributeType="String"/>
         <attribute name="styleTags" optional="YES" attributeType="String"/>
         <attribute name="friendCount" optional="YES" attributeType="Integer 64" usesScalarValueType="YES"/>

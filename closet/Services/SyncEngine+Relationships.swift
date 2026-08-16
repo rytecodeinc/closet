@@ -457,12 +457,16 @@ extension SyncEngine {
             if (link.type ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 link.type = resolvedType
             }
+            if (link.visibility ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                link.visibility = link.itemLinkVisibility.rawValue
+            }
             return SyncLinkData(
                 id: linkId.uuidString,
                 itemId: itemId.uuidString,
                 name: link.name,
                 url: link.url?.absoluteString,
-                type: resolvedType
+                type: resolvedType,
+                visibility: link.itemLinkVisibility.rawValue
             )
         }
         guard let linkData else { return }

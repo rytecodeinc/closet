@@ -526,6 +526,14 @@ struct SignInView: View {
     }
     
     private func startEditingUsername() {
+        if !UsernameChangePolicy.canChangeUsername(lastChangedAt: userProfile?.usernameChangedAt) {
+            if let next = UsernameChangePolicy.nextAllowedChangeDate(after: userProfile?.usernameChangedAt) {
+                errorMessage = UsernameChangePolicy.lockedMessage(until: next)
+            } else {
+                errorMessage = UsernameChangePolicy.cooldownErrorMessage
+            }
+            return
+        }
         editedUsername = currentUsername ?? ""
         errorMessage = nil
         isEditingUsername = true

@@ -182,6 +182,29 @@ class SyncService: ObservableObject {
         }
     }
 
+    /// Background event push (create/edit/delete). Safe to call from UI — work hops off MainActor.
+    nonisolated func syncEventIfNeeded(_ event: Event) {
+        let objectID = event.objectID
+        Task { @MainActor in
+            guard self.isCloudSyncEnabled else { return }
+            guard self.supabaseService.isAuthenticated,
+                  let userId = self.supabaseService.currentUser?.id,
+                  let eventId = event.id else {
+                return
+            }
+
+            do {
+                try await SyncEngine.shared.syncEventIfNeeded(
+                    objectID: objectID,
+                    eventId: eventId,
+                    userId: userId
+                )
+            } catch {
+                print("⚠️ Auto-sync failed for event: \(error.localizedDescription)")
+            }
+        }
+    }
+
     /// Worn photo removed locally — clear R2 + Supabase URL without full outfit sync.
     nonisolated func syncOutfitWornRemovalIfNeeded(_ outfit: Outfit) {
         let objectID = outfit.objectID
@@ -335,9 +358,13 @@ class SyncService: ObservableObject {
 
     // MARK: - Profile download (Supabase → viewContext)
 
-    func syncUsernameToCoreData(_ username: String) async {
+    func syncUsernameToCoreData(_ username: String, usernameChangedAt: Date? = nil) async {
         let userId = supabaseService.currentUser?.id.uuidString
-        await SyncEngine.shared.syncUsernameToCoreData(username, userId: userId)
+        await SyncEngine.shared.syncUsernameToCoreData(
+            username,
+            userId: userId,
+            usernameChangedAt: usernameChangedAt
+        )
     }
 
     func syncDisplayNameToCoreData(_ displayName: String) async {

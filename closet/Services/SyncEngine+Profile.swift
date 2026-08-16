@@ -10,7 +10,7 @@ extension SyncEngine {
 
     // MARK: - Profile download (Supabase → viewContext)
 
-    func syncUsernameToCoreData(_ username: String, userId: String?) async {
+    func syncUsernameToCoreData(_ username: String, userId: String?, usernameChangedAt: Date? = nil) async {
         guard let context = viewContext else {
             print("⚠️ No context available for username sync")
             return
@@ -18,7 +18,12 @@ extension SyncEngine {
         await MainActor.run {
             let repository = UserProfileRepository(context: context)
             do {
-                try repository.updateUsername(username, userId: userId)
+                try repository.updateUsername(
+                    username,
+                    userId: userId,
+                    usernameChangedAt: usernameChangedAt,
+                    enforceCooldown: false
+                )
             } catch {
                 print("⚠️ Failed to sync username to Core Data: \(error.localizedDescription)")
             }

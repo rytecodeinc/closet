@@ -1,5 +1,5 @@
 //
-//  CreateEventView.swift
+//  EventAddView.swift
 //  closet
 //
 //  Created by Dan Warner on 10/11/25.
@@ -11,36 +11,48 @@ import Combine
 import Contacts
 import CoreData
 
-struct CreateEventView: View {
+struct EventAddView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.appCapabilities) private var appCapabilities
     @EnvironmentObject private var authSession: AuthSession
     
     let eventToEdit: Event?
+    @Binding var navigationPath: NavigationPath
     
     /// Account that owns new calendar rows (matches `Event.userId` filtering elsewhere).
     private var calendarAccountUserId: String? {
         authSession.userId?.uuidString
     }
     
+    @EnvironmentObject private var locationDraft: EventLocationDraft
+    
     @State private var eventName = ""
-    @State private var eventLocation = ""
-    
-    @State private var selectedLocationTitle: String? = nil
-    @State private var selectedLocationSubtitle: String? = nil
-    @State private var selectedPlacemark: CLPlacemark? = nil
-    
-    @StateObject private var searchManager = LocationSearchManager()
-    
     @State private var startDate: Date
     @State private var endDate: Date
     @State private var eventNotes = ""
     @State private var isAllDay = false
+    @State private var eventVisibility: WardrobeVisibility = .private
+    @FocusState private var isNotesFocused: Bool
+    @FocusState private var isEventNameFocused: Bool
     
-    // Outfit/Item selection
-    @State private var navigateToItems = false
     @State private var tempEvent: Event?
     @State private var refreshToken = UUID() // Force view refresh when items change
+    
+    @State private var showDiscardAlert = false
+    @State private var didCaptureOriginals = false
+    @State private var originalName = ""
+    @State private var originalLocation = ""
+    @State private var originalNotes = ""
+    @State private var originalStartDate = Date()
+    @State private var originalEndDate = Date()
+    @State private var originalIsAllDay = false
+    @State private var originalVisibility: WardrobeVisibility = .private
+    @State private var originalLatitude: Double = 0
+    @State private var originalLongitude: Double = 0
+    @State private var originalFullAddress: String? = nil
+    @State private var originalItems: [Item] = []
+    @State private var originalOutfits: [Outfit] = []
     
     // Computed property to get selected items array (preserves insertion order)
     private var selectedItems: [Item] {
@@ -55,8 +67,13 @@ struct CreateEventView: View {
         return outfitsSet.sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
     }
     
-    init(eventToEdit: Event? = nil, initialDate: Date = Date()) {
+    init(
+        eventToEdit: Event? = nil,
+        initialDate: Date = Date(),
+        navigationPath: Binding<NavigationPath>
+    ) {
         self.eventToEdit = eventToEdit
+        self._navigationPath = navigationPath
         if let event = eventToEdit {
             _startDate = State(initialValue: event.startDate ?? initialDate)
             _endDate = State(initialValue: event.endDate ?? initialDate.addingTimeInterval(3600))
@@ -67,10 +84,18 @@ struct CreateEventView: View {
     }
     
     var body: some View {
-        NavigationStack {
+        createEventForm
+            .onChange(of: navigationPath.count) { _, _ in
+                refreshToken = UUID()
+                if let event = tempEvent {
+                    viewContext.refresh(event, mergeChanges: true)
+                }
+            }
+    }
+    
+    private var createEventForm: some View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    
                     // MARK: - Event Name
                     HStack(alignment: .firstTextBaseline, spacing: 12) {
                         Image(systemName: "calendar")
@@ -80,6 +105,7 @@ struct CreateEventView: View {
                             .font(.title3)
                             .fontWeight(.medium)
                             .textInputAutocapitalization(.words)
+                            .focused($isEventNameFocused)
                     }
                     .padding(.top, 4)
                     .padding(.horizontal)
@@ -94,20 +120,16 @@ struct CreateEventView: View {
                                 .padding(.top, 7)
                             
                             VStack(alignment: .leading, spacing: 15) {
-                                // All-day toggle
                                 Toggle("All-day", isOn: $isAllDay)
                                     .onChange(of: isAllDay) { newValue in
                                         let calendar = Calendar.current
                                         if newValue {
-                                            // Switching to all-day: set times to start of day
                                             startDate = calendar.startOfDay(for: startDate)
                                             endDate = calendar.startOfDay(for: endDate)
-                                            // Ensure end date is not before start date
                                             if endDate < startDate {
                                                 endDate = startDate
                                             }
                                         } else {
-                                            // Switching from all-day: preserve dates but set reasonable default times
                                             var components = calendar.dateComponents([.year, .month, .day], from: startDate)
                                             components.hour = 9
                                             components.minute = 0
@@ -120,20 +142,17 @@ struct CreateEventView: View {
                                         }
                                     }
                                 
-                                // Date/Time pickers
                                 DatePicker("Start", selection: $startDate, displayedComponents: isAllDay ? [.date] : [.date, .hourAndMinute])
                                     .datePickerStyle(.compact)
                                     .frame(height: 34)
                                     .onChange(of: startDate) { newStartDate in
-                                        // Ensure end date is always after start date
                                         if isAllDay {
-                                            // For all-day events, ensure end date is on or after start date
                                             let startDay = Calendar.current.startOfDay(for: newStartDate)
                                             let endDay = Calendar.current.startOfDay(for: endDate)
                                             if endDay < startDay {
                                                 endDate = startDay
                                             }
-                                        } else {
+                                        } else if endDate <= newStartDate {
                                             endDate = newStartDate.addingTimeInterval(3600)
                                         }
                                     }
@@ -145,38 +164,37 @@ struct CreateEventView: View {
                         }
                     }
                     .onAppear {
-                        UIDatePicker.appearance().minuteInterval = 5 // set 5 minute increments
-                    }
-                    .onDisappear {
-                        UIDatePicker.appearance().minuteInterval = 1  // restore default
+                        UIDatePicker.appearance().minuteInterval = 5
                     }
                     .padding(.horizontal)
 
                     Divider()
+
                     // MARK: - Location
-                    NavigationLink(
-                        destination: LocationSearchView(searchManager: searchManager) { suggestion in
-                            selectSuggestion(suggestion)
-                        }
-                    ) {
-                        HStack(alignment: .center, spacing: 12) {
+                    Button {
+                        isEventNameFocused = false
+                        isNotesFocused = false
+                        navigationPath.append(CalendarRoute.location)
+                    } label: {
+                        HStack(alignment: .top, spacing: 12) {
                             Image(systemName: "mappin.and.ellipse")
                                 .foregroundColor(.gray)
                                 .frame(width: 22)
 
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(selectedLocationTitle ?? "Location")
-                                    .foregroundColor(selectedLocationTitle == nil ? .secondary : .primary)
+                                Text(locationDraft.selectedTitle ?? "Location")
+                                    .foregroundColor(locationDraft.selectedTitle == nil ? .secondary : .primary)
 
-                                if let subtitle = selectedLocationSubtitle {
+                                if let subtitle = locationDraft.selectedSubtitle {
                                     Text(subtitle)
                                         .font(.subheadline)
                                         .foregroundColor(.secondary)
                                 }
                             }
-
-                            Spacer()
-
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.trailing, 12)
+                        }
+                        .overlay(alignment: .trailing) {
                             Image(systemName: "chevron.right")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
@@ -185,27 +203,40 @@ struct CreateEventView: View {
                     }
                     .buttonStyle(.plain)
                     .padding(.horizontal)
+                    .padding(.top, 4)
+
+                    if appCapabilities.enablesCloudSync {
+                        Divider()
+                        HStack(alignment: .center, spacing: 12) {
+                            Image(systemName: eventVisibility.iconName)
+                                .foregroundColor(.gray)
+                                .frame(width: 22)
+                            Text("Privacy")
+                                .foregroundStyle(.primary)
+                            Spacer(minLength: 8)
+                            Picker("Privacy", selection: $eventVisibility) {
+                                ForEach(WardrobeVisibility.allCases) { value in
+                                    Text(value.menuLabel).tag(value)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                        }
+                        .padding(.horizontal)
+                    }
 
                     Divider()
-                    // MARK: - Items Selection
                     EventItemsSelectionSection(items: selectedItems, outfits: selectedOutfits) {
-                        if tempEvent == nil {
-                            createTempEvent()
-                        } else {
-                            updateTempEvent()
-                        }
-                        navigateToItems = true
+                        openItemsSelection()
                     }
                     .id(refreshToken)
                     .padding(.horizontal)
-                    
+
                     Divider()
-                    // MARK: - Notes/Description
                     HStack(alignment: .top, spacing: 12) {
                         Image(systemName: "note.text")
                             .foregroundColor(.gray)
                             .frame(width: 22)
-                           // .padding(.top, 4)
                         
                         ZStack(alignment: .topLeading) {
                             TextEditor(text: $eventNotes)
@@ -213,6 +244,7 @@ struct CreateEventView: View {
                                 .scrollContentBackground(.hidden)
                                 .padding(.horizontal, -4)
                                 .padding(.vertical, -8)
+                                .focused($isNotesFocused)
                             
                             if eventNotes.isEmpty {
                                 Text("Notes")
@@ -224,57 +256,55 @@ struct CreateEventView: View {
                     }
                     .padding(.horizontal)
                 }
+                .padding(.bottom, 4)
             }
             .background(Color(.systemBackground))
             .navigationTitle(eventToEdit == nil ? "New Event" : "Edit Event")
             .navigationBarTitleDisplayMode(.inline)
-            .navigationDestination(isPresented: $navigateToItems) {
-                if let event = tempEvent {
-                    EventIndividualItemSelection(event: event)
-                        .environment(\.managedObjectContext, viewContext)
-                }
-            }
-            .onChange(of: navigateToItems) { isNavigating in
-                if !isNavigating {
-                    refreshToken = UUID()
-                    if let event = tempEvent {
-                        viewContext.refresh(event, mergeChanges: true)
-                    } else if let event = eventToEdit {
-                        viewContext.refresh(event, mergeChanges: true)
-                    }
-                }
-            }
+            .navigationBarBackButtonHidden(true)
             .onAppear {
+                guard !didCaptureOriginals else { return }
                 if let event = eventToEdit {
                     loadEventForEditing(event)
                     tempEvent = event // Use existing event when editing
                 }
                 // Don't create temp event here - only create when needed (navigation or save)
+                captureOriginals()
+                didCaptureOriginals = true
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel", role: .cancel) {
-                        // Clean up temp event only if it was newly created (not editing)
-                        // For new events that haven't been saved, we can hard delete
-                        if eventToEdit == nil, let event = tempEvent {
-                            // If it's a new unsaved event, hard delete is fine
-                            // Otherwise soft delete for sync
-                            if event.objectID.isTemporaryID {
-                                viewContext.delete(event)
-                            } else {
-                                softDelete(event)
-                            }
+                    Button(action: attemptCancel) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                            Text(hasUnsavedChanges ? "Cancel" : "Back")
                         }
-                        dismiss()
                     }
-                    .foregroundColor(.red)
+                    .accessibilityLabel(hasUnsavedChanges ? "Cancel" : "Back")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save", action: saveEvent)
                         .disabled(!canSaveEvent)
                 }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button {
+                        isNotesFocused = false
+                        isEventNameFocused = false
+                    } label: {
+                        Image(systemName: "keyboard.chevron.compact.down")
+                    }
+                    .accessibilityLabel("Dismiss Keyboard")
+                }
             }
-        }
+            .alert("Discard Changes?", isPresented: $showDiscardAlert) {
+                Button("Discard", role: .destructive) {
+                    cancelEditing(discardingChanges: true)
+                }
+                Button("Keep Editing", role: .cancel) {}
+            } message: {
+                Text("You have unsaved edits. Going back will discard them.")
+            }
     }
     
     // MARK: - Validation
@@ -288,8 +318,135 @@ struct CreateEventView: View {
         } else {
             hasValidDateTime = endDate > startDate
         }
-        let locationOK = eventLocation.isEmpty || selectedPlacemark != nil
+        let locationOK = locationDraft.eventLocation.isEmpty || locationDraft.selectedPlacemark != nil
         return hasTitle && hasValidDateTime && locationOK
+    }
+
+    private var hasUnsavedChanges: Bool {
+        if eventName.trimmingCharacters(in: .whitespacesAndNewlines)
+            != originalName.trimmingCharacters(in: .whitespacesAndNewlines) { return true }
+        if locationDraft.eventLocation != originalLocation { return true }
+        if eventNotes != originalNotes { return true }
+        if isAllDay != originalIsAllDay { return true }
+        if eventVisibility != originalVisibility { return true }
+        if !datesMatchForEdit(startDate, originalStartDate) { return true }
+        if !datesMatchForEdit(endDate, originalEndDate) { return true }
+        if selectedItems.map(\.objectID) != originalItems.map(\.objectID) { return true }
+        if Set(selectedOutfits.map(\.objectID)) != Set(originalOutfits.map(\.objectID)) { return true }
+        return false
+    }
+
+    private func datesMatchForEdit(_ lhs: Date, _ rhs: Date) -> Bool {
+        Calendar.current.compare(lhs, to: rhs, toGranularity: .minute) == .orderedSame
+    }
+
+    private func captureOriginals() {
+        originalName = eventName
+        originalLocation = locationDraft.eventLocation
+        originalNotes = eventNotes
+        originalStartDate = startDate
+        originalEndDate = endDate
+        originalIsAllDay = isAllDay
+        originalVisibility = eventVisibility
+        originalItems = selectedItems
+        originalOutfits = selectedOutfits
+        if let event = eventToEdit ?? tempEvent {
+            originalLatitude = event.latitude
+            originalLongitude = event.longitude
+            originalFullAddress = event.fullAddress
+        } else {
+            originalLatitude = 0
+            originalLongitude = 0
+            originalFullAddress = nil
+        }
+    }
+
+    private func attemptCancel() {
+        if hasUnsavedChanges {
+            showDiscardAlert = true
+        } else {
+            cancelEditing(discardingChanges: false)
+        }
+    }
+
+    private func openItemsSelection() {
+        if tempEvent == nil {
+            createTempEvent()
+        } else {
+            updateTempEvent()
+        }
+        guard let event = tempEvent else { return }
+        if event.objectID.isTemporaryID {
+            do {
+                try viewContext.obtainPermanentIDs(for: [event])
+            } catch {
+                print("Error obtaining permanent ID for event before items selection: \(error)")
+                return
+            }
+        }
+        navigationPath.append(CalendarRoute.items(event.objectID.uriRepresentation().absoluteString))
+    }
+
+    private func cancelEditing(discardingChanges: Bool) {
+        if let event = eventToEdit {
+            if discardingChanges {
+                restoreEventFromOriginals(event)
+            }
+            dismiss()
+            return
+        }
+
+        // New event: remove any temp/draft row created during this session.
+        if let event = tempEvent {
+            if event.objectID.isTemporaryID {
+                viewContext.delete(event)
+            } else {
+                softDelete(event)
+                do {
+                    try viewContext.save()
+                    SyncService.shared.syncEventIfNeeded(event)
+                } catch {
+                    print("Error soft-deleting unsaved event: \(error)")
+                }
+            }
+        }
+        dismiss()
+    }
+
+    private func restoreEventFromOriginals(_ event: Event) {
+        event.name = originalName.isEmpty ? nil : originalName
+        event.location = originalLocation.isEmpty ? nil : originalLocation
+        event.notes = originalNotes.isEmpty ? nil : originalNotes
+        event.startDate = originalStartDate
+        event.endDate = originalEndDate
+        event.eventVisibility = originalVisibility
+        event.latitude = originalLatitude
+        event.longitude = originalLongitude
+        event.fullAddress = originalFullAddress
+
+        if let existingItems = event.items as? NSOrderedSet {
+            event.removeFromItems(existingItems)
+        }
+        for item in originalItems {
+            event.addToItems(item)
+        }
+
+        if let existingOutfits = event.outfits as? Set<Outfit> {
+            for outfit in existingOutfits {
+                event.removeFromOutfits(outfit)
+            }
+        }
+        for outfit in originalOutfits {
+            event.addToOutfits(outfit)
+        }
+
+        guard viewContext.hasChanges else { return }
+        do {
+            try viewContext.save()
+            SyncService.shared.syncEventIfNeeded(event)
+        } catch {
+            print("Error restoring event after discard: \(error)")
+        }
     }
 
     private var minEndDate: Date {
@@ -321,35 +478,19 @@ struct CreateEventView: View {
         }
     }
     */
-    // MARK: - Location
-    private func selectSuggestion(_ suggestion: MKLocalSearchCompletion) {
-        let request = MKLocalSearch.Request(completion: suggestion)
-        let search = MKLocalSearch(request: request)
-        search.start { response, _ in
-            guard let placemark = response?.mapItems.first?.placemark else { return }
-            selectedPlacemark = placemark
-            
-            DispatchQueue.main.async {
-                selectedLocationTitle = suggestion.title
-                selectedLocationSubtitle = suggestion.subtitle
-
-                eventLocation = placemark.name ?? suggestion.title
-            }
-
-        }
-    }
-    
     // MARK: - Load Event for Editing
     private func loadEventForEditing(_ event: Event) {
         eventName = event.name ?? ""
-        eventLocation = event.location ?? ""
+        locationDraft.reset()
+        locationDraft.eventLocation = event.location ?? ""
         eventNotes = event.notes ?? ""
+        eventVisibility = event.eventVisibility
         
         if let location = event.location {
-            selectedLocationTitle = location
+            locationDraft.selectedTitle = location
         }
         if let fullAddress = event.fullAddress {
-            selectedLocationSubtitle = fullAddress
+            locationDraft.selectedSubtitle = fullAddress
         }
         
         if let latitude = event.latitude as Double?, latitude != 0,
@@ -359,7 +500,7 @@ struct CreateEventView: View {
             geocoder.reverseGeocodeLocation(location) { placemarks, _ in
                 if let placemark = placemarks?.first {
                     DispatchQueue.main.async {
-                        selectedPlacemark = placemark
+                        locationDraft.selectedPlacemark = placemark
                     }
                 }
             }
@@ -383,16 +524,22 @@ struct CreateEventView: View {
             if eventToEdit == nil {
                 newEvent.id = UUID()
                 newEvent.userId = calendarAccountUserId
+                newEvent.eventVisibility = .private
+                setCreatedAndUpdatedAt(newEvent)
             }
             // Set initial values, will be updated on save
             newEvent.name = eventName.isEmpty ? nil : eventName
-            newEvent.location = eventLocation.isEmpty ? nil : eventLocation
+            newEvent.location = locationDraft.eventLocation.isEmpty ? nil : locationDraft.eventLocation
             newEvent.startDate = startDate
             newEvent.endDate = endDate
             newEvent.timestamp = eventToEdit?.timestamp ?? Date()
-            newEvent.notes = eventNotes.isEmpty ? nil : eventNotes
+            newEvent.notes = {
+                let trimmed = eventNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }()
+            newEvent.eventVisibility = eventVisibility
             
-            if let placemark = selectedPlacemark {
+            if let placemark = locationDraft.selectedPlacemark {
                 newEvent.latitude = placemark.location?.coordinate.latitude ?? 0
                 newEvent.longitude = placemark.location?.coordinate.longitude ?? 0
                 
@@ -412,12 +559,16 @@ struct CreateEventView: View {
     private func updateTempEvent() {
         guard let event = tempEvent else { return }
         event.name = eventName.isEmpty ? nil : eventName
-        event.location = eventLocation.isEmpty ? nil : eventLocation
+        event.location = locationDraft.eventLocation.isEmpty ? nil : locationDraft.eventLocation
         event.startDate = startDate
         event.endDate = endDate
-        event.notes = eventNotes.isEmpty ? nil : eventNotes
+        event.notes = {
+            let trimmed = eventNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }()
+        event.eventVisibility = eventVisibility
         
-        if let placemark = selectedPlacemark {
+        if let placemark = locationDraft.selectedPlacemark {
             event.latitude = placemark.location?.coordinate.latitude ?? 0
             event.longitude = placemark.location?.coordinate.longitude ?? 0
             
@@ -442,19 +593,24 @@ struct CreateEventView: View {
         guard let event = tempEvent else { return }
 
         event.name = eventName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNotes = eventNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        event.notes = trimmedNotes.isEmpty ? nil : trimmedNotes
+        event.eventVisibility = eventVisibility
 
         syncEventUserIdFromLinkedEntities(event)
         if (event.userId == nil || (event.userId ?? "").isEmpty), let uid = calendarAccountUserId {
             event.userId = uid
         }
 
-        // Set updatedAt if editing existing event
-        if tempEvent?.id != nil {
+        if event.createdAt == nil {
+            setCreatedAndUpdatedAt(event)
+        } else {
             setUpdatedAt(event)
         }
 
         do {
             try viewContext.save()
+            SyncService.shared.syncEventIfNeeded(event)
             dismiss()
         } catch {
             print("Error saving event: \(error)")
@@ -464,38 +620,46 @@ struct CreateEventView: View {
 
 
 
-
-
 // MARK: - Location Search View
 struct LocationSearchView: View {
-    @ObservedObject var searchManager: LocationSearchManager
-    var onSelect: (MKLocalSearchCompletion) -> Void
+    @EnvironmentObject private var locationDraft: EventLocationDraft
+    @StateObject private var searchManager = LocationSearchManager()
     @Environment(\.dismiss) private var dismiss
-    
+
     @State private var query = ""
     @FocusState private var isTextFieldFocused: Bool
-    
+
     var body: some View {
         VStack(spacing: 0) {
-            // Search Bar at the top
             HStack {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(.secondary)
-                
+
                 TextField("Search location", text: $query)
                     .focused($isTextFieldFocused)
                     .onChange(of: query) { newValue in
                         searchManager.updateQuery(newValue)
                     }
                     .textFieldStyle(.plain)
+
+                if !query.isEmpty {
+                    Button {
+                        query = ""
+                        searchManager.updateQuery("")
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear location search")
+                }
             }
             .padding(.vertical, 8)
             .padding(.horizontal, 12)
             .background(Color(.systemGray6))
             .cornerRadius(10)
-            .padding(.horizontal) // spacing from edges
-            
-            // Suggestions
+            .padding(.horizontal)
+
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(searchManager.suggestions, id: \.self) { suggestion in
@@ -503,22 +667,21 @@ struct LocationSearchView: View {
                             Image(systemName: "mappin.and.ellipse")
                                 .foregroundColor(.gray)
                                 .padding(.top, 2)
-                            
+
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(suggestion.title)
                                     .foregroundColor(.primary)
-                                
+
                                 Text(suggestion.subtitle)
                                     .font(.subheadline)
                                     .foregroundColor(.secondary)
                             }
-                            
+
                             Spacer()
                         }
                         .padding(.vertical, 8)
                         .onTapGesture {
-                            onSelect(suggestion)
-                            dismiss()
+                            selectSuggestion(suggestion)
                         }
                     }
                 }
@@ -526,11 +689,33 @@ struct LocationSearchView: View {
             }
             .animation(.easeInOut, value: searchManager.suggestions.count)
         }
+        .navigationTitle("Location")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            // Autofocus immediately
+            if query.isEmpty {
+                let existing = locationDraft.selectedTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    ?? locationDraft.eventLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !existing.isEmpty {
+                    query = existing
+                    searchManager.updateQuery(existing)
+                }
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 isTextFieldFocused = true
+            }
+        }
+    }
+
+    private func selectSuggestion(_ suggestion: MKLocalSearchCompletion) {
+        let request = MKLocalSearch.Request(completion: suggestion)
+        MKLocalSearch(request: request).start { response, _ in
+            guard let placemark = response?.mapItems.first?.placemark else { return }
+            DispatchQueue.main.async {
+                locationDraft.selectedPlacemark = placemark
+                locationDraft.selectedTitle = suggestion.title
+                locationDraft.selectedSubtitle = suggestion.subtitle
+                locationDraft.eventLocation = placemark.name ?? suggestion.title
+                dismiss()
             }
         }
     }

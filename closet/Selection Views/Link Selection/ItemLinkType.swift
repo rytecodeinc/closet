@@ -256,10 +256,13 @@ struct ItemLinkTypedSectionsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(ItemLinkType.allCases) { linkType in
-                ItemLinkTypeSectionBlock(
-                    linkType: linkType,
-                    links: linksForType(linkType)
-                )
+                let links = linksForType(linkType)
+                if !links.isEmpty {
+                    ItemLinkTypeSectionBlock(
+                        linkType: linkType,
+                        links: links
+                    )
+                }
             }
         }
     }
@@ -270,6 +273,11 @@ private struct ItemLinkTypeSectionBlock: View {
     let links: [Link]
 
     @Environment(\.openURL) private var openURL
+    @Environment(\.appCapabilities) private var appCapabilities
+
+    private var showsLinkPrivacy: Bool {
+        appCapabilities.enablesCloudSync
+    }
 
     private var sectionVisibility: WardrobeVisibility {
         let unique = Set(links.map(\.itemLinkVisibility))
@@ -281,11 +289,13 @@ private struct ItemLinkTypeSectionBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: ItemLinkRowMetrics.privacyIconLabelSpacing) {
-                ItemLinkVisibilityIcon(
-                    visibility: sectionVisibility,
-                    font: .caption,
-                    accessibilityPrefix: linkType.displayName
-                )
+                if showsLinkPrivacy {
+                    ItemLinkVisibilityIcon(
+                        visibility: sectionVisibility,
+                        font: .caption,
+                        accessibilityPrefix: linkType.displayName
+                    )
+                }
                 ItemLinkSectionTitle(type: linkType)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -296,17 +306,19 @@ private struct ItemLinkTypeSectionBlock: View {
                     ItemLinkNameHostRow(
                         name: link.name ?? "",
                         host: link.url?.host,
-                        nameLeadingInset: ItemLinkRowMetrics.detailNameLeadingInset,
+                        nameLeadingInset: showsLinkPrivacy ? ItemLinkRowMetrics.detailNameLeadingInset : 0,
                         onRowTap: {
                             guard let url = link.url else { return }
                             openURL(url)
                         },
                         leading: {
-                            ItemLinkVisibilityIcon(
-                                visibility: link.itemLinkVisibility,
-                                font: .caption,
-                                accessibilityPrefix: link.name ?? linkType.displayName
-                            )
+                            if showsLinkPrivacy {
+                                ItemLinkVisibilityIcon(
+                                    visibility: link.itemLinkVisibility,
+                                    font: .caption,
+                                    accessibilityPrefix: link.name ?? linkType.displayName
+                                )
+                            }
                         },
                         accessory: {
                             if link.url != nil {

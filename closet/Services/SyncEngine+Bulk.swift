@@ -42,6 +42,10 @@ extension SyncEngine {
                     wardrobeRequest.predicate = syncedSoftDeletePredicate
                     totalPurged += try purge(wardrobeRequest)
 
+                    let eventRequest: NSFetchRequest<Event> = Event.fetchRequest()
+                    eventRequest.predicate = syncedSoftDeletePredicate
+                    totalPurged += try purge(eventRequest)
+
                     if totalPurged > 0 {
                         try ctx.save()
                         print("🧹 Purged \(totalPurged) synced tombstone record(s) from local Core Data")
@@ -52,7 +56,7 @@ extension SyncEngine {
         }
     }
 
-    /// Full sync session: claim orphan local rows → reference data → items → outfits.
+    /// Full sync session: claim orphan local rows → reference data → items → outfits → events.
     func syncAllItems(userId: UUID, progress: SyncProgressHandler?) async throws {
         print("🔍 Starting sync for user: \(userId.uuidString)")
 
@@ -75,6 +79,7 @@ extension SyncEngine {
             progress?("All items are synced", 1)
             print("ℹ️ No items need syncing - all are up to date")
             try await syncAllOutfits(userId: userId)
+            try await syncAllEvents(userId: userId)
             schedulePurgeCallback()
             return
         }
@@ -101,6 +106,7 @@ extension SyncEngine {
         print("✅ Successfully synced \(totalItems) items")
 
         try await syncAllOutfits(userId: userId)
+        try await syncAllEvents(userId: userId)
         schedulePurgeCallback()
     }
 
@@ -142,6 +148,20 @@ extension SyncEngine {
                     wardrobe.syncedAt = nil
                 }
                 setUpdatedAt(wardrobe)
+                claimed += 1
+            }
+
+            let eventReq: NSFetchRequest<Event> = Event.fetchRequest()
+            eventReq.predicate = NSPredicate(format: "userId == nil OR userId == ''")
+            for event in try ctx.fetch(eventReq) {
+                event.userId = uid
+                if (event.visibility ?? "").isEmpty {
+                    event.visibility = WardrobeVisibility.private.rawValue
+                }
+                if event.syncedAt != nil {
+                    event.syncedAt = nil
+                }
+                setUpdatedAt(event)
                 claimed += 1
             }
 

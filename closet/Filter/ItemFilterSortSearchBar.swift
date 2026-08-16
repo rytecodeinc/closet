@@ -14,10 +14,18 @@ struct ItemFilterSortSearchBar: View {
     var onFilter: () -> Void
     var onDismissSearch: () -> Void
     var onPack: (() -> Void)? = nil
-    /// Optional trailing Redress action (profile outfits tab). Shown after Search / Pack.
+    /// Optional trailing Redress action (profile outfits tab). Shown after Search / Pack / Selected.
     var onRedress: (() -> Void)? = nil
+    /// Optional trailing Likes action (other-user items tab). Shown after Search / Selected.
+    var onLikes: (() -> Void)? = nil
+    /// When true, Likes button uses a selected background (toggle on).
+    var isLikesFilterActive: Bool = false
     /// When true, Redress button uses a selected background (toggle on).
     var isRedressFilterActive: Bool = false
+    /// Optional Selected filter (e.g. event item/outfit picker). Shown after Search.
+    var onSelectedFilter: (() -> Void)? = nil
+    /// When true, Selected button uses a selected background (toggle on).
+    var isSelectedFilterActive: Bool = false
     /// Active filter-dimension count shown as a red badge on Filter (0 hides the badge).
     var activeFilterCount: Int = 0
     var searchPlaceholder: String = "Name, brand, category, color, tag"
@@ -75,6 +83,56 @@ struct ItemFilterSortSearchBar: View {
                 actionLabel(title: "Search", systemImage: "magnifyingglass")
             }
             .buttonStyle(.plain)
+
+            if let onSelectedFilter {
+                Button(action: onSelectedFilter) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle")
+                            .font(labelFont(.body))
+                            .foregroundStyle(isSelectedFilterActive ? Color.white : Color.primary)
+                        Text("Selected")
+                            .font(labelFont(.subheadline))
+                            .foregroundStyle(isSelectedFilterActive ? Color.white : Color.primary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .background {
+                        if isSelectedFilterActive {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.blue)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Selected")
+                .accessibilityAddTraits(isSelectedFilterActive ? .isSelected : [])
+            }
+
+            if let onLikes {
+                Button(action: onLikes) {
+                    HStack(spacing: 4) {
+                        Image(systemName: isLikesFilterActive ? "heart.fill" : "heart")
+                            .font(labelFont(.body))
+                            .foregroundStyle(isLikesFilterActive ? Color.white : Color.primary)
+                        Text("Likes")
+                            .font(labelFont(.subheadline))
+                            .foregroundStyle(isLikesFilterActive ? Color.white : Color.primary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .background {
+                        if isLikesFilterActive {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.cayenne.gradient)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Likes")
+                .accessibilityAddTraits(isLikesFilterActive ? .isSelected : [])
+            }
 
             if let onPack {
                 Button(action: onPack) {

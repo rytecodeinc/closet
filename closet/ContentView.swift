@@ -86,9 +86,7 @@ struct ContentView: View {
                     Text("Wishlist")
                 }
             }
-            NavigationStack {
-                OutfitCalendarView()
-            }
+            CalendarView()
             .tag(MainTab.calendar)
             .tabItem {
                 Image(systemName: "calendar")

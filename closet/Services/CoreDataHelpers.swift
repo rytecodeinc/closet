@@ -11,12 +11,73 @@ import CoreData
 // MARK: - Wardrobe naming
 
 enum WardrobeNaming {
-    /// Trims whitespace for names entered in the UI.
-    /// Returns empty string if the trimmed name is empty (caller should reject saves).
+    static let maxLength = 24
+
+    enum Validation: Equatable {
+        case empty
+        case tooLong
+        case duplicate(existingName: String, typeNoun: String)
+        case valid(normalized: String)
+
+        var isValid: Bool {
+            if case .valid = self { return true }
+            return false
+        }
+
+        var normalizedName: String? {
+            if case .valid(let name) = self { return name }
+            return nil
+        }
+
+        func alertMessage(emptyPrompt: String) -> String {
+            switch self {
+            case .valid:
+                return emptyPrompt
+            case .empty:
+                return "Name can’t be empty"
+            case .tooLong:
+                return "Name must be \(WardrobeNaming.maxLength) characters or fewer"
+            case .duplicate(let existingName, let typeNoun):
+                return "You already have a \(typeNoun) named \(existingName)"
+            }
+        }
+    }
+
+    /// Trims whitespace and collapses internal runs of spaces to one.
     static func normalizedUserName(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
-        return trimmed
+        return trimmed.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+    }
+
+    /// Truncates typing to `maxLength` grapheme clusters (`Character`).
+    static func limitingTyping(_ raw: String) -> String {
+        guard raw.count > maxLength else { return raw }
+        return String(raw.prefix(maxLength))
+    }
+
+    static func validate(
+        _ raw: String,
+        type: String,
+        existing: [Wardrobe],
+        excluding objectID: NSManagedObjectID? = nil
+    ) -> Validation {
+        let normalized = normalizedUserName(raw)
+        if normalized.isEmpty { return .empty }
+        if normalized.count > maxLength { return .tooLong }
+
+        let typeKey = type.lowercased()
+        let noun = typeKey == "wishlist" ? "wishlist" : "closet"
+        if let match = existing.first(where: { wardrobe in
+            guard wardrobe.objectID != objectID else { return false }
+            guard (wardrobe.type ?? "").lowercased() == typeKey else { return false }
+            let other = normalizedUserName(wardrobe.name ?? "")
+            return other.compare(normalized, options: .caseInsensitive) == .orderedSame
+        }) {
+            let shown = normalizedUserName(match.name ?? "")
+            return .duplicate(existingName: shown.isEmpty ? normalized : shown, typeNoun: noun)
+        }
+        return .valid(normalized: normalized)
     }
 }
 

@@ -187,6 +187,14 @@ struct TravelPackingView: View {
             ToolbarItemGroup(placement: .navigationBarLeading) {
                 if isInSelectionMode {
                     packingSelectionModeLeadingToolbar()
+                } else if !items.isEmpty {
+                    Button {
+                        collapsedStorageSectionIDs.removeAll()
+                        isInSelectionMode = true
+                    } label: {
+                        Image(systemName: "checkmark.circle")
+                    }
+                    .accessibilityLabel("Select")
                 }
             }
             ToolbarItemGroup(placement: .navigationBarTrailing) {
@@ -197,15 +205,6 @@ struct TravelPackingView: View {
                         selectedItems.removeAll()
                     }
                 } else {
-                    if !items.isEmpty {
-                        Button {
-                            collapsedStorageSectionIDs.removeAll()
-                            isInSelectionMode = true
-                        } label: {
-                            Image(systemName: "checkmark.circle")
-                        }
-                        .accessibilityLabel("Select")
-                    }
                     Button {
                         showPackingChecklistSheet = true
                     } label: {

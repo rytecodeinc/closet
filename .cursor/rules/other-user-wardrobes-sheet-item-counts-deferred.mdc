@@ -1,0 +1,19 @@
+---
+description: Deferred — other-user Wardrobes sheet item counts (match own ProfileView)
+globs: closet/Profile View/ProfileView.swift
+alwaysApply: false
+---
+
+# Deferred: other-user Wardrobes sheet item counts
+
+**Status:** Revisit later. Do not implement unless the user asks.
+
+## Gap
+
+Own-profile Wardrobes sheet subtitles include item counts (`Closet · N items` via `wardrobeSubtitle(for:)`).
+
+Other-user Wardrobes sheet (`remoteWardrobePage`) only shows type (`Closet` / `Wishlist`) — no item count.
+
+## Intended parity
+
+When ready, match own-profile subtitle style for each remote wardrobe row (type · item count). Likely needs a count from visible wardrobe items (cached grid fetch, or an RPC/field on `get_visible_wardrobes`).

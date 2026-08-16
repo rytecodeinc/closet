@@ -25,11 +25,13 @@ private struct OutfitAddNavigation: Hashable {
 }
 
 /// Own-profile read-only item tap → same destination as other-user profile grid.
-private struct ProfileReadOnlyItemDestination: Hashable {
+/// Owned by `ProfileView`'s `NavigationStack` (`navigationDestination(item:)`); keep set until pop.
+struct ProfileReadOnlyItemDestination: Hashable {
     let ownerUserId: UUID
     let wardrobeId: UUID
     let item: VisibleWardrobeItem
     let wardrobeType: String
+    var ownerProfile: PublicUserProfile? = nil
 }
 
 struct ItemGridView: View {
@@ -49,11 +51,15 @@ struct ItemGridView: View {
     
     // Binding to communicate selection state to parent
     @Binding var isInSelectionMode: Bool
+    /// Closet/Wishlist hide the wardrobe picker while Items selection shows Manage.
+    @Binding var isReplacingNavigationTitle: Bool
     /// ProfileView sets this so its tab-bar visibility stays in sync with pushed detail screens.
     @Binding var isDetailNavigationActive: Bool
     /// Parent owns `NavigationPath` + Filter destinations — grid only requests a push (avoids AttributeGraph cycle).
     var onOpenItemFilter: () -> Void
     var onOpenOutfitFilter: () -> Void
+    /// Profile tab owns `ProfileRoute.readOnlyItem` — grid only requests a path append.
+    var onOpenProfileReadOnlyItem: ((ProfileReadOnlyItemDestination) -> Void)?
     /// Tab-bar hide flag shared with `ItemFilterView` (destination is on the parent stack).
     @ObservedObject var tabBarHideState: TabBarHideState
 
@@ -65,10 +71,12 @@ struct ItemGridView: View {
         isReadOnly: Bool = false,
         showsProfilePendingRedressSuggestions: Bool = false,
         isInSelectionMode: Binding<Bool>,
+        isReplacingNavigationTitle: Binding<Bool> = .constant(false),
         isDetailNavigationActive: Binding<Bool> = .constant(false),
         isTabActionsBarVisible: Binding<Bool>? = nil,
         onOpenItemFilter: @escaping () -> Void,
         onOpenOutfitFilter: @escaping () -> Void,
+        onOpenProfileReadOnlyItem: ((ProfileReadOnlyItemDestination) -> Void)? = nil,
         tabBarHideState: TabBarHideState,
         @ViewBuilder profileCollapsingHeader: () -> some View = { EmptyView() },
         @ViewBuilder profileStickyPrefix: () -> some View = { EmptyView() }
@@ -80,9 +88,11 @@ struct ItemGridView: View {
         self.isReadOnly = isReadOnly
         self.showsProfilePendingRedressSuggestions = showsProfilePendingRedressSuggestions
         self._isInSelectionMode = isInSelectionMode
+        self._isReplacingNavigationTitle = isReplacingNavigationTitle
         self._isDetailNavigationActive = isDetailNavigationActive
         self.onOpenItemFilter = onOpenItemFilter
         self.onOpenOutfitFilter = onOpenOutfitFilter
+        self.onOpenProfileReadOnlyItem = onOpenProfileReadOnlyItem
         self._tabBarHideState = ObservedObject(wrappedValue: tabBarHideState)
         self.externalTabActionsBarVisible = isTabActionsBarVisible
         self.profileCollapsingHeader = AnyView(profileCollapsingHeader())
@@ -117,11 +127,10 @@ struct ItemGridView: View {
     // Selection mode state
     @State private var selectedItemURIForNavigation: String?
     @State private var selectedItems: Set<Item> = []
+    @State private var selectedItemStripIDs: [NSManagedObjectID] = []
     @State private var selectedOutfitURIForNavigation: String?
-    /// Profile read-only items: same detail screen as other-user `RemoteProfileWardrobeGridView`.
-    /// Own-profile outfits use Core Data `OutfitDetailView(isReadOnly:)` instead.
-    @State private var profileReadOnlyItemDestination: ProfileReadOnlyItemDestination?
     @State private var selectedOutfits: Set<Outfit> = []
+    @State private var selectedOutfitStripIDs: [NSManagedObjectID] = []
     @State private var showWardrobeSelectionSheet = false
     @State private var showWardrobeSelectionConfirmAlert = false
     @State private var pendingWardrobeSelectionTarget: Wardrobe?
@@ -129,6 +138,7 @@ struct ItemGridView: View {
     @State private var showDeleteConfirmation = false
     @State private var showOutfitDeleteConfirmation = false
     @State private var showTagSelectionSheet = false
+    @State private var tagSelectionSearchText = ""
     @State private var showColorSelectionSheet = false
     @State private var showCategorySelectionSheet = false
     @State private var bulkSetCategoryExpanded: Set<NSManagedObjectID> = []
@@ -281,7 +291,6 @@ struct ItemGridView: View {
     private var isShowingDetailNavigation: Bool {
         selectedItemURIForNavigation != nil
             || selectedOutfitURIForNavigation != nil
-            || profileReadOnlyItemDestination != nil
             || selectedPendingRedress != nil
     }
 
@@ -314,6 +323,7 @@ struct ItemGridView: View {
                 Group {
                     if let item = managedItem(forURI: uriString) {
                         ItemDetailView(item: item, isReadOnly: false)
+                            .id(item.objectID)
                             .onAppear { selectedItemURIForNavigation = nil }
                     } else {
                         EmptyView()
@@ -326,24 +336,13 @@ struct ItemGridView: View {
                     if let outfit = managedOutfit(forURI: uriString) {
                         // Closet: editable. Own Profile (`isReadOnly`): Core Data read-only detail.
                         OutfitDetailView(outfit: outfit, isReadOnly: isReadOnly)
+                            .id(outfit.objectID)
                             .onAppear { selectedOutfitURIForNavigation = nil }
                     } else {
                         EmptyView()
                             .onAppear { selectedOutfitURIForNavigation = nil }
                     }
                 }
-            }
-            .navigationDestination(item: $profileReadOnlyItemDestination) { destination in
-                // Keep binding set while pushed (do not nil onAppear) — clearing orphans item
-                // and corrupts Profile → Item → Outfit → Back. Same as Friends → profile.
-                ReadOnlyItemDetailView(
-                    ownerUserId: destination.ownerUserId,
-                    wardrobeId: destination.wardrobeId,
-                    itemSummary: destination.item,
-                    wardrobeType: destination.wardrobeType,
-                    ownerProfile: ownProfileForReadOnlyDetail(userId: destination.ownerUserId),
-                    tabBarHideState: tabBarHideState
-                )
             }
             .navigationDestination(item: $selectedPendingRedress) { destination in
                 PendingOutfitDetailView(
@@ -530,10 +529,14 @@ struct ItemGridView: View {
                 if isInSelectionMode {
                     itemGridObservedContent
                         .toolbar {
-                            ToolbarItem(placement: .principal) {
-                                selectionModePrincipalToolbar
+                            if isInSelectionMode && selectedTab == "Items" {
+                                ToolbarItem(placement: .principal) {
+                                    selectionModePrincipalToolbar
+                                }
                             }
-                            selectionModeBottomToolbar
+                        }
+                        .safeAreaInset(edge: .bottom, spacing: 0) {
+                            selectionModeBottomChrome
                         }
                 } else {
                     itemGridObservedContent
@@ -547,14 +550,18 @@ struct ItemGridView: View {
                         ToolbarItem(placement: .navigationBarTrailing) {
                             trailingToolbarContent()
                         }
-                        if isInSelectionMode {
+                        if isInSelectionMode && selectedTab == "Items" {
                             ToolbarItem(placement: .principal) {
                                 selectionModePrincipalToolbar
                             }
-                            selectionModeBottomToolbar
                         }
                     }
                     .toolbar(tabBarHideState.shouldHideTabBar ? .hidden : .automatic, for: .tabBar)
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        if isInSelectionMode {
+                            selectionModeBottomChrome
+                        }
+                    }
             }
         }
     }
@@ -578,9 +585,10 @@ struct ItemGridView: View {
             .onChange(of: selectedTab) { oldValue, newValue in
                 if oldValue != newValue && isInSelectionMode {
                     isInSelectionMode = false
-                    selectedItems.removeAll()
-                    selectedOutfits.removeAll()
+                    clearItemSelection()
+                    clearOutfitSelection()
                 }
+                syncNavigationTitleReplacement()
                 if oldValue != newValue {
                     isTabActionsBarVisible = true
                     if newValue != "Outfits", isRedressFilterActive {
@@ -598,6 +606,7 @@ struct ItemGridView: View {
                 }
             }
             .onChange(of: isInSelectionMode) { _, enteringSelection in
+                syncNavigationTitleReplacement()
                 if enteringSelection {
                     dismissActionBarSearch(clearQueries: false)
                 } else {
@@ -616,6 +625,7 @@ struct ItemGridView: View {
                 scheduleDebouncedOutfitFetch()
             }
             .onAppear {
+                syncNavigationTitleReplacement()
                 scheduleItemsFetch()
                 scheduleOutfitsRefresh()
             }
@@ -670,127 +680,305 @@ struct ItemGridView: View {
             }
     }
 
-    @ToolbarContentBuilder
-    private var selectionModeBottomToolbar: some ToolbarContent {
-        ToolbarItemGroup(placement: .bottomBar) {
+    private var selectionModeBottomChrome: some View {
+        VStack(spacing: 0) {
             if selectedTab == "Items" {
-                Button {
-                    showTagSelectionSheet = true
-                } label: {
-                    VStack {
-                        Image(systemName: "tag")
-                        Text("Tag")
-                            .font(.caption)
+                selectionThumbnailsStrip(
+                    selectedCount: selectedItems.count,
+                    stripIDs: selectedItemStripIDs,
+                    onDeselectAll: { clearItemSelection() }
+                ) {
+                    ForEach(selectedItemsForStrip, id: \.objectID) { item in
+                        selectionThumbnailCell(item)
+                            .id(item.objectID)
+                            .zIndex(1)
                     }
                 }
-                .disabled(selectedItems.isEmpty)
-
-                Button {
-                    showCategorySelectionSheet = true
-                } label: {
-                    VStack {
-                        Image(systemName: "tshirt")
-                        Text("Category")
-                            .font(.caption)
-                    }
-                }
-                .disabled(selectedItems.isEmpty)
-
-                Button {
-                    showColorSelectionSheet = true
-                } label: {
-                    VStack {
-                        Image(systemName: "paintpalette")
-                        Text("Color")
-                            .font(.caption)
-                    }
-                }
-                .disabled(selectedItems.isEmpty)
-
-                Button {
-                    pendingFavoriteSelectionWillUnfavorite = selectedItemsAllFavorited
-                    showFavoriteSelectionConfirmAlert = true
-                } label: {
-                    VStack {
-                        Image(systemName: selectedItemsFavoriteToolbarIcon)
-                        Text("Favorite")
-                            .font(.caption)
-                    }
-                }
-                .disabled(selectedItems.isEmpty)
             } else if selectedTab == "Outfits" {
-                Button {
-                    showTagSelectionSheet = true
-                } label: {
-                    VStack {
-                        Image(systemName: "tag")
-                        Text("Tag")
-                            .font(.caption)
+                selectionThumbnailsStrip(
+                    selectedCount: selectedOutfits.count,
+                    stripIDs: selectedOutfitStripIDs,
+                    onDeselectAll: { clearOutfitSelection() }
+                ) {
+                    ForEach(selectedOutfitsForStrip, id: \.objectID) { outfit in
+                        selectionOutfitThumbnailCell(outfit)
+                            .id(outfit.objectID)
+                            .zIndex(1)
                     }
                 }
-                .disabled(selectedOutfits.isEmpty)
-
-                Button {
-                    showOutfitCategorySelectionSheet = true
-                } label: {
-                    VStack {
-                        Image(systemName: "tshirt")
-                        Text("Category")
-                            .font(.caption)
-                    }
-                }
-                .disabled(selectedOutfits.isEmpty)
-
-                Button {
-                    pendingFavoriteSelectionWillUnfavorite = selectedOutfitsAllFavorited
-                    showFavoriteSelectionConfirmAlert = true
-                } label: {
-                    VStack {
-                        Image(systemName: selectedOutfitsFavoriteToolbarIcon)
-                        Text("Favorite")
-                            .font(.caption)
-                    }
-                }
-                .disabled(selectedOutfits.isEmpty)
             }
+            selectionModeBottomBar
+        }
+    }
 
-            Spacer()
+    private var selectedItemsForStrip: [Item] {
+        selectedItemStripIDs.compactMap { objectID in
+            selectedItems.first { $0.objectID == objectID }
+        }
+    }
+
+    private var selectedOutfitsForStrip: [Outfit] {
+        selectedOutfitStripIDs.compactMap { objectID in
+            selectedOutfits.first { $0.objectID == objectID }
+        }
+    }
+
+    private func selectionThumbnailsStrip<ID: Hashable, Cells: View>(
+        selectedCount: Int,
+        stripIDs: [ID],
+        onDeselectAll: @escaping () -> Void,
+        @ViewBuilder cells: () -> Cells
+    ) -> some View {
+        let cellViews = cells()
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("\(selectedCount) Selected")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 8)
+                Button("Deselect All") {
+                    onDeselectAll()
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.red)
+                .disabled(selectedCount == 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .zIndex(0)
+
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        cellViews
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
+                }
+                .zIndex(1)
+                .onChange(of: stripIDs) { _, ids in
+                    guard let lastID = ids.last else { return }
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        proxy.scrollTo(lastID, anchor: .trailing)
+                    }
+                }
+            }
+        }
+        .background(.bar)
+    }
+
+    private func selectionThumbnailCell(_ item: Item) -> some View {
+        ZStack(alignment: .topTrailing) {
+            ItemView(
+                item: item,
+                usesFlexibleSizing: true,
+                showsFavoriteOverlay: false,
+                usesGridThumbnailOnly: true
+            )
+            .frame(width: 68, height: 68)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
             Button {
+                deselectItemFromStrip(item)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, Color.black.opacity(0.6))
+                    .font(.system(size: 16))
+            }
+            .buttonStyle(.plain)
+            .offset(x: 4, y: -4)
+            .zIndex(2)
+            .accessibilityLabel("Deselect item")
+        }
+    }
+
+    private func selectionOutfitThumbnailCell(_ outfit: Outfit) -> some View {
+        ZStack(alignment: .topTrailing) {
+            OutfitView(
+                outfit: outfit,
+                usesFlexibleSizing: true,
+                showsFavoriteOverlay: false,
+                showsRedressSuggesterAvatar: false
+            )
+            .frame(width: 68, height: 68)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            Button {
+                removeOutfitFromSelection(outfit)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, Color.black.opacity(0.6))
+                    .font(.system(size: 16))
+            }
+            .buttonStyle(.plain)
+            .offset(x: 4, y: -4)
+            .zIndex(2)
+            .accessibilityLabel("Deselect outfit")
+        }
+    }
+
+    private func deselectItemFromStrip(_ item: Item) {
+        removeItemFromSelection(item)
+    }
+
+    private func addItemToSelection(_ item: Item) {
+        guard !selectedItems.contains(item) else { return }
+        selectedItems.insert(item)
+        selectedItemStripIDs.append(item.objectID)
+    }
+
+    private func removeItemFromSelection(_ item: Item) {
+        selectedItems.remove(item)
+        selectedItemStripIDs.removeAll { $0 == item.objectID }
+    }
+
+    private func clearItemSelection() {
+        selectedItems.removeAll()
+        selectedItemStripIDs.removeAll()
+    }
+
+    private func setItemSelection(to items: [Item]) {
+        selectedItems = Set(items)
+        selectedItemStripIDs = items.map(\.objectID)
+    }
+
+    private func addOutfitToSelection(_ outfit: Outfit) {
+        guard !selectedOutfits.contains(outfit) else { return }
+        selectedOutfits.insert(outfit)
+        selectedOutfitStripIDs.append(outfit.objectID)
+    }
+
+    private func removeOutfitFromSelection(_ outfit: Outfit) {
+        selectedOutfits.remove(outfit)
+        selectedOutfitStripIDs.removeAll { $0 == outfit.objectID }
+    }
+
+    private func clearOutfitSelection() {
+        selectedOutfits.removeAll()
+        selectedOutfitStripIDs.removeAll()
+    }
+
+    private func setOutfitSelection(to outfits: [Outfit]) {
+        selectedOutfits = Set(outfits)
+        selectedOutfitStripIDs = outfits.map(\.objectID)
+    }
+
+    private var selectionModeBottomBar: some View {
+        HStack(spacing: 0) {
+            if selectedTab == "Items" {
+                selectionBottomBarButton(
+                    title: "Category",
+                    systemImage: "tshirt",
+                    disabled: selectedItems.isEmpty
+                ) {
+                    showCategorySelectionSheet = true
+                }
+                selectionBottomBarButton(
+                    title: "Color",
+                    systemImage: "paintpalette",
+                    disabled: selectedItems.isEmpty
+                ) {
+                    showColorSelectionSheet = true
+                }
+                selectionBottomBarButton(
+                    title: "Tag",
+                    systemImage: "tag",
+                    disabled: selectedItems.isEmpty
+                ) {
+                    showTagSelectionSheet = true
+                }
+                selectionBottomBarButton(
+                    title: "Favorite",
+                    systemImage: selectedItemsFavoriteToolbarIcon,
+                    disabled: selectedItems.isEmpty
+                ) {
+                    pendingFavoriteSelectionWillUnfavorite = selectedItemsAllFavorited
+                    showFavoriteSelectionConfirmAlert = true
+                }
+            } else if selectedTab == "Outfits" {
+                selectionBottomBarButton(
+                    title: "Tag",
+                    systemImage: "tag",
+                    disabled: selectedOutfits.isEmpty
+                ) {
+                    showTagSelectionSheet = true
+                }
+                selectionBottomBarButton(
+                    title: "Category",
+                    systemImage: "tshirt",
+                    disabled: selectedOutfits.isEmpty
+                ) {
+                    showOutfitCategorySelectionSheet = true
+                }
+                selectionBottomBarButton(
+                    title: "Favorite",
+                    systemImage: selectedOutfitsFavoriteToolbarIcon,
+                    disabled: selectedOutfits.isEmpty
+                ) {
+                    pendingFavoriteSelectionWillUnfavorite = selectedOutfitsAllFavorited
+                    showFavoriteSelectionConfirmAlert = true
+                }
+            }
+
+            selectionBottomBarButton(
+                title: "Delete",
+                systemImage: "trash",
+                disabled: isSelectionDeleteDisabled,
+                tint: selectionDeleteColor
+            ) {
                 if selectedTab == "Items" {
                     showDeleteConfirmation = true
                 } else {
                     showOutfitDeleteConfirmation = true
                 }
-            } label: {
-                VStack {
-                    Image(systemName: "trash")
-                        .foregroundColor(selectionDeleteColor)
-                    Text("Delete")
-                        .font(.caption)
-                        .foregroundColor(selectionDeleteColor)
-                }
             }
-            .disabled(isSelectionDeleteDisabled)
         }
+        .padding(.top, 8)
+        .frame(maxWidth: .infinity)
+        .background(.bar)
+    }
+
+    private func selectionBottomBarButton(
+        title: String,
+        systemImage: String,
+        disabled: Bool,
+        tint: Color? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            VStack {
+                Image(systemName: systemImage)
+                Text(title)
+                    .font(.caption)
+            }
+            .foregroundStyle(tint ?? Color.accentColor)
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func syncNavigationTitleReplacement() {
+        isReplacingNavigationTitle = isInSelectionMode && selectedTab == "Items"
     }
 
     @ViewBuilder
     private var selectionModePrincipalToolbar: some View {
-        if selectedTab == "Items" && isInSelectionMode {
-            Button {
-                showWardrobeSelectionSheet = true
-            } label: {
-                HStack(spacing: 4) {
-                    Text("\(selectedItems.count) Selected")
-                        .font(.headline)
-                    Image(systemName: "plus.rectangle.on.folder")
-                        .font(.caption)
-                }
+        Button {
+            showWardrobeSelectionSheet = true
+        } label: {
+            HStack(spacing: 4) {
+                Text("Manage")
+                    .font(.headline)
+                Image(systemName: "plus.rectangle.on.folder")
+                    .font(.caption)
             }
-        } else if selectedTab == "Outfits" && isInSelectionMode {
-            Text("\(selectedOutfits.count) Selected")
-                .font(.headline)
         }
     }
 
@@ -860,7 +1048,9 @@ struct ItemGridView: View {
             .sheet(isPresented: $showWardrobeSelectionSheet) {
                 wardrobeSelectionSheet()
             }
-            .sheet(isPresented: $showTagSelectionSheet) {
+            .sheet(isPresented: $showTagSelectionSheet, onDismiss: {
+                tagSelectionSearchText = ""
+            }) {
                 tagSelectionSheet()
             }
             .sheet(isPresented: $showOutfitCategorySelectionSheet) {
@@ -934,7 +1124,7 @@ struct ItemGridView: View {
             } message: {
                 Text("Are you sure you want to delete \(selectedOutfits.count) outfit\(selectedOutfits.count == 1 ? "" : "s")? This action cannot be undone.")
             }
-            .alert(pendingOutfitCategoryWillRemove ? "Remove Category?" : "Set Category?", isPresented: $showOutfitCategorySelectionConfirmAlert) {
+            .alert(pendingOutfitCategoryWillRemove ? "Remove Category?" : "Add Category?", isPresented: $showOutfitCategorySelectionConfirmAlert) {
                 Button(pendingOutfitCategoryWillRemove ? "Remove" : "Apply", role: pendingOutfitCategoryWillRemove ? .destructive : nil) {
                     let category = pendingOutfitCategoryWillRemove ? nil : pendingOutfitCategoryTarget
                     if let message = applyCategoryToSelectedOutfits(category: category) {
@@ -1393,17 +1583,11 @@ struct ItemGridView: View {
         if isInSelectionMode {
             // Toggle selection
             if selectedItems.contains(item) {
-                selectedItems.remove(item)
+                removeItemFromSelection(item)
                 print("📱 Item deselected. Total selected: \(selectedItems.count)")
             } else {
-                selectedItems.insert(item)
+                addItemToSelection(item)
                 print("📱 Item selected. Total selected: \(selectedItems.count)")
-            }
-            
-            // Exit selection mode if no items selected
-            if selectedItems.isEmpty {
-                print("📱 No items selected, exiting selection mode")
-                isInSelectionMode = false
             }
         } else {
             // Navigate to detail view
@@ -1428,7 +1612,7 @@ struct ItemGridView: View {
             isInSelectionMode = true
         }
         
-        selectedItems.insert(item)
+        addItemToSelection(item)
     }
     
     // MARK: - Outfit Gesture Handlers
@@ -1468,40 +1652,28 @@ struct ItemGridView: View {
             ?? photos.first
         let type = wardrobeType.lowercased() == "wishlist" ? "wishlist" : "closet"
         tabBarHideState.shouldHideTabBar = true
-        profileReadOnlyItemDestination = ProfileReadOnlyItemDestination(
-            ownerUserId: ownerUserId,
-            wardrobeId: wardrobeId,
-            item: VisibleWardrobeItem(
-                id: itemId,
-                name: item.name,
-                thumbnailUrl: frontPhoto?.thumbnailUrl ?? frontPhoto?.imageUrl,
-                imageUrl: frontPhoto?.imageUrl,
-                createdAt: item.createdAt ?? item.timestamp ?? item.purchasedAt ?? item.wishedAt
-            ),
-            wardrobeType: type
-        )
-    }
-
-    private func ownProfileForReadOnlyDetail(userId: UUID) -> PublicUserProfile {
-        PublicUserProfile(
-            userId: userId,
-            username: supabaseService.cachedUsername ?? "",
-            displayName: nil
+        onOpenProfileReadOnlyItem?(
+            ProfileReadOnlyItemDestination(
+                ownerUserId: ownerUserId,
+                wardrobeId: wardrobeId,
+                item: VisibleWardrobeItem(
+                    id: itemId,
+                    name: item.name,
+                    thumbnailUrl: frontPhoto?.thumbnailUrl ?? frontPhoto?.imageUrl,
+                    imageUrl: frontPhoto?.imageUrl,
+                    createdAt: item.createdAt ?? item.timestamp ?? item.purchasedAt ?? item.wishedAt
+                ),
+                wardrobeType: type
+            )
         )
     }
 
     private func handleOutfitTap(for outfit: Outfit) {
         if isInSelectionMode {
-            // Toggle selection
             if selectedOutfits.contains(outfit) {
-                selectedOutfits.remove(outfit)
+                removeOutfitFromSelection(outfit)
             } else {
-                selectedOutfits.insert(outfit)
-            }
-            
-            // Exit selection mode if no outfits selected
-            if selectedOutfits.isEmpty {
-                isInSelectionMode = false
+                addOutfitToSelection(outfit)
             }
         } else {
             if isReadOnly {
@@ -1522,7 +1694,7 @@ struct ItemGridView: View {
             isInSelectionMode = true
         }
         
-        selectedOutfits.insert(outfit)
+        addOutfitToSelection(outfit)
     }
     
     @ViewBuilder
@@ -1609,9 +1781,9 @@ struct ItemGridView: View {
         let allSelected = !closetItems.isEmpty && selectedItems.count == closetItems.count
         Button {
             if allSelected {
-                selectedItems.removeAll()
+                clearItemSelection()
             } else {
-                selectedItems = Set(closetItems)
+                setItemSelection(to: closetItems)
             }
         } label: {
             HStack(spacing: 4) {
@@ -1627,9 +1799,9 @@ struct ItemGridView: View {
         let allSelected = !outfits.isEmpty && selectedOutfits.count == outfits.count
         Button {
             if allSelected {
-                selectedOutfits.removeAll()
+                clearOutfitSelection()
             } else {
-                selectedOutfits = Set(outfits)
+                setOutfitSelection(to: outfits)
             }
         } label: {
             HStack(spacing: 4) {
@@ -1665,9 +1837,9 @@ struct ItemGridView: View {
         Button(hasSelection ? "Done" : "Cancel") {
             isInSelectionMode = false
             if selectedTab == "Items" {
-                selectedItems.removeAll()
+                clearItemSelection()
             } else {
-                selectedOutfits.removeAll()
+                clearOutfitSelection()
             }
         }
     }
@@ -1955,7 +2127,7 @@ struct ItemGridView: View {
             
             // Exit selection mode after successful addition
             isInSelectionMode = false
-            selectedItems.removeAll()
+            clearItemSelection()
         } catch {
             print("❌ Failed to add items to wardrobe: \(error.localizedDescription)")
         }
@@ -1975,7 +2147,7 @@ struct ItemGridView: View {
 
             // Exit selection mode after successful removal
             isInSelectionMode = false
-            selectedItems.removeAll()
+            clearItemSelection()
         } catch {
             print("❌ Failed to remove items from wardrobe: \(error.localizedDescription)")
         }
@@ -2161,7 +2333,7 @@ struct ItemGridView: View {
             
             // Exit selection mode and refresh after deletion
             isInSelectionMode = false
-            selectedItems.removeAll()
+            clearItemSelection()
             scheduleItemsFetch()
             scheduleOutfitsRefresh()
         } catch {
@@ -2217,12 +2389,7 @@ struct ItemGridView: View {
         showTagSelectionSheet = false
         showColorSelectionSheet = false
         showCategorySelectionSheet = false
-        isInSelectionMode = false
-        if selectedTab == "Items" {
-            selectedItems.removeAll()
-        } else {
-            selectedOutfits.removeAll()
-        }
+        showOutfitCategorySelectionSheet = false
         showToast(message)
     }
 
@@ -2246,7 +2413,7 @@ struct ItemGridView: View {
             
             // Exit selection mode and refresh outfits after deletion
             isInSelectionMode = false
-            selectedOutfits.removeAll()
+            clearOutfitSelection()
             scheduleOutfitsRefresh()
         } catch {
             print("❌ Failed to delete outfits: \(error.localizedDescription)")
@@ -2275,41 +2442,69 @@ struct ItemGridView: View {
     @ViewBuilder
     private func tagSelectionSheet() -> some View {
         let tagsForContext = selectedTab == "Outfits" ? fetchAllOutfitTags() : fetchAllTags()
+        let filteredTags: [Tag] = {
+            let trimmed = tagSelectionSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return tagsForContext }
+            let lower = trimmed.lowercased()
+            return tagsForContext.filter { ($0.name ?? "").lowercased().contains(lower) }
+        }()
+
         return NavigationView {
-            List {
-                if tagsForContext.isEmpty {
-                    Text(wardrobeType == "wishlist"
-                        ? "Tags used on wishlist items will appear here."
-                        : "Tags added to your closet will appear here.")
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    ForEach(tagsForContext, id: \.self) { tag in
-                    let allSelectedHaveTag = selectedTab == "Outfits"
-                        ? doAllSelectedOutfitsHaveTag(tag)
-                        : doAllSelectedItemsHaveTag(tag)
-                    
-                    Button {
-                        pendingTagSelectionTarget = tag
-                        pendingTagSelectionWillRemove = allSelectedHaveTag
-                        showTagSelectionConfirmAlert = true
-                    } label: {
-                        HStack {
-                            Text(tag.name ?? "Untitled")
-                            
-                            Spacer()
-                            
-                            Image(systemName: allSelectedHaveTag ? "checkmark" : "plus")
-                                .foregroundColor(.blue)
-                                .font(.system(size: 16, weight: .medium))
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(spacing: 0) {
+                HStack {
+                    TextField("Add or select a tag", text: $tagSelectionSearchText)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .textInputAutocapitalization(.words)
+
+                    Button("Add") {
+                        submitTagSelectionSearch(existingTags: tagsForContext)
                     }
-                    .buttonStyle(.plain)
+                    .disabled(tagSelectionSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
+                .padding(.horizontal)
+                .padding(.top)
+                .padding(.bottom, 12)
+
+                List {
+                    if tagsForContext.isEmpty {
+                        Text(wardrobeType == "wishlist"
+                            ? "Tags used on wishlist items will appear here."
+                            : "Tags added to your closet will appear here.")
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else if filteredTags.isEmpty {
+                        Text("No matching tags")
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        ForEach(filteredTags, id: \.self) { tag in
+                            let allSelectedHaveTag = selectedTab == "Outfits"
+                                ? doAllSelectedOutfitsHaveTag(tag)
+                                : doAllSelectedItemsHaveTag(tag)
+
+                            Button {
+                                pendingTagSelectionTarget = tag
+                                pendingTagSelectionWillRemove = allSelectedHaveTag
+                                showTagSelectionConfirmAlert = true
+                            } label: {
+                                HStack {
+                                    highlightedTagText(for: tag.name ?? "Untitled", matching: tagSelectionSearchText)
+                                        .foregroundColor(.primary)
+
+                                    Spacer()
+
+                                    Image(systemName: allSelectedHaveTag ? "checkmark" : "plus")
+                                        .foregroundColor(.blue)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                 }
+                .listStyle(.plain)
             }
-            .listStyle(.plain)
             .navigationTitle("Add Tag")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(Color(UIColor.secondarySystemBackground), for: .navigationBar)
@@ -2351,6 +2546,60 @@ struct ItemGridView: View {
             }
         }
         .presentationDetents([.medium, .large])
+    }
+
+    private func highlightedTagText(for tagName: String, matching input: String) -> Text {
+        let trimmedInput = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowerTag = tagName.lowercased()
+        let lowerInput = trimmedInput.lowercased()
+
+        guard !trimmedInput.isEmpty, let range = lowerTag.range(of: lowerInput) else {
+            return Text(tagName)
+        }
+
+        let nsRange = NSRange(range, in: tagName)
+        let start = tagName.startIndex
+        let matchStart = tagName.index(start, offsetBy: nsRange.location)
+        let matchEnd = tagName.index(matchStart, offsetBy: nsRange.length)
+
+        let before = String(tagName[..<matchStart])
+        let match = String(tagName[matchStart..<matchEnd])
+        let after = String(tagName[matchEnd...])
+
+        return Text(before) + Text(match).bold() + Text(after)
+    }
+
+    private func submitTagSelectionSearch(existingTags: [Tag]) {
+        let trimmed = tagSelectionSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let tag: Tag
+        if let existing = existingTags.first(where: {
+            ($0.name ?? "").localizedCaseInsensitiveCompare(trimmed) == .orderedSame
+        }) {
+            tag = existing
+        } else {
+            guard let userId = authSession.userId?.uuidString, !userId.isEmpty else { return }
+            let newTag = Tag(context: viewContext)
+            newTag.name = trimmed
+            newTag.id = UUID()
+            newTag.userId = userId
+            do {
+                try viewContext.save()
+            } catch {
+                print("❌ Failed to create tag: \(error.localizedDescription)")
+                viewContext.rollback()
+                return
+            }
+            tag = newTag
+        }
+
+        let allSelectedHaveTag = selectedTab == "Outfits"
+            ? doAllSelectedOutfitsHaveTag(tag)
+            : doAllSelectedItemsHaveTag(tag)
+        pendingTagSelectionTarget = tag
+        pendingTagSelectionWillRemove = allSelectedHaveTag
+        showTagSelectionConfirmAlert = true
     }
 
     private func doAllSelectedOutfitsHaveTag(_ tag: Tag) -> Bool {
@@ -2457,7 +2706,7 @@ struct ItemGridView: View {
                 }
             }
             .listStyle(.plain)
-            .navigationTitle("Set Category")
+            .navigationTitle("Add Category")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(Color(UIColor.secondarySystemBackground), for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
@@ -2793,7 +3042,7 @@ struct ItemGridView: View {
     @ViewBuilder
     private func categorySelectionSheet() -> some View {
         CategoryPickerList(
-            title: "Set Category",
+            title: "Add Category",
             userId: authSession.userId?.uuidString ?? "",
             expanded: $bulkSetCategoryExpanded,
             onCategoriesLoaded: expandBulkSetCategoryForCurrentSelection(categories:),
@@ -2812,7 +3061,7 @@ struct ItemGridView: View {
                 showCategorySelectionConfirmAlert = true
             }
         )
-        .alert("Set Category?", isPresented: $showCategorySelectionConfirmAlert) {
+        .alert("Add Category?", isPresented: $showCategorySelectionConfirmAlert) {
             Button("Apply") {
                 guard let category = pendingBulkCategory else { return }
                 if let message = applyCategoryToSelectedItems(category: category, subcategory: pendingBulkSubcategory) {

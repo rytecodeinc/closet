@@ -10,6 +10,8 @@ import SwiftUI
 import CoreData
 
 struct SettingsView: View {
+    @Binding var navigationPath: NavigationPath
+
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.appCapabilities) private var appCapabilities
     @EnvironmentObject private var authSession: AuthSession
@@ -37,7 +39,6 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        NavigationStack {
             List {
                 Section("Account") {
                     if authSession.isAuthenticated {
@@ -98,15 +99,33 @@ struct SettingsView: View {
                 }
 
                 if appCapabilities.showsColorSeasonSettings {
-                    NavigationLink(destination: AttributePreferencesView()) {
-                        Text("Attribute Preferences")
+                    Button {
+                        navigationPath.append(ProfileRoute.attributePreferences)
+                    } label: {
+                        HStack {
+                            Text("Attribute Preferences")
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .foregroundColor(.gray)
+                                .font(.caption)
+                        }
                     }
                 }
 
                 if appCapabilities.showsDeveloperSettings {
                     Section("Developer") {
-                        NavigationLink(destination: DeveloperSettingsView()) {
-                            Text("Developer Settings")
+                        Button {
+                            navigationPath.append(ProfileRoute.developerSettings)
+                        } label: {
+                            HStack {
+                                Text("Developer Settings")
+                                    .foregroundColor(.primary)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .foregroundColor(.gray)
+                                    .font(.caption)
+                            }
                         }
                     }
                 }
@@ -151,6 +170,7 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.hidden, for: .tabBar)
             .sheet(isPresented: $showWeightView) {
                 UserWeightView()
             }
@@ -182,7 +202,6 @@ struct SettingsView: View {
             } message: {
                 Text(deleteAccountErrorMessage ?? "")
             }
-        }
     }
 
     private func signOut() async {

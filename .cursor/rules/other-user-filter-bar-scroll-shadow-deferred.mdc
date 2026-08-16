@@ -1,6 +1,6 @@
 ---
 description: Deferred — other-user filter/sort/search bar shadow only while grid scrolls down
-globs: closet/Profile View/RemoteProfileWardrobeGridView.swift,closet/Profile View/ProfileNestedScrollContainer.swift
+globs: closet/Profile View/RemoteProfileView.swift,closet/Profile View/ProfileNestedScrollContainer.swift
 alwaysApply: false
 ---
 

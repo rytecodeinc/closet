@@ -61,6 +61,7 @@ struct SyncItemData: Codable {
     let subcategoryId: String?
     let sizeId: String?
     let locationId: String?
+    let linkSectionVisibility: String?
     
     enum CodingKeys: String, CodingKey {
         case id
@@ -85,6 +86,7 @@ struct SyncItemData: Codable {
         case subcategoryId = "subcategory_id"
         case sizeId = "size_id"
         case locationId = "location_id"
+        case linkSectionVisibility = "link_section_visibility"
     }
 }
 
@@ -249,6 +251,7 @@ struct SyncLinkData: Codable {
     let name: String?
     let url: String?
     let type: String
+    let visibility: String
     
     enum CodingKeys: String, CodingKey {
         case id
@@ -257,6 +260,7 @@ struct SyncLinkData: Codable {
         case name
         case url
         case type
+        case visibility
     }
 }
 
@@ -530,6 +534,128 @@ struct OutfitTagResponse: Codable {
     }
 }
 
+// MARK: - Calendar events
+
+struct SyncEventData: Codable {
+    let id: String
+    let userId: String
+    let name: String?
+    let notes: String?
+    let location: String?
+    let fullAddress: String?
+    let latitude: Double
+    let longitude: Double
+    let startDate: String?
+    let endDate: String?
+    let date: String?
+    let time: String?
+    let timestamp: String?
+    let visibility: String
+    let isSoftDeleted: Bool
+    let createdAt: String?
+    let updatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userId = "user_id"
+        case name
+        case notes
+        case location
+        case fullAddress = "full_address"
+        case latitude
+        case longitude
+        case startDate = "start_date"
+        case endDate = "end_date"
+        case date
+        case time
+        case timestamp
+        case visibility
+        case isSoftDeleted = "is_soft_deleted"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
+struct EventItemJunction: Codable {
+    let eventId: String
+    let itemId: String
+    let sortOrder: Int
+
+    enum CodingKeys: String, CodingKey {
+        case eventId = "event_id"
+        case itemId = "item_id"
+        case sortOrder = "sort_order"
+    }
+}
+
+struct EventOutfitJunction: Codable {
+    let eventId: String
+    let outfitId: String
+
+    enum CodingKeys: String, CodingKey {
+        case eventId = "event_id"
+        case outfitId = "outfit_id"
+    }
+}
+
+struct EventItemResponse: Codable {
+    let itemId: String
+    let sortOrder: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case itemId = "item_id"
+        case sortOrder = "sort_order"
+    }
+}
+
+struct EventOutfitResponse: Codable {
+    let outfitId: String
+
+    enum CodingKeys: String, CodingKey {
+        case outfitId = "outfit_id"
+    }
+}
+
+struct RemoteEventRow: Codable {
+    let id: String
+    let userId: String
+    let name: String?
+    let notes: String?
+    let location: String?
+    let fullAddress: String?
+    let latitude: Double?
+    let longitude: Double?
+    let startDate: String?
+    let endDate: String?
+    let date: String?
+    let time: String?
+    let timestamp: String?
+    let visibility: String?
+    let isSoftDeleted: Bool?
+    let createdAt: String?
+    let updatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userId = "user_id"
+        case name
+        case notes
+        case location
+        case fullAddress = "full_address"
+        case latitude
+        case longitude
+        case startDate = "start_date"
+        case endDate = "end_date"
+        case date
+        case time
+        case timestamp
+        case visibility
+        case isSoftDeleted = "is_soft_deleted"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
 struct SyncUserProfileData: Codable {
     let userId: String
     let weightKg: Double?
@@ -558,6 +684,17 @@ extension Date {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: self)
+    }
+
+    /// Parses Supabase / sync timestamps (with or without fractional seconds).
+    static func fromISO8601(_ string: String?) -> Date? {
+        guard let string, !string.isEmpty else { return nil }
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = withFraction.date(from: string) { return date }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: string)
     }
 }
 

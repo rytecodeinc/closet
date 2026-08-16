@@ -23,6 +23,8 @@ enum EventSelectedThumbnail: Identifiable {
 struct EventSelectedItemsDisplayArea: View {
     let thumbnails: [EventSelectedThumbnail]
 
+    private let gap: CGFloat = 1
+
     init(thumbnails: [EventSelectedThumbnail]) {
         self.thumbnails = thumbnails
     }
@@ -32,66 +34,58 @@ struct EventSelectedItemsDisplayArea: View {
     }
 
     var body: some View {
-        GeometryReader { geometry in
-            let side = geometry.size.width
-            let gap: CGFloat = 1
-
+        Group {
             switch thumbnails.count {
             case 1:
-                eventCell(for: thumbnails[0], width: side, height: side)
+                eventCell(for: thumbnails[0])
+                    .aspectRatio(1, contentMode: .fit)
             case 2:
-                let half = (side - gap) / 2
+                // Two equal squares sharing the row width (not a full-width square).
                 HStack(spacing: gap) {
                     ForEach(thumbnails.prefix(2)) { thumbnail in
-                        eventCell(for: thumbnail, width: half, height: side)
+                        eventCell(for: thumbnail)
+                            .aspectRatio(1, contentMode: .fit)
                     }
                 }
             case 3:
-                let half = (side - gap) / 2
                 VStack(spacing: gap) {
                     HStack(spacing: gap) {
-                        eventCell(for: thumbnails[0], width: half, height: half)
-                        eventCell(for: thumbnails[1], width: half, height: half)
+                        eventCell(for: thumbnails[0])
+                        eventCell(for: thumbnails[1])
                     }
-                    eventCell(for: thumbnails[2], width: side, height: half)
+                    eventCell(for: thumbnails[2])
                 }
+                .aspectRatio(1, contentMode: .fit)
             case 4:
-                let cellSide = (side - gap) / 2
                 VStack(spacing: gap) {
                     HStack(spacing: gap) {
-                        eventCell(for: thumbnails[0], width: cellSide, height: cellSide)
-                        eventCell(for: thumbnails[1], width: cellSide, height: cellSide)
+                        eventCell(for: thumbnails[0])
+                        eventCell(for: thumbnails[1])
                     }
                     HStack(spacing: gap) {
-                        eventCell(for: thumbnails[2], width: cellSide, height: cellSide)
-                        eventCell(for: thumbnails[3], width: cellSide, height: cellSide)
+                        eventCell(for: thumbnails[2])
+                        eventCell(for: thumbnails[3])
                     }
                 }
+                .aspectRatio(1, contentMode: .fit)
             default:
-                eventMosaicGrid(side: side, gap: gap)
+                let columns = Array(
+                    repeating: GridItem(.flexible(), spacing: gap),
+                    count: 3
+                )
+                LazyVGrid(columns: columns, spacing: gap) {
+                    ForEach(thumbnails) { thumbnail in
+                        eventCell(for: thumbnail)
+                            .aspectRatio(1, contentMode: .fit)
+                    }
+                }
             }
         }
-        .aspectRatio(1, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 
-    private func eventMosaicGrid(side: CGFloat, gap: CGFloat) -> some View {
-        let columnsCount = 3
-        let rows = Int(ceil(Double(thumbnails.count) / Double(columnsCount)))
-        let columns = Array(repeating: GridItem(.flexible(), spacing: gap), count: columnsCount)
-        let cellWidth = (side - gap * CGFloat(columnsCount - 1)) / CGFloat(columnsCount)
-        let cellHeight = (side - gap * CGFloat(rows - 1)) / CGFloat(rows)
-
-        return LazyVGrid(columns: columns, spacing: gap) {
-            ForEach(thumbnails) { thumbnail in
-                eventCell(for: thumbnail, width: cellWidth, height: cellHeight)
-            }
-        }
-        .frame(width: side, height: side, alignment: .topLeading)
-    }
-
     @ViewBuilder
-    private func eventCell(for thumbnail: EventSelectedThumbnail, width: CGFloat, height: CGFloat) -> some View {
+    private func eventCell(for thumbnail: EventSelectedThumbnail) -> some View {
         Group {
             switch thumbnail {
             case .item(let item):
@@ -100,7 +94,7 @@ struct EventSelectedItemsDisplayArea: View {
                 EventOutfitThumbnailView(outfit: outfit)
             }
         }
-        .frame(width: width, height: height)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
     }
 }
@@ -158,58 +152,6 @@ struct EventOutfitThumbnailView: View {
     }
 }
 
-struct EventItemsSelectionRow: View {
-    let selectedItemsCount: Int
-    let selectedOutfitsCount: Int
-    /// Read-only rows (event detail) show no chevron and ignore taps.
-    var isReadOnly: Bool = false
-    let onTap: () -> Void
-
-    private var selectionSummary: String {
-        switch (selectedItemsCount, selectedOutfitsCount) {
-        case (0, 0):
-            return isReadOnly ? "No items or outfits" : "Add items or outfits"
-        case let (items, 0) where items > 0:
-            return "\(items) item\(items == 1 ? "" : "s") selected"
-        case let (0, outfits) where outfits > 0:
-            return "\(outfits) outfit\(outfits == 1 ? "" : "s") selected"
-        default:
-            return "\(selectedItemsCount) item\(selectedItemsCount == 1 ? "" : "s"), \(selectedOutfitsCount) outfit\(selectedOutfitsCount == 1 ? "" : "s")"
-        }
-    }
-
-    private var rowContent: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Image(systemName: "tshirt")
-                .foregroundColor(.gray)
-                .frame(width: 22)
-
-            Text(selectionSummary)
-                .foregroundColor(selectedItemsCount + selectedOutfitsCount > 0 ? .primary : .secondary)
-
-            Spacer()
-
-            if !isReadOnly {
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-        }
-        .contentShape(Rectangle())
-    }
-
-    var body: some View {
-        if isReadOnly {
-            rowContent
-        } else {
-            Button(action: onTap) {
-                rowContent
-            }
-            .buttonStyle(.plain)
-        }
-    }
-}
-
 struct EventItemsSelectionSection: View {
     let items: [Item]
     var outfits: [Outfit] = []
@@ -220,14 +162,44 @@ struct EventItemsSelectionSection: View {
         outfits.map { .outfit($0) } + items.map { .item($0) }
     }
 
+    private var selectionSummary: String {
+        switch (items.count, outfits.count) {
+        case (0, 0):
+            return isReadOnly ? "No items or outfits" : "Add items or outfits"
+        case let (itemCount, 0) where itemCount > 0:
+            return "\(itemCount) item\(itemCount == 1 ? "" : "s") selected"
+        case let (0, outfitCount) where outfitCount > 0:
+            return "\(outfitCount) outfit\(outfitCount == 1 ? "" : "s") selected"
+        default:
+            return "\(items.count) item\(items.count == 1 ? "" : "s"), \(outfits.count) outfit\(outfits.count == 1 ? "" : "s")"
+        }
+    }
+
     var body: some View {
+        Group {
+            if isReadOnly {
+                sectionContent(showsChevron: false)
+            } else {
+                Button(action: onTap) {
+                    sectionContent(showsChevron: true)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func sectionContent(showsChevron: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            EventItemsSelectionRow(
-                selectedItemsCount: items.count,
-                selectedOutfitsCount: outfits.count,
-                isReadOnly: isReadOnly,
-                onTap: onTap
-            )
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: "tshirt")
+                    .foregroundColor(.gray)
+                    .frame(width: 22)
+
+                Text(selectionSummary)
+                    .foregroundColor(items.count + outfits.count > 0 ? .primary : .secondary)
+
+                Spacer(minLength: 0)
+            }
 
             if !thumbnails.isEmpty {
                 HStack(alignment: .top, spacing: 12) {
@@ -239,5 +211,14 @@ struct EventItemsSelectionSection: View {
                 }
             }
         }
+        .padding(.trailing, showsChevron ? 12 : 0)
+        .overlay(alignment: .trailing) {
+            if showsChevron {
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .contentShape(Rectangle())
     }
 }
