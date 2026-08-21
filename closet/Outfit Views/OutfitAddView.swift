@@ -53,6 +53,9 @@ struct OutfitAddView: View {
     /// When true, item source wardrobe is fixed (non-default closet context); no wardrobe picker sheet.
     let lockWardrobeSource: Bool
 
+    /// When set (non-default edit context), Save prompts to add canvas items missing from this wardrobe.
+    let wardrobeMembershipOnSave: Wardrobe?
+
     /// If provided, this item will be resolved and placed on the canvas on first appear.
     let preselectedItemURI: String?
 
@@ -73,11 +76,14 @@ struct OutfitAddView: View {
     let editingItemThumbnails: [VisibleOutfitItemThumb]
     var onRedressSent: (() -> Void)? = nil
 
+    /// When set (Closet/Wishlist tab path), “View Existing” duplicate appends `.outfitDetail` instead of nested `item:`.
+    var navigationPath: Binding<NavigationPath>? = nil
+
     /// Forces a unique view identity per creation session (prevents @State reuse).
     let sessionID: UUID
 
     private var isRedressMode: Bool { redressRecipient != nil }
-    private static let redressCanvasScrollID = "redressCanvas"
+    private static let canvasScrollID = "outfitCanvas"
 
     private var redressRecipientUsernameCaption: String {
         let raw = redressRecipient?.username
@@ -112,8 +118,10 @@ struct OutfitAddView: View {
     @State private var isItemsSheetPresented = false
     @State private var itemsSheetSessionID = UUID()
     @State private var itemsSheetItemTypeSegment: OutfitItemTypeSegment = .closet
+    @State private var itemsSheetDetent: PresentationDetent = .medium
     @State private var showViewAllOutfitItemsSheet = false
     @State private var viewAllOutfitItemsInitialSegment: PairItemSelectionView.PairSourceSegment = .closet
+    @State private var viewAllOutfitItemsSheetDetent: PresentationDetent = .medium
     @State private var outfitItems: [OutfitItem] = []
     @State private var redressCanvasItems: [RedressCanvasItem] = []
     @State private var collageSize: CGFloat = 0
@@ -123,8 +131,8 @@ struct OutfitAddView: View {
     @State private var showingSaveDraftConfirmation = false
     @State private var showingDiscardChangesConfirmation = false
     @State private var selectedItemID: UUID?
-    /// Redress: lock list scroll only after scrolling canvas into view on select.
-    @State private var redressScrollLocked = false
+    /// Lock list scroll only after scrolling canvas into view on select.
+    @State private var canvasScrollLocked = false
 
     // Drafts folder — sheet-based to avoid navigation conflict
     @State private var showingDraftsSheet = false
@@ -158,17 +166,22 @@ struct OutfitAddView: View {
     @State private var duplicateOutfitConflict: RecipientDuplicateOutfit?
     @State private var localDuplicateOutfit: Outfit?
     @State private var existingDuplicateOutfitURI: String?
+    @State private var showWardrobeMembershipAlert = false
+    @State private var pendingMembershipAddCount = 0
 
     init(
         outfitToEdit: Outfit? = nil,
         wardrobeType: String = "closet",
         initialWardrobe: Wardrobe? = nil,
         lockWardrobeSource: Bool = false,
-        sessionID: UUID = UUID()
+        wardrobeMembershipOnSave: Wardrobe? = nil,
+        sessionID: UUID = UUID(),
+        navigationPath: Binding<NavigationPath>? = nil
     ) {
         self.outfitToEdit = outfitToEdit
         self.wardrobeType = wardrobeType
         self.lockWardrobeSource = lockWardrobeSource
+        self.wardrobeMembershipOnSave = wardrobeMembershipOnSave
         self.redressRecipient = nil
         self.editingSuggestionId = nil
         self.editingSuggestionWardrobeId = nil
@@ -180,6 +193,7 @@ struct OutfitAddView: View {
         self.preselectedRedressItem = nil
         self.preselectedRedressWardrobeType = "closet"
         self.sessionID = sessionID
+        self.navigationPath = navigationPath
     }
     
     init(
@@ -187,12 +201,15 @@ struct OutfitAddView: View {
         wardrobeType: String = "closet",
         initialWardrobe: Wardrobe? = nil,
         lockWardrobeSource: Bool = false,
+        wardrobeMembershipOnSave: Wardrobe? = nil,
         preselectedItemURI: String?,
-        sessionID: UUID = UUID()
+        sessionID: UUID = UUID(),
+        navigationPath: Binding<NavigationPath>? = nil
     ) {
         self.outfitToEdit = outfitToEdit
         self.wardrobeType = wardrobeType
         self.lockWardrobeSource = lockWardrobeSource
+        self.wardrobeMembershipOnSave = wardrobeMembershipOnSave
         self.redressRecipient = nil
         self.editingSuggestionId = nil
         self.editingSuggestionWardrobeId = nil
@@ -204,6 +221,7 @@ struct OutfitAddView: View {
         self.preselectedRedressItem = nil
         self.preselectedRedressWardrobeType = "closet"
         self.sessionID = sessionID
+        self.navigationPath = navigationPath
     }
 
     init(
@@ -216,11 +234,13 @@ struct OutfitAddView: View {
         editingProposedNotes: String? = nil,
         editingItemThumbnails: [VisibleOutfitItemThumb] = [],
         sessionID: UUID = UUID(),
-        onRedressSent: (() -> Void)? = nil
+        onRedressSent: (() -> Void)? = nil,
+        navigationPath: Binding<NavigationPath>? = nil
     ) {
         self.outfitToEdit = nil
         self.wardrobeType = "closet"
         self.lockWardrobeSource = true
+        self.wardrobeMembershipOnSave = nil
         self.redressRecipient = redressRecipient
         self.editingSuggestionId = editingSuggestionId
         self.editingSuggestionWardrobeId = editingSuggestionWardrobeId
@@ -233,6 +253,7 @@ struct OutfitAddView: View {
         self.preselectedRedressItem = preselectedItem
         self.preselectedRedressWardrobeType = preselectedWardrobeType.lowercased() == "wishlist" ? "wishlist" : "closet"
         self.sessionID = sessionID
+        self.navigationPath = navigationPath
     }
 
     private var squareSize: CGFloat {
@@ -242,6 +263,7 @@ struct OutfitAddView: View {
     private func openItemsSheet() {
         itemsSheetSessionID = UUID()
         itemsSheetItemTypeSegment = wardrobeType == "wishlist" ? .wishlist : .closet
+        itemsSheetDetent = .medium
         isItemsSheetPresented = true
     }
 
@@ -395,7 +417,8 @@ struct OutfitAddView: View {
                             outfitToEdit: draft,
                             wardrobeType: wardrobeType,
                             initialWardrobe: selectedWardrobe,
-                            lockWardrobeSource: lockWardrobeSource
+                            lockWardrobeSource: lockWardrobeSource,
+                            wardrobeMembershipOnSave: wardrobeMembershipOnSave
                         )
                     }
                 }
@@ -404,8 +427,9 @@ struct OutfitAddView: View {
                 NavigationStack {
                     outfitCanvasItemSelection
                 }
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.medium, .large], selection: $itemsSheetDetent)
                 .presentationDragIndicator(.visible)
+                .presentationContentInteraction(.scrolls)
             }
             .sheet(isPresented: $showViewAllOutfitItemsSheet) {
                 OutfitCanvasItemsViewAllSheet(
@@ -429,8 +453,9 @@ struct OutfitAddView: View {
                     onRemoveFromCanvas: removeItemFromCanvas
                 )
                 .id(viewAllOutfitItemsInitialSegment)
-                .presentationDetents(outfitItems.count > 6 ? [.medium, .large] : [.medium])
+                .presentationDetents([.medium, .large], selection: $viewAllOutfitItemsSheetDetent)
                 .presentationDragIndicator(.visible)
+                .presentationContentInteraction(.scrolls)
             }
             .sheet(item: $attributesSheet) { sheet in
                 if let outfit = activeOutfitForAttributes {
@@ -450,7 +475,7 @@ struct OutfitAddView: View {
                     outfitCollageArea
                         .frame(width: squareSize, height: squareSize)
                         .frame(maxWidth: .infinity)
-                        .id(Self.redressCanvasScrollID)
+                        .id(Self.canvasScrollID)
                 }
                 .listRowInsets(EdgeInsets())
                 .listRowSeparator(.hidden)
@@ -524,36 +549,32 @@ struct OutfitAddView: View {
                 }
             }
             .listStyle(.plain)
-            .scrollDisabled(isRedressMode && redressScrollLocked)
+            .scrollDisabled(canvasScrollLocked)
             .scrollContentBackground(.hidden)
             .background(Color(.systemBackground))
             .onChange(of: selectedItemID) { _, newValue in
-                handleRedressCanvasSelectionScroll(newValue, proxy: proxy)
+                handleCanvasSelectionScroll(newValue, proxy: proxy)
             }
         }
     }
 
-    private func handleRedressCanvasSelectionScroll(
+    private func handleCanvasSelectionScroll(
         _ newValue: UUID?,
         proxy: ScrollViewProxy
     ) {
-        guard isRedressMode else {
-            redressScrollLocked = false
-            return
-        }
         if newValue != nil {
             // Keep scrolling enabled briefly so scrollTo can run, then lock.
-            redressScrollLocked = false
+            canvasScrollLocked = false
             withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
-                proxy.scrollTo(Self.redressCanvasScrollID, anchor: .top)
+                proxy.scrollTo(Self.canvasScrollID, anchor: .top)
             }
             DispatchQueue.main.async {
-                if isRedressMode, selectedItemID != nil {
-                    redressScrollLocked = true
+                if selectedItemID != nil {
+                    canvasScrollLocked = true
                 }
             }
         } else {
-            redressScrollLocked = false
+            canvasScrollLocked = false
         }
     }
 
@@ -637,11 +658,11 @@ struct OutfitAddView: View {
     }
 
     private var outfitAddWithAlertsAndSheets: some View {
-        outfitAddWithDraftAndDiscardAlerts
+        withDuplicateOutfitDestination(outfitAddWithDraftAndDiscardAlerts)
             .alert("Duplicate Outfit", isPresented: localDuplicateAlertPresented) {
                 Button("View Existing") {
                     if let outfit = localDuplicateOutfit {
-                        existingDuplicateOutfitURI = outfit.objectID.uriRepresentation().absoluteString
+                        openExistingDuplicateOutfit(outfit)
                     }
                     localDuplicateOutfit = nil
                 }
@@ -651,9 +672,28 @@ struct OutfitAddView: View {
             } message: {
                 Text("You already have an outfit with this combination of items.")
             }
-            .navigationDestination(item: $existingDuplicateOutfitURI) { uriString in
-                duplicateOutfitDestination(uriString: uriString)
-            }
+    }
+
+    /// Closet/Wishlist pass `navigationPath` and append `.outfitDetail`; other hosts keep nested `item:`.
+    @ViewBuilder
+    private func withDuplicateOutfitDestination<Content: View>(_ content: Content) -> some View {
+        if navigationPath != nil {
+            content
+        } else {
+            content
+                .navigationDestination(item: $existingDuplicateOutfitURI) { uriString in
+                    duplicateOutfitDestination(uriString: uriString)
+                }
+        }
+    }
+
+    private func openExistingDuplicateOutfit(_ outfit: Outfit) {
+        let uri = outfit.objectID.uriRepresentation().absoluteString
+        if let navigationPath {
+            navigationPath.wrappedValue.append(ItemGridFilterRoute.outfitDetail(uri: uri))
+        } else {
+            existingDuplicateOutfitURI = uri
+        }
     }
 
     private var outfitAddWithRedressAlerts: some View {
@@ -683,11 +723,11 @@ struct OutfitAddView: View {
         } message: {
             Text(
                 editingSuggestionId == nil
-                    ? "Your outfit suggestion was sent to \(redressRecipient?.username ?? redressRecipient?.displayName ?? "this user")."
-                    : "Your outfit suggestion was updated for \(redressRecipient?.username ?? redressRecipient?.displayName ?? "this user")."
+                    ? "Your Redress was sent to \(redressRecipient?.username ?? redressRecipient?.displayName ?? "this user")."
+                    : "Your Redress was updated for \(redressRecipient?.username ?? redressRecipient?.displayName ?? "this user")."
             )
         }
-            .alert("Couldn't Send Suggestion", isPresented: redressSendErrorPresented) {
+            .alert("Couldn't Send Redress", isPresented: redressSendErrorPresented) {
                 Button("OK", role: .cancel) { redressSendError = nil }
             } message: {
                 Text(redressSendError ?? "")
@@ -736,6 +776,25 @@ struct OutfitAddView: View {
             } message: {
                 Text("Your changes to this outfit will not be saved.")
             }
+            .alert("Add Items to Wardrobe?", isPresented: $showWardrobeMembershipAlert) {
+                Button("Add & Save") {
+                    addPendingItemsToMembershipWardrobeAndSave()
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingMembershipAddCount = 0
+                }
+            } message: {
+                Text(wardrobeMembershipAlertMessage)
+            }
+    }
+
+    private var wardrobeMembershipAlertMessage: String {
+        let count = pendingMembershipAddCount
+        let rawName = wardrobeMembershipOnSave?.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let wardrobeLabel = rawName.isEmpty ? "the current wardrobe" : "“\(rawName)”"
+        let itemWord = count == 1 ? "item is" : "items are"
+        let pronoun = count == 1 ? "it" : "them"
+        return "\(count) \(itemWord) not in \(wardrobeLabel). Add \(pronoun) to save this outfit?"
     }
 
     @ViewBuilder
@@ -1053,13 +1112,21 @@ struct OutfitAddView: View {
 
     @ViewBuilder
     private var standardOutfitCollageArea: some View {
+        // Layout size is locked to the square; sticker content is clipped so
+        // drag overhang never expands the List row.
+        let canvas = Color.clear
+            .frame(width: squareSize, height: squareSize)
+            .overlay {
+                standardOutfitCanvasStack
+            }
+            .clipped()
+            .contentShape(Rectangle())
+
         if selectedItemID != nil {
-            standardOutfitCanvasStack
-                .frame(width: squareSize, height: squareSize)
+            canvas
                 .simultaneousGesture(canvasTransformGesture)
         } else {
-            standardOutfitCanvasStack
-                .frame(width: squareSize, height: squareSize)
+            canvas
         }
     }
 
@@ -1091,19 +1158,25 @@ struct OutfitAddView: View {
                 )
             }
         }
+        .frame(width: squareSize, height: squareSize)
+        .clipped()
+        .contentShape(Rectangle())
     }
 
     // MARK: - Canvas Controls Bar
     private var draftAndClearButtons: some View {
-        Group {
-            if isRedressMode {
-                redressCanvasControls
-            } else {
-                standardCanvasControls
+        VStack(spacing: 0) {
+            Divider()
+            Group {
+                if isRedressMode {
+                    redressCanvasControls
+                } else {
+                    standardCanvasControls
+                }
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical)
     }
 
     private var redressCanvasControls: some View {
@@ -1175,9 +1248,9 @@ struct OutfitAddView: View {
             ? (redressRecipient?.displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "this user")
             : name
         if editingSuggestionId == nil {
-            return "Send this outfit suggestion to \(display)?"
+            return "Send this Redress to \(display)?"
         }
-        return "Update your pending outfit suggestion for \(display)?"
+        return "Update your pending Redress for \(display)?"
     }
 
     private var sendRedressToolbarButton: some View {
@@ -1291,6 +1364,7 @@ struct OutfitAddView: View {
 
     private func presentViewAllOutfitItemsSheet(segment: PairItemSelectionView.PairSourceSegment = .closet) {
         viewAllOutfitItemsInitialSegment = segment
+        viewAllOutfitItemsSheetDetent = .medium
         showViewAllOutfitItemsSheet = true
     }
 
@@ -1968,12 +2042,10 @@ struct OutfitAddView: View {
 
     private func bringToFront(_ outfitItem: OutfitItem) {
         saveState()
-        selectedItemID = nil
         let maxZIndex = outfitItems.map { $0.zIndex }.max() ?? 0
         if let index = outfitItems.firstIndex(where: { $0.id == outfitItem.id }) {
             outfitItems[index].zIndex = maxZIndex + 1
         }
-        selectedItemID = outfitItem.id
     }
 
     private func removeItem(_ outfitItem: OutfitItem) {
@@ -2053,7 +2125,7 @@ struct OutfitAddView: View {
 
     private func saveOutfit() {
         selectedItemID = nil
-        guard let collageImage = captureCollageAsImage() else {
+        guard captureCollageAsImage() != nil else {
             print("Failed to capture collage image")
             return
         }
@@ -2067,6 +2139,56 @@ struct OutfitAddView: View {
                in: viewContext
            ) {
             localDuplicateOutfit = duplicate
+            return
+        }
+
+        let missing = itemsMissingFromMembershipWardrobe()
+        if !missing.isEmpty {
+            pendingMembershipAddCount = missing.count
+            showWardrobeMembershipAlert = true
+            return
+        }
+
+        performSaveOutfit()
+    }
+
+    private func itemsMissingFromMembershipWardrobe() -> [Item] {
+        guard let wardrobe = wardrobeMembershipOnSave else { return [] }
+        let wardrobeID = wardrobe.objectID
+        var seen = Set<NSManagedObjectID>()
+        var missing: [Item] = []
+        for outfitItem in outfitItems {
+            let item = outfitItem.item
+            guard seen.insert(item.objectID).inserted else { continue }
+            let wardrobes = item.wardrobes as? Set<Wardrobe> ?? []
+            if !wardrobes.contains(where: { $0.objectID == wardrobeID }) {
+                missing.append(item)
+            }
+        }
+        return missing
+    }
+
+    private func addPendingItemsToMembershipWardrobeAndSave() {
+        guard let wardrobe = wardrobeMembershipOnSave else {
+            pendingMembershipAddCount = 0
+            performSaveOutfit()
+            return
+        }
+        let missing = itemsMissingFromMembershipWardrobe()
+        for item in missing {
+            wardrobe.addToItems(item)
+            setUpdatedAt(item)
+        }
+        pendingMembershipAddCount = 0
+        performSaveOutfit()
+        for item in missing {
+            SyncService.shared.syncItemIfNeeded(item)
+        }
+    }
+
+    private func performSaveOutfit() {
+        guard let collageImage = captureCollageAsImage() else {
+            print("Failed to capture collage image")
             return
         }
 
@@ -2444,8 +2566,11 @@ struct AdaptiveOutfitItemView: View {
     @State private var baseRotation: Double
     @State private var scaleMultiplier: CGFloat = 1.0  // on top of layout size
     @State private var baseScaleMultiplier: CGFloat = 1.0
+    /// While true, ignore the delete control so a long-press release cannot hit it.
+    @State private var isLongPressing = false
 
     private let deleteButtonSize: CGFloat = 24
+    private let deleteHitTargetSize: CGFloat = 44
 
     init(outfitItem: OutfitItem, canvasSize: CGFloat, isSelected: Bool,
          onPositionChanged: @escaping (CGPoint) -> Void,
@@ -2496,7 +2621,11 @@ struct AdaptiveOutfitItemView: View {
                 .rotationEffect(Angle.degrees(rotation))
                 .position(effectiveCenter)
                 .onTapGesture { onSelected() }
-                .onLongPressGesture { onLongPress() }
+                .onLongPressGesture(minimumDuration: 0.35, maximumDistance: 10, pressing: { pressing in
+                    isLongPressing = pressing
+                }, perform: {
+                    onLongPress()
+                })
                 .gesture(dragGesture)
                 .onChange(of: outfitItem.position) { newValue in
                     dragCenter = newValue
@@ -2516,11 +2645,19 @@ struct AdaptiveOutfitItemView: View {
                         .foregroundColor(.red)
                         .background(Circle().fill(Color.white).frame(width: deleteButtonSize, height: deleteButtonSize))
                         .font(.system(size: deleteButtonSize))
+                        .frame(width: deleteHitTargetSize, height: deleteHitTargetSize)
+                        .contentShape(Rectangle())
                 }
-                .frame(width: deleteButtonSize, height: deleteButtonSize)
+                .buttonStyle(.plain)
+                .frame(width: deleteHitTargetSize, height: deleteHitTargetSize)
                 .position(deleteButtonPosition)
+                .allowsHitTesting(!isLongPressing)
             }
         }
+        // Lock layout to the canvas square; parent/stack clipping handles sticker overhang.
+        .frame(width: canvasSize, height: canvasSize)
+        .clipped()
+        .allowsHitTesting(true)
     }
 
     @ViewBuilder

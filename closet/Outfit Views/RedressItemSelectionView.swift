@@ -389,6 +389,7 @@ struct AdaptiveRedressCanvasItemView: View {
     @State private var isDragging = false
 
     private let deleteButtonSize: CGFloat = 24
+    private let deleteHitTargetSize: CGFloat = 44
 
     init(
         canvasItem: RedressCanvasItem,
@@ -449,8 +450,11 @@ struct AdaptiveRedressCanvasItemView: View {
                         .foregroundColor(.red)
                         .background(Circle().fill(Color.white).frame(width: deleteButtonSize, height: deleteButtonSize))
                         .font(.system(size: deleteButtonSize))
+                        .frame(width: deleteHitTargetSize, height: deleteHitTargetSize)
+                        .contentShape(Rectangle())
                 }
-                .frame(width: deleteButtonSize, height: deleteButtonSize)
+                .buttonStyle(.plain)
+                .frame(width: deleteHitTargetSize, height: deleteHitTargetSize)
                 .position(deleteButtonPosition)
             }
         }
