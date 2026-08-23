@@ -1,6 +1,6 @@
 ---
 description: Deferred — packing mode storage section max item count
-globs: closet/Item View/TravelPackingView.swift,closet/Item View/PackingChecklistView.swift
+globs: closet/Item View/ItemPackView.swift,closet/Item View/PackingChecklistView.swift
 alwaysApply: false
 ---
 

@@ -8,6 +8,54 @@ import Foundation
 
 extension SyncEngine {
 
+    /// Last-write-wins upsert of the whole packing checklist document.
+    func syncPackingChecklistDocument(objectID: NSManagedObjectID, userId: UUID) async throws {
+        let payload = try await performOnSyncContext { ctx -> SyncPackingChecklistDocumentData? in
+            guard let doc = try ctx.existingObject(with: objectID) as? PackingChecklistDocument,
+                  let id = doc.id,
+                  let wardrobeId = doc.wardrobe?.id,
+                  let bodyData = doc.bodyJSON,
+                  let body = PackingChecklistDocumentCodec.decode(bodyData) else { return nil }
+            if doc.userId == nil || doc.userId?.isEmpty == true {
+                doc.userId = userId.uuidString
+                try ctx.save()
+            }
+            return SyncPackingChecklistDocumentData(
+                id: id.uuidString,
+                userId: userId.uuidString,
+                wardrobeId: wardrobeId.uuidString,
+                kind: Int(doc.kind),
+                body: body,
+                createdAt: doc.createdAt?.ISO8601String,
+                updatedAt: doc.updatedAt?.ISO8601String ?? doc.createdAt?.ISO8601String
+            )
+        }
+        guard let payload else { return }
+        let supabase = await getSupabase()
+        try await supabase.supabaseClient.from("packing_checklist_documents")
+            .upsert(payload, onConflict: "id")
+            .execute()
+        try await performOnSyncContext { ctx in
+            guard let doc = try ctx.existingObject(with: objectID) as? PackingChecklistDocument else { return }
+            doc.syncedAt = Date()
+            try ctx.save()
+        }
+    }
+
+    func syncPackingChecklistDocumentIfNeeded(objectID: NSManagedObjectID, userId: UUID) async throws {
+        let needsSync = try await performOnSyncContext { ctx -> Bool in
+            guard let doc = try ctx.existingObject(with: objectID) as? PackingChecklistDocument,
+                  doc.wardrobe?.id != nil else { return false }
+            if doc.syncedAt == nil { return true }
+            if let updatedAt = doc.updatedAt, let syncedAt = doc.syncedAt {
+                return updatedAt >= syncedAt
+            }
+            return false
+        }
+        guard needsSync else { return }
+        try await syncPackingChecklistDocument(objectID: objectID, userId: userId)
+    }
+
     func syncPackingChecklistSection(objectID: NSManagedObjectID, userId: UUID) async throws {
         let payload = try await performOnSyncContext { ctx -> SyncPackingChecklistSectionData? in
             guard let section = try ctx.existingObject(with: objectID) as? PackingChecklistSection,

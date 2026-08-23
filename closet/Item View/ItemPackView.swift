@@ -1,13 +1,14 @@
 //
-//  TravelPackingView.swift
+//  ItemPackView.swift
 //  closet
 //
-//  Created for travel mode packing workflow.
+//  Pack items into storage locations.
 //
 
 import SwiftUI
 import CoreData
 import UniformTypeIdentifiers
+import UIKit
 
 /// Lightweight type for drag-and-drop of items between packing sections.
 private struct PackingItemRef: Codable, Transferable {
@@ -35,15 +36,24 @@ private enum PackMoveConfirmationTarget {
     case storage(PackingStorageLocation)
 }
 
-struct TravelPackingView: View {
+/// Payload for `fullScreenCover(item:)` so the first present isn’t blank (image travels with the item).
+private struct PackingFullScreenFrontImage: Identifiable {
+    let id = UUID()
+    let image: UIImage?
+}
+
+struct ItemPackView: View {
     var selectedWardrobe: Wardrobe
     var wardrobeType: String
     @ObservedObject var tabBarHideState: TabBarHideState
+    /// Closet tab path — Checklist appends `ItemGridFilterRoute.packingChecklist` (no sheet).
+    var navigationPath: Binding<NavigationPath>? = nil
     
     @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject private var authSession: AuthSession
     @State private var items: [Item] = []
-    @State private var selectedItemForNavigation: Item?
+    @State private var fullScreenFrontPresentation: PackingFullScreenFrontImage?
+    @State private var fullScreenPageIndex = 0
     @State private var showAddStorageLocationAlert = false
     @State private var newStorageLocationName = ""
     @State private var showRenameStorageLocationSheet = false
@@ -65,7 +75,6 @@ struct TravelPackingView: View {
     @State private var packMoveAlertStorageObjectID: NSManagedObjectID?
     @State private var packMoveAlertItemCount = 0
     @State private var collapsedStorageSectionIDs: Set<NSManagedObjectID> = []
-    @State private var showPackingChecklistSheet = false
 
     let gridColumns = [
         GridItem(.flexible(), spacing: 2),
@@ -157,7 +166,7 @@ struct TravelPackingView: View {
     var body: some View {
         Group {
             if items.isEmpty {
-                TravelPackingEmptyStateView()
+                ItemPackEmptyStateView()
             } else {
                 ScrollView(showsIndicators: false) {
                     ForEach(storageLocations, id: \.objectID) { location in
@@ -181,20 +190,21 @@ struct TravelPackingView: View {
         .navigationTitle(isInSelectionMode ? "" : (selectedWardrobe.name ?? "Pack"))
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(isInSelectionMode)
-        .toolbar(tabBarHideState.shouldHideTabBar ? .hidden : .automatic, for: .tabBar)
+        // Always hide — conditional `.automatic` re-shows the bar if Pack `onDisappear`
+        // (e.g. Checklist push) briefly clears `shouldHideTabBar`.
+        .toolbar(.hidden, for: .tabBar)
         .onAppear { tabBarHideState.shouldHideTabBar = true }
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarLeading) {
                 if isInSelectionMode {
                     packingSelectionModeLeadingToolbar()
-                } else if !items.isEmpty {
+                } else {
                     Button {
-                        collapsedStorageSectionIDs.removeAll()
-                        isInSelectionMode = true
+                        openPackingChecklist()
                     } label: {
-                        Image(systemName: "checkmark.circle")
+                        Image(systemName: "pencil.and.list.clipboard")
                     }
-                    .accessibilityLabel("Select")
+                    .accessibilityLabel("Checklist")
                 }
             }
             ToolbarItemGroup(placement: .navigationBarTrailing) {
@@ -206,10 +216,12 @@ struct TravelPackingView: View {
                     }
                 } else {
                     Button {
-                        showPackingChecklistSheet = true
+                        beginSelectionMode()
                     } label: {
-                        Image(systemName: "pencil.and.list.clipboard")
+                        Image(systemName: "checkmark.circle")
                     }
+                    .disabled(items.isEmpty)
+                    .accessibilityLabel("Select")
                     Button {
                         assignSelectedItemsToNewStorageAfterCreate = false
                         newStorageLocationName = ""
@@ -217,6 +229,7 @@ struct TravelPackingView: View {
                     } label: {
                         Image(systemName: "plus")
                     }
+                    .accessibilityLabel("Add storage location")
                 }
             }
             ToolbarItem(placement: .principal) {
@@ -269,9 +282,6 @@ struct TravelPackingView: View {
         .sheet(isPresented: $showMoveToSectionSheet) {
             moveToSectionSheet()
         }
-        .sheet(isPresented: $showPackingChecklistSheet) {
-            PackingChecklistView(selectedWardrobe: selectedWardrobe)
-        }
         .alert("Delete Section?", isPresented: $showDeleteStorageLocationConfirmation) {
             Button("Cancel", role: .cancel) {
                 storageLocationPendingDelete = nil
@@ -314,8 +324,28 @@ struct TravelPackingView: View {
                 fetchPackingAssignments()
             }
         }
-        .navigationDestination(item: $selectedItemForNavigation) { item in
-            ItemDetailView(item: item)
+        .fullScreenCover(item: $fullScreenFrontPresentation) { presentation in
+            ItemFullScreenView(
+                frontImage: presentation.image,
+                wornImage: nil,
+                selectedPageIndex: $fullScreenPageIndex,
+                isPresented: Binding(
+                    get: { fullScreenFrontPresentation != nil },
+                    set: { if !$0 { fullScreenFrontPresentation = nil } }
+                )
+            )
+        }
+    }
+
+    private func beginSelectionMode() {
+        guard !items.isEmpty else { return }
+        collapsedStorageSectionIDs.removeAll()
+        isInSelectionMode = true
+    }
+
+    private func openPackingChecklist() {
+        if let navigationPath {
+            navigationPath.wrappedValue.append(ItemGridFilterRoute.packingChecklist)
         }
     }
     
@@ -449,8 +479,24 @@ struct TravelPackingView: View {
                 isInSelectionMode = false
             }
         } else {
-            selectedItemForNavigation = item
+            presentFrontImageFullScreen(for: item)
         }
+    }
+
+    private func presentFrontImageFullScreen(for item: Item) {
+        fullScreenPageIndex = 0
+        fullScreenFrontPresentation = PackingFullScreenFrontImage(image: frontImage(for: item))
+    }
+
+    private func frontImage(for item: Item) -> UIImage? {
+        guard let photo = ItemPhotoStorage.frontPhoto(for: item) else { return nil }
+        if let data = photo.data, !data.isEmpty {
+            return UIImage(data: data)
+        }
+        if let thumb = photo.thumbnailData, !thumb.isEmpty {
+            return UIImage(data: thumb)
+        }
+        return nil
     }
 
     @ViewBuilder
@@ -694,7 +740,7 @@ struct TravelPackingView: View {
             fetchStorageLocations()
             fetchPackingAssignments()
         } catch {
-            print("❌ TravelPackingView failed to delete storage location: \(error)")
+            print("❌ ItemPackView failed to delete storage location: \(error)")
             viewContext.rollback()
         }
     }
@@ -711,7 +757,7 @@ struct TravelPackingView: View {
             try viewContext.save()
             fetchStorageLocations()
         } catch {
-            print("❌ TravelPackingView failed to rename storage location: \(error)")
+            print("❌ ItemPackView failed to rename storage location: \(error)")
         }
     }
     
@@ -750,7 +796,7 @@ struct TravelPackingView: View {
             }
         } catch {
             assignSelectedItemsToNewStorageAfterCreate = false
-            print("❌ TravelPackingView failed to create storage location: \(error)")
+            print("❌ ItemPackView failed to create storage location: \(error)")
         }
     }
 
@@ -782,7 +828,7 @@ struct TravelPackingView: View {
             try viewContext.save()
             itemToLocation[itemId] = location.id
         } catch {
-            print("❌ TravelPackingView failed to assign item: \(error)")
+            print("❌ ItemPackView failed to assign item: \(error)")
         }
     }
 
@@ -800,7 +846,7 @@ struct TravelPackingView: View {
             try viewContext.save()
             itemToLocation.removeValue(forKey: itemId)
         } catch {
-            print("❌ TravelPackingView failed to unassign item: \(error)")
+            print("❌ ItemPackView failed to unassign item: \(error)")
         }
     }
 
@@ -829,7 +875,7 @@ struct TravelPackingView: View {
                 self.itemToLocation = map
             }
         } catch {
-            print("❌ TravelPackingView failed to fetch packing assignments: \(error)")
+            print("❌ ItemPackView failed to fetch packing assignments: \(error)")
             DispatchQueue.main.async {
                 self.itemToLocation = [:]
             }
@@ -847,7 +893,7 @@ struct TravelPackingView: View {
                 self.storageLocations = results
             }
         } catch {
-            print("❌ TravelPackingView failed to fetch storage locations: \(error)")
+            print("❌ ItemPackView failed to fetch storage locations: \(error)")
             DispatchQueue.main.async {
                 self.storageLocations = []
             }
@@ -875,7 +921,7 @@ struct TravelPackingView: View {
                 self.items = results
             }
         } catch {
-            print("❌ TravelPackingView failed to fetch items: \(error)")
+            print("❌ ItemPackView failed to fetch items: \(error)")
             DispatchQueue.main.async {
                 self.items = []
             }
@@ -885,7 +931,7 @@ struct TravelPackingView: View {
 
 // MARK: - Empty state (packing-specific; not `EmptyItemStateView` — + creates storage locations, not items)
 
-private struct TravelPackingEmptyStateView: View {
+private struct ItemPackEmptyStateView: View {
     var body: some View {
         VStack(spacing: 12) {
             Spacer()

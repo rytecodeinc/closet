@@ -2,166 +2,98 @@
 //  PackingChecklistView.swift
 //  closet
 //
+//  Notes-like packing checklist: one document per wardrobe + tab (Items / Tasks).
+//  Syncs the whole document once on disappear (last-write-wins).
+//
 
 import SwiftUI
 import CoreData
-
-private enum PackingChecklistKind: Int16 {
-    case items = 0
-    case tasks = 1
-
-    var segmentTag: String {
-        switch self {
-        case .items: return "Items"
-        case .tasks: return "Tasks"
-        }
-    }
-
-    static func fromSegment(_ tag: String) -> PackingChecklistKind {
-        tag == "Tasks" ? .tasks : .items
-    }
-}
-
-/// Flat list rows for edit mode — section headers are fixed; items can move across sections.
-private struct ChecklistListRow: Identifiable {
-    enum RowKind {
-        case sectionHeader(PackingChecklistSection)
-        case item(PackingChecklistItem)
-    }
-
-    let id: String
-    let kind: RowKind
-
-    var isItem: Bool {
-        if case .item = kind { return true }
-        return false
-    }
-}
+import UIKit
 
 struct PackingChecklistView: View {
     @ObservedObject var selectedWardrobe: Wardrobe
+    @ObservedObject var tabBarHideState: TabBarHideState
     @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject private var authSession: AuthSession
     @Environment(\.scenePhase) private var scenePhase
 
-    @State private var checklistEditMode: EditMode = .inactive
-
+    @State private var selectedTab = "Items"
+    @State private var blocks: [PackingChecklistBlock] = []
+    @State private var focusedBlockID: UUID?
+    @State private var documentObjectID: NSManagedObjectID?
     @State private var showNewSectionAlert = false
     @State private var newSectionName = ""
+    @State private var isDirty = false
 
-    @State private var showEditSectionAlert = false
-    @State private var editingSectionTitle = ""
-    @State private var sectionBeingRenamed: PackingChecklistSection?
-
-    @State private var selectedTab = "Items"
-    @FocusState private var focusedRowID: UUID?
-
-    /// Batches Core Data flushes during typing — no sync per keystroke.
-    @State private var debouncedLocalSaveTask: Task<Void, Never>?
-
-    @FetchRequest private var sectionsFetched: FetchedResults<PackingChecklistSection>
-
-    private let textTypingDebounceNanoseconds: UInt64 = 380_000_000
-
-    private var reorderEditingActive: Bool {
-        checklistEditMode == .active
-    }
-
-    init(selectedWardrobe: Wardrobe) {
-        self._selectedWardrobe = ObservedObject(wrappedValue: selectedWardrobe)
-        let wardrobe = selectedWardrobe
-
-        let sectionReq: NSFetchRequest<PackingChecklistSection> = PackingChecklistSection.fetchRequest()
-        sectionReq.sortDescriptors = [
-            NSSortDescriptor(keyPath: \PackingChecklistSection.kind, ascending: true),
-            NSSortDescriptor(keyPath: \PackingChecklistSection.sortIndex, ascending: true)
-        ]
-        sectionReq.predicate = NSPredicate(format: "wardrobe == %@", wardrobe)
-        _sectionsFetched = FetchRequest(fetchRequest: sectionReq, animation: .default)
+    private var currentKind: PackingChecklistDocKind {
+        PackingChecklistDocKind.fromSegment(selectedTab)
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            SelectionPanelHeader(
-                title: "Checklist",
-                leading: {
-                    Button(checklistEditMode == .active ? "Done" : "Edit") {
-                        toggleChecklistEditMode()
+            checklistPickerBand
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(blocks) { block in
+                        blockRow(block)
+                            .id(block.id)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 6)
                     }
-                },
-                trailing: {
+                }
+                .padding(.top, 4)
+                .padding(.bottom, 24)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    focusedBlockID = nil
+                    UIApplication.shared.sendAction(
+                        #selector(UIResponder.resignFirstResponder),
+                        to: nil, from: nil, for: nil
+                    )
+                }
+            }
+            .scrollDismissesKeyboard(.interactively)
+        }
+        .background(Color(UIColor.systemBackground))
+        .navigationTitle("Checklist")
+        .navigationBarTitleDisplayMode(.inline)
+        .disableInteractivePopGesture()
+        // Always hide — parent `.toolbar(.hidden)` alone can flicker on push/pop
+        // (same pattern as Pack / read-only detail).
+        .toolbar(.hidden, for: .tabBar)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
                         newSectionName = ""
                         showNewSectionAlert = true
                     } label: {
                         Image(systemName: "plus")
                     }
-                    .disabled(reorderEditingActive)
                     .accessibilityLabel("Add section")
-                },
-                picker: {
-                    Picker("", selection: $selectedTab) {
-                        Text("Items")
-                            .tag("Items")
-                        Text("Tasks")
-                            .tag("Tasks")
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .disabled(reorderEditingActive)
-                }
-            )
-
-            Group {
-                if reorderEditingActive {
-                    checklistList(kind: PackingChecklistKind.fromSegment(selectedTab))
-                } else {
-                    TabView(selection: $selectedTab) {
-                        checklistList(kind: .items).tag("Items")
-                        checklistList(kind: .tasks).tag("Tasks")
-                    }
-                    .tabViewStyle(.page(indexDisplayMode: .never))
-                }
             }
-            .background(Color(UIColor.systemBackground))
-            .environment(\.editMode, $checklistEditMode)
         }
         .onAppear {
-            migrateChecklistSectionsIfNeeded()
-            ensureSeedRowsForAllSections()
-            scheduleFocusFirstRow(for: selectedTab)
+            tabBarHideState.shouldHideTabBar = true
+            loadDocument(for: currentKind, preferFocus: false)
         }
         .onDisappear {
-            if checklistEditMode == .active {
-                ensureSeedRowsForAllSections()
-            }
-            checklistEditMode = .inactive
-            flushPendingChecklistPersistAndRemoteSync()
+            persistAndSyncCurrentDocument()
         }
-        .onChange(of: selectedTab) { _, _ in
-            invalidateDebouncedLocalSaveTask()
-            saveCoreDataLocallyOnly()
-        }
-        .onChange(of: focusedRowID) { _, _ in
-            commitInlineTextEditsToStore()
-        }
-        .onChange(of: checklistEditMode) { _, newMode in
-            if newMode == .active {
-                invalidateDebouncedLocalSaveTask()
-                focusedRowID = nil
-                saveCoreDataLocallyOnly()
-            }
+        .onChange(of: selectedTab) { oldTab, newTab in
+            persistLocalDocument(for: PackingChecklistDocKind.fromSegment(oldTab))
+            loadDocument(for: PackingChecklistDocKind.fromSegment(newTab), preferFocus: false)
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .inactive || phase == .background {
-                flushPendingChecklistPersistAndRemoteSync()
+                persistAndSyncCurrentDocument()
             }
         }
         .alert("New Section", isPresented: $showNewSectionAlert) {
             TextField("Section name", text: $newSectionName)
                 .textInputAutocapitalization(.words)
             Button("Add") {
-                createSectionFromAlert()
+                addSection(named: newSectionName)
                 newSectionName = ""
             }
             Button("Cancel", role: .cancel) {
@@ -170,560 +102,317 @@ struct PackingChecklistView: View {
         } message: {
             Text("Enter a name for the new section in the \(selectedTab) checklist.")
         }
-        .alert("Rename Section", isPresented: $showEditSectionAlert) {
-            TextField("Section name", text: $editingSectionTitle)
-                .textInputAutocapitalization(.words)
-            Button("Save") {
-                applySectionTitleFromAlert()
-                editingSectionTitle = ""
-                sectionBeingRenamed = nil
-            }
-            Button("Cancel", role: .cancel) {
-                editingSectionTitle = ""
-                sectionBeingRenamed = nil
-            }
-        } message: {
-            Text("Enter a title for this section.")
+    }
+
+    private var checklistPickerBand: some View {
+        Picker("", selection: $selectedTab) {
+            Text("Items").tag("Items")
+            Text("Tasks").tag("Tasks")
         }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .padding(.horizontal)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+        .background(Color(UIColor.systemBackground))
     }
 
-    private func toggleChecklistEditMode() {
-        if checklistEditMode == .active {
-            checklistEditMode = .inactive
-            ensureSeedRowsForAllSections()
-        } else {
-            checklistEditMode = .active
-        }
-        focusedRowID = nil
-    }
+    // MARK: - Rows
 
-    // MARK: - Sections
+    @ViewBuilder
+    private func blockRow(_ block: PackingChecklistBlock) -> some View {
+        switch block {
+        case .section(let id, let title):
+            PackingChecklistBlockField(
+                text: sectionTitleBinding(id: id, title: title),
+                isFocused: focusedBlockID == id,
+                font: UIFont.systemFont(ofSize: UIFont.preferredFont(forTextStyle: .subheadline).pointSize, weight: .semibold),
+                textColor: .secondaryLabel,
+                strikethrough: false,
+                onSubmit: { insertItem(after: id) },
+                onBackspaceWhenEmpty: { deleteBlockIfAllowed(id: id) },
+                onBecameFocused: { focusedBlockID = id },
+                onTextChanged: { markDirty() },
+                onDismissKeyboard: { focusedBlockID = nil }
+            )
+            .frame(minHeight: 28)
+            .textCase(nil)
 
-    private func sections(kind: PackingChecklistKind) -> [PackingChecklistSection] {
-        sectionsFetched.filter { $0.kind == kind.rawValue }
-    }
-
-    private func displayTitle(for section: PackingChecklistSection) -> String {
-        let trimmed = (section.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return "GENERAL" }
-        return trimmed
-    }
-
-    /// Ensures each checklist tab has at least one section (GENERAL by default) for this wardrobe.
-    private func migrateChecklistSectionsIfNeeded() {
-        for kind in [PackingChecklistKind.items, .tasks] {
-            let existing = sections(kind: kind)
-            if existing.isEmpty {
-                let defaultTitle: String
-                if kind == .items {
-                    let legacy = (selectedWardrobe.packingChecklistSectionTitle ?? "")
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    defaultTitle = legacy.isEmpty ? "GENERAL" : legacy
-                } else {
-                    defaultTitle = "GENERAL"
+        case .item(let id, let text, let checked):
+            HStack(alignment: .center, spacing: 12) {
+                Button {
+                    toggleChecked(id: id)
+                } label: {
+                    Image(systemName: checked ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundStyle(checked ? Color.accentColor : Color.secondary)
                 }
-                let section = makeChecklistSection(title: defaultTitle, kind: kind, sortIndex: 0)
-                attachOrphanItems(to: section, kind: kind)
-                continue
+                .buttonStyle(.plain)
+                .accessibilityLabel(checked ? "Mark incomplete" : "Mark complete")
+
+                PackingChecklistBlockField(
+                    text: itemTextBinding(id: id, text: text),
+                    isFocused: focusedBlockID == id,
+                    font: .preferredFont(forTextStyle: .body),
+                    textColor: checked ? .secondaryLabel : .label,
+                    strikethrough: checked,
+                    onSubmit: { insertItem(after: id) },
+                    onBackspaceWhenEmpty: { deleteBlockIfAllowed(id: id) },
+                    onBecameFocused: { focusedBlockID = id },
+                    onTextChanged: { markDirty() },
+                    onDismissKeyboard: { focusedBlockID = nil }
+                )
+                .frame(minHeight: 28)
             }
-            if let first = existing.first {
-                attachOrphanItems(to: first, kind: kind)
-            }
+            .opacity(checked ? 0.75 : 1)
         }
-        saveCoreDataLocallyOnly()
     }
 
-    private func attachOrphanItems(to section: PackingChecklistSection, kind: PackingChecklistKind) {
-        let request: NSFetchRequest<PackingChecklistItem> = PackingChecklistItem.fetchRequest()
+    private func sectionTitleBinding(id: UUID, title: String) -> Binding<String> {
+        Binding(
+            get: {
+                if case .section(_, let t) = blocks.first(where: { $0.id == id }) {
+                    return t
+                }
+                return title
+            },
+            set: { newValue in
+                guard let idx = blocks.firstIndex(where: { $0.id == id }) else { return }
+                blocks[idx] = .section(id: id, title: newValue)
+            }
+        )
+    }
+
+    private func itemTextBinding(id: UUID, text: String) -> Binding<String> {
+        Binding(
+            get: {
+                if case .item(_, let t, _) = blocks.first(where: { $0.id == id }) {
+                    return t
+                }
+                return text
+            },
+            set: { newValue in
+                guard let idx = blocks.firstIndex(where: { $0.id == id }),
+                      case .item(_, _, let checked) = blocks[idx] else { return }
+                blocks[idx] = .item(id: id, text: newValue, checked: checked)
+            }
+        )
+    }
+
+    // MARK: - Mutations
+
+    private func markDirty() {
+        isDirty = true
+    }
+
+    private func toggleChecked(id: UUID) {
+        guard let idx = blocks.firstIndex(where: { $0.id == id }),
+              case .item(_, let text, let checked) = blocks[idx] else { return }
+        blocks[idx] = .item(id: id, text: text, checked: !checked)
+        markDirty()
+    }
+
+    private func insertItem(after blockID: UUID) {
+        guard let idx = blocks.firstIndex(where: { $0.id == blockID }) else { return }
+        let newID = UUID()
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            blocks.insert(.item(id: newID, text: "", checked: false), at: idx + 1)
+            // Hand focus to the new field without clearing first (avoids keyboard drop).
+            focusedBlockID = newID
+        }
+        markDirty()
+    }
+
+    private func deleteBlockIfAllowed(id: UUID) {
+        guard let idx = blocks.firstIndex(where: { $0.id == id }) else { return }
+        let block = blocks[idx]
+
+        // Keep at least one item in the document.
+        let itemCount = blocks.filter(\.isItem).count
+        if case .item = block, itemCount <= 1 {
+            blocks[idx] = .item(id: id, text: "", checked: false)
+            focusedBlockID = id
+            markDirty()
+            return
+        }
+
+        // Don't delete the only section if it still has following content structure needs —
+        // allow deleting empty section headers when not the sole remaining block.
+        if case .section = block, blocks.count <= 1 {
+            return
+        }
+
+        // Notes-like: hand focus to the previous (else next) field while this row still exists,
+        // then remove — destroying the first-responder field first drops the keyboard.
+        let handoffID: UUID? = {
+            if idx > 0 { return blocks[idx - 1].id }
+            if idx + 1 < blocks.count { return blocks[idx + 1].id }
+            return nil
+        }()
+
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            if let handoffID {
+                focusedBlockID = handoffID
+            }
+        }
+
+        DispatchQueue.main.async {
+            guard let removeIdx = blocks.firstIndex(where: { $0.id == id }) else { return }
+            var removeTransaction = Transaction(animation: nil)
+            removeTransaction.disablesAnimations = true
+            withTransaction(removeTransaction) {
+                blocks.remove(at: removeIdx)
+                if blocks.isEmpty {
+                    blocks = PackingChecklistDocumentBody.emptySeed.blocks
+                }
+                if let handoffID, blocks.contains(where: { $0.id == handoffID }) {
+                    focusedBlockID = handoffID
+                } else if let first = blocks.first?.id {
+                    focusedBlockID = first
+                }
+            }
+            markDirty()
+        }
+    }
+
+    private func addSection(named raw: String) {
+        let title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        let sectionID = UUID()
+        let itemID = UUID()
+        blocks.append(.section(id: sectionID, title: title))
+        blocks.append(.item(id: itemID, text: "", checked: false))
+        focusedBlockID = itemID
+        markDirty()
+    }
+
+    // MARK: - Load / save / sync
+
+    private func loadDocument(for kind: PackingChecklistDocKind, preferFocus: Bool) {
+        focusedBlockID = nil
+        let doc = fetchOrCreateDocument(kind: kind)
+        documentObjectID = doc.objectID
+
+        if let body = PackingChecklistDocumentCodec.decode(doc.bodyJSON), !body.blocks.isEmpty {
+            blocks = body.blocks
+        } else if let migrated = migrateLegacyDocument(kind: kind) {
+            blocks = migrated.blocks
+            saveBody(migrated, into: doc)
+        } else {
+            let seed = PackingChecklistDocumentBody.emptySeed
+            blocks = seed.blocks
+            saveBody(seed, into: doc)
+        }
+        isDirty = false
+        if preferFocus, let first = blocks.first?.id {
+            DispatchQueue.main.async { focusedBlockID = first }
+        }
+    }
+
+    private func fetchOrCreateDocument(kind: PackingChecklistDocKind) -> PackingChecklistDocument {
+        let request: NSFetchRequest<PackingChecklistDocument> = PackingChecklistDocument.fetchRequest()
+        request.fetchLimit = 1
         request.predicate = NSPredicate(
-            format: "wardrobe == %@ AND kind == %d AND section == nil",
+            format: "wardrobe == %@ AND kind == %d",
             selectedWardrobe,
             kind.rawValue
         )
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \PackingChecklistItem.sortIndex, ascending: true)]
-        guard let orphans = try? viewContext.fetch(request), !orphans.isEmpty else { return }
-        for item in orphans {
-            item.section = section
+        if let existing = try? viewContext.fetch(request).first {
+            return existing
         }
-        reassignSortIndices(rows(in: section))
+
+        let doc = PackingChecklistDocument(context: viewContext)
+        doc.id = UUID()
+        doc.kind = kind.rawValue
+        doc.wardrobe = selectedWardrobe
+        doc.createdAt = Date()
+        doc.updatedAt = Date()
+        if let uid = authSession.userId?.uuidString {
+            doc.userId = uid
+        }
+        try? viewContext.save()
+        return doc
     }
 
-    private func makeChecklistSection(title: String, kind: PackingChecklistKind, sortIndex: Int32) -> PackingChecklistSection {
-        let section = PackingChecklistSection(context: viewContext)
-        section.id = UUID()
-        section.title = title
-        section.kind = kind.rawValue
-        section.sortIndex = sortIndex
-        section.wardrobe = selectedWardrobe
-        if let userId = authSession.userId?.uuidString {
-            section.userId = userId
-        }
-        setCreatedAndUpdatedAt(section)
-        return section
-    }
-
-    private func createSectionFromAlert() {
-        let trimmed = newSectionName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-
-        let kind = PackingChecklistKind.fromSegment(selectedTab)
-        let nextIndex = Int32(sections(kind: kind).count)
-        let section = makeChecklistSection(title: trimmed, kind: kind, sortIndex: nextIndex)
-        ensureSeedRowIfNeeded(section: section)
-        saveCoreDataLocallyOnly()
-        SyncService.shared.syncPackingChecklistSectionIfNeeded(section)
-        DispatchQueue.main.async {
-            if let firstRow = rows(in: section).first?.id {
-                focusedRowID = firstRow
-            }
-        }
-    }
-
-    private func applySectionTitleFromAlert() {
-        guard let section = sectionBeingRenamed else { return }
-        let trimmed = editingSectionTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        section.title = trimmed
-        setUpdatedAt(section)
-        if section.userId == nil || section.userId?.isEmpty == true,
+    private func saveBody(_ body: PackingChecklistDocumentBody, into doc: PackingChecklistDocument) {
+        doc.bodyJSON = PackingChecklistDocumentCodec.encode(body)
+        doc.updatedAt = Date()
+        if doc.userId == nil || doc.userId?.isEmpty == true,
            let uid = authSession.userId?.uuidString {
-            section.userId = uid
+            doc.userId = uid
         }
-        do {
-            try viewContext.save()
-            SyncService.shared.syncPackingChecklistSectionIfNeeded(section)
-        } catch {
-            print("❌ PackingChecklistView failed to save section title: \(error.localizedDescription)")
-        }
+        try? viewContext.save()
     }
 
-    @ViewBuilder
-    private func checklistSectionHeader(_ section: PackingChecklistSection) -> some View {
-        HStack {
-            Text(displayTitle(for: section).uppercased())
-                .fontWeight(.semibold)
-                .foregroundColor(.gray)
-                .font(.subheadline)
-            Spacer()
-            Button {
-                sectionBeingRenamed = section
-                editingSectionTitle = (section.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                showEditSectionAlert = true
-            } label: {
-                Image(systemName: "pencil")
-            }
-            .buttonStyle(.plain)
-            .disabled(reorderEditingActive)
-        }
-        .padding(.horizontal, 4)
-        .textCase(nil)
-    }
-
-    private func rows(in section: PackingChecklistSection) -> [PackingChecklistItem] {
-        let set = section.items as? Set<PackingChecklistItem> ?? []
-        return set.sorted { $0.sortIndex < $1.sortIndex }
-    }
-
-    private func incompleteRows(in section: PackingChecklistSection) -> [PackingChecklistItem] {
-        rows(in: section).filter { !$0.isCompleted }
-    }
-
-    private func completedRows(in section: PackingChecklistSection) -> [PackingChecklistItem] {
-        rows(in: section).filter { $0.isCompleted }
-    }
-
-    private func uuidOfFirstRow(for tab: String) -> UUID? {
-        let kind = PackingChecklistKind.fromSegment(tab)
-        guard let section = sections(kind: kind).first else { return nil }
-        return rows(in: section).first?.id
-    }
-
-    private func scheduleFocusFirstRow(for tab: String) {
-        guard let id = uuidOfFirstRow(for: tab) else { return }
-        DispatchQueue.main.async {
-            focusedRowID = id
-        }
-    }
-
-    // MARK: - Persistence (debounced typing, flush on checkpoints)
-
-    private func invalidateDebouncedLocalSaveTask() {
-        debouncedLocalSaveTask?.cancel()
-        debouncedLocalSaveTask = nil
-    }
-
-    private func scheduleDebouncedCoreDataSaveAfterTyping() {
-        debouncedLocalSaveTask?.cancel()
-        debouncedLocalSaveTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: textTypingDebounceNanoseconds)
-            guard !Task.isCancelled else { return }
-            saveCoreDataLocallyOnly()
-            debouncedLocalSaveTask = nil
-        }
-    }
-
-    private func commitInlineTextEditsToStore() {
-        invalidateDebouncedLocalSaveTask()
-        saveCoreDataLocallyOnly()
-    }
-
-    private func saveCoreDataLocallyOnly() {
-        guard viewContext.hasChanges else { return }
-        do {
-            try viewContext.save()
-        } catch {
-            print("❌ PackingChecklistView Core Data save failed: \(error.localizedDescription)")
-        }
-    }
-
-    private func flushPendingChecklistPersistAndRemoteSync() {
-        invalidateDebouncedLocalSaveTask()
-        saveCoreDataLocallyOnly()
-        for section in sectionsFetched {
-            SyncService.shared.syncPackingChecklistSectionIfNeeded(section)
-        }
-        for section in sectionsFetched {
-            for row in rows(in: section) {
-                SyncService.shared.syncPackingChecklistItemIfNeeded(row)
-            }
-        }
-    }
-
-    private func ensureSeedRowsForAllSections() {
-        for section in sectionsFetched {
-            ensureSeedRowIfNeeded(section: section)
-        }
-    }
-
-    private func ensureSeedRowIfNeeded(section: PackingChecklistSection) {
-        guard rows(in: section).isEmpty else { return }
-        let kind = PackingChecklistKind(rawValue: section.kind) ?? .items
-        let obj = PackingChecklistItem(context: viewContext)
-        obj.id = UUID()
-        obj.text = ""
-        obj.isCompleted = false
-        obj.kind = kind.rawValue
-        obj.sortIndex = 0
-        obj.wardrobe = selectedWardrobe
-        obj.section = section
-        if let userId = authSession.userId?.uuidString {
-            obj.userId = userId
-        }
-        setCreatedAndUpdatedAt(obj)
-        invalidateDebouncedLocalSaveTask()
-        saveCoreDataLocallyOnly()
-    }
-
-    private func reassignSortIndices(_ items: [PackingChecklistItem]) {
-        for (i, o) in items.enumerated() {
-            o.sortIndex = Int32(i)
-            setUpdatedAt(o)
-        }
-    }
-
-    private func appendRowBelow(rowID: UUID, section: PackingChecklistSection) {
-        guard !reorderEditingActive else { return }
-        var list = rows(in: section)
-        guard let idx = list.firstIndex(where: { $0.id == rowID }) else { return }
-        invalidateDebouncedLocalSaveTask()
-
-        let kind = PackingChecklistKind(rawValue: section.kind) ?? .items
-        let obj = PackingChecklistItem(context: viewContext)
-        obj.id = UUID()
-        obj.text = ""
-        obj.isCompleted = false
-        obj.kind = kind.rawValue
-        obj.wardrobe = selectedWardrobe
-        obj.section = section
-        if let userId = authSession.userId?.uuidString {
-            obj.userId = userId
-        }
-        setCreatedAndUpdatedAt(obj)
-        list.insert(obj, at: idx + 1)
-        reassignSortIndices(list)
-        saveCoreDataLocallyOnly()
-        DispatchQueue.main.async {
-            focusedRowID = obj.id
-        }
-    }
-
-    private func moveIncompleteRows(
-        section: PackingChecklistSection,
-        source: IndexSet,
-        destination: Int
-    ) {
-        invalidateDebouncedLocalSaveTask()
-        var incomplete = incompleteRows(in: section)
-        let completed = completedRows(in: section)
-        incomplete.move(fromOffsets: source, toOffset: destination)
-        reassignSortIndices(incomplete + completed)
-        saveCoreDataLocallyOnly()
-    }
-
-    private func moveCompletedRows(
-        section: PackingChecklistSection,
-        source: IndexSet,
-        destination: Int
-    ) {
-        invalidateDebouncedLocalSaveTask()
-        let incomplete = incompleteRows(in: section)
-        var completed = completedRows(in: section)
-        completed.move(fromOffsets: source, toOffset: destination)
-        reassignSortIndices(incomplete + completed)
-        saveCoreDataLocallyOnly()
-    }
-
-    // MARK: - Edit-mode list (cross-section reorder)
-
-    private func editModeListRows(kind: PackingChecklistKind) -> [ChecklistListRow] {
-        var result: [ChecklistListRow] = []
-        for section in sections(kind: kind) {
-            result.append(ChecklistListRow(
-                id: "header-\(section.objectID.uriRepresentation().absoluteString)",
-                kind: .sectionHeader(section)
-            ))
-            for item in incompleteRows(in: section) {
-                result.append(ChecklistListRow(
-                    id: "item-\(item.objectID.uriRepresentation().absoluteString)",
-                    kind: .item(item)
-                ))
-            }
-            for item in completedRows(in: section) {
-                result.append(ChecklistListRow(
-                    id: "item-\(item.objectID.uriRepresentation().absoluteString)",
-                    kind: .item(item)
-                ))
-            }
-        }
-        return result
-    }
-
-    private func applyEditModeMove(kind: PackingChecklistKind, from source: IndexSet, to destination: Int) {
-        invalidateDebouncedLocalSaveTask()
-        var rows = editModeListRows(kind: kind)
-        guard source.allSatisfy({ rows[$0].isItem }) else { return }
-        rows.move(fromOffsets: source, toOffset: destination)
-        persistEditModeRowOrder(rows, kind: kind)
-        saveCoreDataLocallyOnly()
-    }
-
-    /// Assigns each item to the section above it in the flat list, then incomplete-before-completed per section.
-    private func persistEditModeRowOrder(_ rows: [ChecklistListRow], kind: PackingChecklistKind) {
-        var currentSection: PackingChecklistSection?
-        var itemsBySection: [NSManagedObjectID: [PackingChecklistItem]] = [:]
-
-        for row in rows {
-            switch row.kind {
-            case .sectionHeader(let section):
-                currentSection = section
-            case .item(let item):
-                guard let section = currentSection else { continue }
-                item.section = section
-                item.kind = kind.rawValue
-                itemsBySection[section.objectID, default: []].append(item)
-            }
-        }
-
-        for section in sections(kind: kind) {
-            let ordered = itemsBySection[section.objectID] ?? []
-            let incomplete = ordered.filter { !$0.isCompleted }
-            let completed = ordered.filter { $0.isCompleted }
-            reassignSortIndices(incomplete + completed)
-        }
-    }
-
-    @ViewBuilder
-    private func checklistList(kind: PackingChecklistKind) -> some View {
-        if reorderEditingActive {
-            editModeChecklistList(kind: kind)
+    private func persistLocalDocument(for kind: PackingChecklistDocKind) {
+        let body = PackingChecklistDocumentBody(blocks: blocks)
+        let doc: PackingChecklistDocument
+        if let oid = documentObjectID,
+           let existing = try? viewContext.existingObject(with: oid) as? PackingChecklistDocument,
+           existing.kind == kind.rawValue {
+            doc = existing
         } else {
-            normalChecklistList(kind: kind)
+            doc = fetchOrCreateDocument(kind: kind)
+            documentObjectID = doc.objectID
         }
+        saveBody(body, into: doc)
+        isDirty = false
     }
 
-    @ViewBuilder
-    private func editModeChecklistList(kind: PackingChecklistKind) -> some View {
-        let rows = editModeListRows(kind: kind)
-
-        List {
-            ForEach(rows) { row in
-                switch row.kind {
-                case .sectionHeader(let section):
-                    checklistSectionHeader(section)
-                        .listRowInsets(EdgeInsets(top: 10, leading: 12, bottom: 4, trailing: 12))
-                        .listRowSeparator(.hidden, edges: .top)
-                        .listRowBackground(Color(UIColor.systemBackground))
-                        .moveDisabled(true)
-
-                case .item(let item):
-                    let section = item.section ?? sections(kind: kind).first!
-                    checklistRow(item: item, section: section)
-                        .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 8))
-                        .listRowSeparator(.visible, edges: .bottom)
-                        .listRowBackground(Color(UIColor.systemBackground))
-                }
-            }
-            .onMove { source, destination in
-                applyEditModeMove(kind: kind, from: source, to: destination)
-            }
-        }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .background(Color(UIColor.systemBackground))
+    private func persistAndSyncCurrentDocument() {
+        persistLocalDocument(for: currentKind)
+        guard let oid = documentObjectID else { return }
+        SyncService.shared.syncPackingChecklistDocumentIfNeeded(objectID: oid)
     }
 
-    @ViewBuilder
-    private func normalChecklistList(kind: PackingChecklistKind) -> some View {
-        let sectionList = sections(kind: kind)
-
-        List {
-            ForEach(sectionList, id: \.objectID) { section in
-                let incomplete = incompleteRows(in: section)
-                let completed = completedRows(in: section)
-
-                Section(header: checklistSectionHeader(section)) {
-                    ForEach(incomplete, id: \.objectID) { item in
-                        checklistRow(item: item, section: section)
-                            .focused($focusedRowID, equals: item.id)
-                            .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 8))
-                            .listRowSeparator(.visible, edges: .bottom)
-                            .listRowBackground(Color(UIColor.systemBackground))
-                    }
-                    .onMove { source, destination in
-                        moveIncompleteRows(section: section, source: source, destination: destination)
-                    }
-
-                    if !completed.isEmpty {
-                        ForEach(completed, id: \.objectID) { item in
-                            checklistRow(item: item, section: section)
-                                .focused($focusedRowID, equals: item.id)
-                                .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 8))
-                                .listRowSeparator(.visible, edges: .bottom)
-                                .listRowBackground(Color(UIColor.systemBackground))
-                        }
-                        .onMove { source, destination in
-                            moveCompletedRows(section: section, source: source, destination: destination)
-                        }
-                    }
-                }
-            }
-        }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .background(Color(UIColor.systemBackground))
-        .scrollDismissesKeyboard(.interactively)
-    }
-
-    @ViewBuilder
-    private func checklistRow(item: PackingChecklistItem, section: PackingChecklistSection) -> some View {
-        let completed = item.isCompleted
-        let rowId = item.id
-
-        let rowCore = HStack(alignment: .center, spacing: 12) {
-            Button {
-                guard let id = rowId else { return }
-                toggleComplete(rowID: id, section: section)
-            } label: {
-                Image(systemName: completed ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
-                    .foregroundStyle(completed ? Color.accentColor : Color.secondary)
-            }
-            .buttonStyle(.plain)
-            .disabled(reorderEditingActive)
-            .accessibilityLabel(completed ? "Mark incomplete" : "Mark complete")
-
-            TextField(
-                "",
-                text: textBinding(for: item)
-            )
-            .lineLimit(1)
-            .textFieldStyle(.plain)
-            .foregroundStyle(completed ? Color.secondary : Color.primary)
-            .strikethrough(completed, pattern: .solid, color: .secondary)
-            .disabled(reorderEditingActive)
-            .accessibilityHint("Checklist entry")
-            .submitLabel(.return)
-            .onSubmit {
-                guard let id = rowId else { return }
-                appendRowBelow(rowID: id, section: section)
-            }
-        }
-        .opacity(completed ? 0.75 : 1)
-
-        Group {
-            if reorderEditingActive {
-                rowCore
-            } else {
-                rowCore
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) {
-                            guard let id = rowId else { return }
-                            deleteRow(rowID: id, section: section)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                    }
-            }
-        }
-    }
-
-    private func textBinding(for item: PackingChecklistItem) -> Binding<String> {
-        Binding(
-            get: { item.text ?? "" },
-            set: { newVal in
-                item.text = newVal
-                setUpdatedAt(item)
-                scheduleDebouncedCoreDataSaveAfterTyping()
-            }
+    /// One-time lift from legacy section/item rows into a document body.
+    private func migrateLegacyDocument(kind: PackingChecklistDocKind) -> PackingChecklistDocumentBody? {
+        let sectionReq: NSFetchRequest<PackingChecklistSection> = PackingChecklistSection.fetchRequest()
+        sectionReq.predicate = NSPredicate(
+            format: "wardrobe == %@ AND kind == %d",
+            selectedWardrobe,
+            kind.rawValue
         )
-    }
+        sectionReq.sortDescriptors = [NSSortDescriptor(keyPath: \PackingChecklistSection.sortIndex, ascending: true)]
+        guard let sections = try? viewContext.fetch(sectionReq), !sections.isEmpty else { return nil }
 
-    private func toggleComplete(rowID: UUID, section: PackingChecklistSection) {
-        guard !reorderEditingActive else { return }
-        invalidateDebouncedLocalSaveTask()
-        var list = rows(in: section)
-        guard let idx = list.firstIndex(where: { $0.id == rowID }) else { return }
-        list[idx].isCompleted.toggle()
-        let reordered = list.filter { !$0.isCompleted } + list.filter { $0.isCompleted }
-        reassignSortIndices(reordered)
-        withAnimation(.default) {
-            saveCoreDataLocallyOnly()
+        var blocks: [PackingChecklistBlock] = []
+        for section in sections {
+            let title = (section.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            blocks.append(.section(id: section.id ?? UUID(), title: title.isEmpty ? "General" : title))
+            let items = ((section.items as? Set<PackingChecklistItem>) ?? [])
+                .sorted { $0.sortIndex < $1.sortIndex }
+            if items.isEmpty {
+                blocks.append(.item(id: UUID(), text: "", checked: false))
+            } else {
+                for item in items {
+                    blocks.append(.item(
+                        id: item.id ?? UUID(),
+                        text: item.text ?? "",
+                        checked: item.isCompleted
+                    ))
+                }
+            }
         }
-    }
-
-    private func deleteRow(rowID: UUID, section: PackingChecklistSection) {
-        invalidateDebouncedLocalSaveTask()
-        var list = rows(in: section)
-        guard let idx = list.firstIndex(where: { $0.id == rowID }) else { return }
-        let doomed = list[idx]
-        if let remoteId = doomed.id {
-            SyncService.shared.deletePackingChecklistItemFromSupabase(checklistRowId: remoteId)
-        }
-        list.remove(at: idx)
-        viewContext.delete(doomed)
-        if list.isEmpty {
-            ensureSeedRowIfNeeded(section: section)
-            list = rows(in: section)
-        } else {
-            reassignSortIndices(list)
-        }
-
-        let focusIdx = min(idx, list.count - 1)
-        let focusID = list[focusIdx].id
-        saveCoreDataLocallyOnly()
-        DispatchQueue.main.async {
-            focusedRowID = focusID
-        }
+        return PackingChecklistDocumentBody(blocks: blocks)
     }
 }
 
 #Preview {
-    let pc = PersistenceController.preview
-    let ctx = pc.container.viewContext
-    let request: NSFetchRequest<Wardrobe> = Wardrobe.fetchRequest()
-    request.fetchLimit = 1
-    let wardrobe = (try? ctx.fetch(request))?.first ?? Wardrobe(context: ctx)
-    return PackingChecklistView(selectedWardrobe: wardrobe)
-        .environment(\.managedObjectContext, ctx)
-        .environmentObject(AuthSession())
+    let context = PersistenceController.preview.container.viewContext
+    let wardrobe = Wardrobe(context: context)
+    wardrobe.id = UUID()
+    wardrobe.name = "Preview Closet"
+    wardrobe.type = "closet"
+    return NavigationStack {
+        PackingChecklistView(
+            selectedWardrobe: wardrobe,
+            tabBarHideState: TabBarHideState()
+        )
+            .environment(\.managedObjectContext, context)
+    }
 }

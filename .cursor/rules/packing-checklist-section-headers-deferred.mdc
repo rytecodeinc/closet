@@ -1,0 +1,22 @@
+---
+description: Deferred — packing checklist List-style section headers / TextKit polish
+globs: closet/Item View/PackingChecklistView.swift,closet/Item View/PackingChecklistBlockField.swift,closet/Item View/PackingChecklistDocumentModel.swift
+alwaysApply: false
+---
+
+# Deferred: packing checklist section-header UX (+ optional TextKit)
+
+**Status:** Deferred — revisit this feature later. Keyboard-jump softening shipped; do **not** build section chrome / TextKit / reorder now.
+
+## Current (keep)
+- One `PackingChecklistDocument` per wardrobe + Items/Tasks tab; JSON `section` + `item` blocks; sync on disappear.
+- Item rows: checkbox + `PackingChecklistBlockField`; Return = new item; empty Backspace = delete.
+- Softened focus handoff: `VStack` (not LazyVStack), no animated `scrollTo`, no resign-during-handoff in `updateUIView`, no needless attributedText rebuild.
+
+## Revisit later (explicitly deferred)
+1. **List-style section headers** — rename-section UI, sticky/clear chrome (not free-typed section fields fighting item focus). Section blocks may stay in document data.
+2. Optional **TextKit / single `UITextView`** if multi-field keyboard feel still isn’t Notes-smooth enough.
+3. Reorder mode / per-row trash buttons — only if product asks.
+
+## When done
+Remove this rule.
