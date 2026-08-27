@@ -3,6 +3,7 @@
 -- Exempt until resolved (never deleted by this cap):
 --   unread friend_request
 --   unread outfit_suggestion (pending Redress)
+--   unread event_invite
 -- Likes, shares, friend_accepted, and read/responded Redress are eligible.
 -- Requires: notifications table.
 -- Run in the Supabase SQL editor.
@@ -20,7 +21,8 @@ IMMUTABLE
 AS $$
   SELECT
     (p_type = 'friend_request' AND p_is_read = false)
-    OR (p_type = 'outfit_suggestion' AND p_is_read = false);
+    OR (p_type = 'outfit_suggestion' AND p_is_read = false)
+    OR (p_type = 'event_invite' AND p_is_read = false);
 $$;
 
 CREATE OR REPLACE FUNCTION public.prune_notifications_for_user_type(

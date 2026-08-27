@@ -368,7 +368,8 @@ WITH CHECK (
     )
 );
 
--- Event Items (join with events table to check user_id)
+-- Event Items / Outfits: owner-only until SUPABASE_EVENT_PARTICIPANTS.sql is applied.
+-- That migration adds accepted-participant read + own-row write policies.
 DROP POLICY IF EXISTS "Users can manage own event items" ON event_items;
 CREATE POLICY "Users can manage own event items"
 ON event_items FOR ALL
@@ -387,7 +388,6 @@ WITH CHECK (
     )
 );
 
--- Event Outfits (join with events table to check user_id)
 DROP POLICY IF EXISTS "Users can manage own event outfits" ON event_outfits;
 CREATE POLICY "Users can manage own event outfits"
 ON event_outfits FOR ALL

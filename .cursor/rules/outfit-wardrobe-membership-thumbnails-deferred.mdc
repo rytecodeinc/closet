@@ -1,0 +1,24 @@
+---
+description: Deferred — wardrobe membership save prompt with item thumbnails
+globs: closet/Outfit Views/OutfitAddView.swift
+alwaysApply: false
+---
+
+# Deferred: wardrobe membership save prompt — item thumbnails
+
+**Status:** Deferred. Tried a compact confirmation **sheet** with up to 3 missing-item thumbnails (+N overflow). User preferred the system **alert** (text only). Do not reintroduce the small sheet unless asked.
+
+## Current (keep)
+
+- Non-default wardrobe create/edit: `wardrobeMembershipOnSave` on `OutfitAddView`.
+- Save → if canvas items are not in that wardrobe → alert **“Add Items to Wardrobe?”** with count + wardrobe name; **Add & Save** / **Cancel**.
+
+## Revisit later
+
+1. Show thumbnails of missing items (max 3, optional +N) **without** the small-sheet style that was rejected.
+2. Prefer patterns that feel like a system confirm or match other in-app confirms (e.g. full medium sheet, inline banner, or a design that isn’t a short detent card).
+3. Keep Add & Save / Cancel behavior and membership linking + sync unchanged.
+
+## When done
+
+Remove this rule.

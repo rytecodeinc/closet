@@ -138,6 +138,30 @@ enum OutfitSanitizer {
         }
     }
 
+    // MARK: - Public collage render
+
+    /// Renders the outfit collage from current `items` + `transformationData` (same pipeline as delete-time regen).
+    @MainActor
+    static func collageImage(
+        for outfit: Outfit,
+        canvasSize: CGFloat = UIScreen.main.bounds.width
+    ) -> UIImage? {
+        let remainingItemsSet = outfit.items as? Set<Item> ?? []
+        guard !remainingItemsSet.isEmpty else { return nil }
+        let remainingLookup = remainingItemLookup(remainingItemsSet)
+        let filteredSavedItems = sanitizedSavedItems(
+            transformationData: outfit.transformationData,
+            deletedIDs: [],
+            remainingLookup: remainingLookup
+        )
+        return renderCollageImage(
+            remainingItemsSet: remainingItemsSet,
+            remainingLookup: remainingLookup,
+            filteredSavedItems: filteredSavedItems,
+            canvasSize: canvasSize
+        )
+    }
+
     // MARK: - Identifiers
 
     private static func deletedItemIdentifiers(_ items: Set<Item>) -> Set<String> {

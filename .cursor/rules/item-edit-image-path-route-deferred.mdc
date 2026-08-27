@@ -1,0 +1,33 @@
+---
+description: Deferred — Item Detail / Item Add Edit Image as Closet/Wishlist path routes
+globs: closet/Item View/ItemDetailView.swift,closet/Item View/Add Item/ItemAddView.swift,closet/Filter/ItemGridFilterRoutes.swift,closet/Closet View/ClosetView.swift,closet/Wishlist View/WishlistView.swift,closet/Image Picker/ImageCropperView.swift
+alwaysApply: false
+---
+
+# Deferred: Item Detail / Item Add Edit Image path route
+
+**Status:** Deferred — revisit later. Do **not** build this now.
+
+## Goal
+
+On Closet / Wishlist tab `NavigationPath` only, push crop/edit onto the stack (not a sheet — too easy to swipe-dismiss; not nested `navigationDestination(item:)` — freeze or blank-pop).
+
+Scope: **Item Detail** and **Item Add** Edit Image only.
+
+## Current (keep)
+
+- Item Detail Edit Image: **sheet** (`isCropEditorPresented`). Nested `item:` cropper on mid-stack Item Detail froze; clearing it on appear blank-popped.
+- Item Add Edit Image: nested `navigationDestination(item: $cropperDestination)` (Add is often the only push on that stack).
+- Outfit Detail Edit Image: **sheet** — out of scope.
+- Item Detail hosts **without** `navigationPath` (Notifications, Outfit→item, WhatSize, Profile, etc.) — out of scope.
+
+## Revisit later
+
+1. Add an `ItemGridFilterRoute` (e.g. `.itemImageEdit(itemURI:slot:sessionID:)`) and register it on Closet / Wishlist next to `.itemDetail`.
+2. Append from Item Detail / Item Add when `navigationPath` is set. Leave the path entry until Back / `dismiss()`. Do **not** nil on appear.
+3. Load the image from the item + front/worn slot in the destination. Do **not** put `UIImage` on the Hashable route.
+4. Keep discard-if-dirty + Save then `dismiss()`. Do not convert Outfit or non-tab-path hosts unless asked.
+
+## When done
+
+Remove this rule. Update `closet-wishlist-path-add.mdc` so Edit Image is listed as a path route.

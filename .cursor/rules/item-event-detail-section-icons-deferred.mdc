@@ -1,0 +1,24 @@
+---
+description: Deferred — Item Detail section-header icons vs Event Detail row icons
+globs: closet/Item View/ItemDetailView.swift,closet/Outfit Views/Calendar Views/EventDetailView.swift,closet/Outfit Views/Calendar Views/EventAddView.swift
+alwaysApply: false
+---
+
+# Deferred: Item Detail section icons + Event Detail coordination
+
+**Status:** Deferred. Tried left-of-title SF Symbols on Item Detail section headers (ATTRIBUTES, PAIRS, OUTFITS, LINKS, HISTORY); **removed**. Do not re-add unless asked.
+
+## Why parked
+
+Event Detail / Event Add use gray 22pt icons on **metadata rows** (calendar, clock, location, theme, notes). Item Detail uses **collapsible List section headers** with plus/minus on the right. Putting the same icon language on Item headers mixed two patterns and felt unfinished.
+
+## Revisit later
+
+1. Decide one icon system for detail screens: Event **row** icons vs Item **section header** icons (or both, with shared size/color).
+2. If Item headers get icons again, candidates used in the brief trial: `tag` (attributes), `square.on.square` (pairs), `hanger` (outfits), `link` (links), `clock` (history). Keep plus/minus expand affordance.
+3. Align Event Detail (and Event Add) if the shared language should apply there too — including future event-scoped Redress context headers.
+4. Consider Outfit Detail the same pass if section headers should match Item Detail.
+
+## When done
+
+Remove this rule.

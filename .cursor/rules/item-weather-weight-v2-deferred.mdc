@@ -1,0 +1,37 @@
+---
+description: Deferred v2 — item weather + weight attributes (capability-gated off in v1)
+globs: closet/Services/AppEnvironment.swift,closet/Item View/AttributesSectionView.swift,closet/Item View/ItemDetailView.swift,closet/Item View/Add Item/**/*.swift,closet/Filter/ItemFilterView.swift,closet/Selection Views/Settings/SettingsView.swift
+alwaysApply: false
+---
+
+# Deferred v2: item weather + weight attributes
+
+**Status:** Gated off in v1. Revisit in **v2**. Do **not** expose in UI until product turns the capability on.
+
+## Gate (use this)
+
+`AppCapabilities` in `AppEnvironment.swift`:
+
+- `showsWeatherAttribute` — `false` in both TestFlight and Production (v1)
+- `showsWeightAttribute` — `false` in both TestFlight and Production (v1)
+
+Views/services already branch on `@Environment(\.appCapabilities)` / `AppEnvironment.capabilities`. **Do not** add one-off Item Detail checks — use these flags.
+
+## What is hidden in v1
+
+- Item Detail / Item Add attribute rows + sheets (`SetWeatherView`, `SetWeightView`)
+- Item Detail share attribute picker + share text for weather/weight
+- Item filter “Weight” toggle
+- Settings user weight row
+
+## Still in codebase / sync
+
+- Core Data fields + Supabase sync for item weather/weight remain. Data may exist on items; UI just does not surface it in v1.
+
+## v2 enable
+
+Set `showsWeatherAttribute: true` and `showsWeightAttribute: true` on the Production preset (and TestFlight if desired). Smoke-test Item Detail, Item Add, Filter, Settings, share export.
+
+## When done
+
+Remove this rule.

@@ -1,19 +1,17 @@
 ---
-description: Deferred — restyle notifications header; add Events filter once friends-on-events is wired
-globs: closet/Shared/UserNotificationsBellButton.swift
+description: Deferred — restyle notifications header (Events filter is wired)
+globs: closet/Shared/NotificationsView.swift
 alwaysApply: false
 ---
 
-# Deferred: notifications header restyle + Events filter
+# Deferred: notifications header restyle
 
-**Status:** Deferred. `UserNotificationsView` has a segmented filter (**All / Items / Outfits / Friends**) with stock nav title chrome. No Events segment yet.
+**Status:** Partial. `NotificationsView` has **All / Items / Outfits / Events / Friends** filter; `event_invite` rows show under **Events** with Accept/Decline.
 
 ## Goal when revisiting
 
-1. **Restyle the notifications header** (title + filter row): improve visual hierarchy, spacing, and picker presentation (SelectionHeader-style or similar).
-2. **Add an Events segment** to the filter picker once **adding friends to events** (and event-related notifications) is wired end-to-end.
-3. Route / filter event notification rows into that segment; keep existing Items / Outfits / Friends mapping and empty states.
-4. Preserve unread/badge behavior and deep links.
+1. **Restyle the notifications header** (title + filter row): improve visual hierarchy, spacing, and picker presentation (SelectionHeader-style or similar). Five segments may need a scrollable or menu-style filter on small screens.
+2. Preserve unread/badge behavior and deep links.
 
 ## When done
 

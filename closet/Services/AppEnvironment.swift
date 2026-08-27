@@ -29,9 +29,9 @@ struct AppCapabilities: Equatable {
     let enablesCloudSync: Bool
     let enablesFriendsAndSharing: Bool
     let enablesTombstonePurge: Bool
-    /// Item weather range attribute (beta; hidden in TestFlight tier).
+    /// Item weather range attribute (deferred to v2; gated via `showsWeatherAttribute`).
     let showsWeatherAttribute: Bool
-    /// Item weight attribute (beta; hidden in TestFlight tier).
+    /// Item weight attribute (deferred to v2; gated via `showsWeightAttribute`).
     let showsWeightAttribute: Bool
     /// Color / season visibility settings (hidden in TestFlight tier).
     let showsColorSeasonSettings: Bool
@@ -70,8 +70,8 @@ struct AppCapabilities: Equatable {
         enablesCloudSync: true,
         enablesFriendsAndSharing: true,
         enablesTombstonePurge: true,
-        showsWeatherAttribute: true,
-        showsWeightAttribute: true,
+        showsWeatherAttribute: false,
+        showsWeightAttribute: false,
         showsColorSeasonSettings: true,
         showsDeveloperSettings: true,
         requiresCategoryOnboarding: true,

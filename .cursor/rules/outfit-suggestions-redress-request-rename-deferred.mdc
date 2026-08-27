@@ -1,0 +1,56 @@
+---
+description: Deferred — rename outfit_suggestions → redress_request (table, RPCs, notifications, Swift)
+globs: SUPABASE_OUTFIT_SUGGESTIONS*.sql,SUPABASE_*REDRESS*.sql,SUPABASE_*OUTFIT*.sql,closet/Services/SupabaseService.swift,closet/Services/OutfitSuggestionMaterializer.swift,closet/Shared/NotificationsView.swift,closet/Outfit Views/PendingOutfitDetailView.swift,closet/Outfit Views/OutfitAddView.swift,closet/Profile View/VisibleProfileModels.swift,redress-item-photos-api/worker.js,supabase/functions/send-push/index.ts
+alwaysApply: false
+---
+
+# Deferred: rename `outfit_suggestions` → `redress_request`
+
+**Status:** Parked. Do not implement unless the user asks. User-facing copy already uses **Redress** in alerts; backend/Swift names still say `outfit_suggestion*`.
+
+## Intent
+
+Align Redress naming with the friend-request pattern:
+
+| Layer | Friends (today) | Redress (today → target) |
+|-------|-----------------|--------------------------|
+| Table | `friendships` | `outfit_suggestions` → **`redress_requests`** |
+| Notification type | `friend_request` | `outfit_suggestion` → **`redress_request`** |
+| Follow-up | `friend_accepted` | *(none)* → optional **`redress_accepted`** |
+| Status | `declined` | `declined` (was `rejected`; migrated) |
+| Role columns | `user_id`, `friend_user_id` | `suggester_user_id`, `recipient_user_id` → keep or rename to `requester_user_id` |
+
+## Supabase scope
+
+- **Table:** `ALTER TABLE outfit_suggestions RENAME TO redress_requests` (+ indexes, constraints, RLS policy names)
+- **RPCs:** `create_outfit_suggestion` → `create_redress_request`, `update_pending_outfit_suggestion`, `respond_to_outfit_suggestion`, `get_outfit_suggestion_detail`, `get_viewer/recipient_outfit_suggestions_for_wardrobe`, `outfit_suggestion_matches_wardrobe`, `notify_outfit_suggestion_created`, `withdraw_redress` (normalize?)
+- **Profile setting:** `allow_outfit_suggestions` → `allow_redress_requests` on `user_profiles`
+- **Notification payload:** `suggestion_id` → `redress_request_id`; type `outfit_suggestion` → `redress_request`
+- **Retention:** update `SUPABASE_NOTIFICATIONS_PER_TYPE_CAP.sql` exempt list
+- **Migration:** migrate existing `notifications` rows and/or dual-read in app during rollout
+
+## R2 / worker
+
+- Path today: `{userId}/outfit-suggestions/{id}.jpg`
+- Decide: rename to `redress-requests` (+ blob migration), keep old path, or dual-read in `redress-item-photos-api/worker.js`
+
+## Swift scope (~15 files)
+
+- `SupabaseService`: RPC names, `.from("outfit_suggestions")`, cache keys
+- Types (optional in v1): `VisibleOutfitSuggestion` → `VisibleRedressRequest`, `OutfitSuggestionMaterializer` → `RedressRequestMaterializer`
+- `NotificationsView`: type checks, payload keys, filters
+- `send-push/index.ts`: default body for new type
+
+## Product decisions needed before build
+
+1. Table `redress_requests` + notification `redress_request` (confirm)
+2. Add `redress_accepted` notification? yes/no
+3. ~~`rejected` → `declined`?~~ **Done** — run `SUPABASE_OUTFIT_SUGGESTIONS.sql` migration block
+4. R2 path strategy
+5. Existing notification rows: SQL migrate vs dual-read vs TestFlight big bang
+6. Notification UX: keep tap-to-open vs inline Accept/Decline like `friend_request`
+7. Deploy order: Supabase first vs app same release
+
+## When done
+
+Remove this rule after rename ships and old names are gone.

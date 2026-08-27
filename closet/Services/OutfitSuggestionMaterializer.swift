@@ -21,11 +21,11 @@ enum OutfitSuggestionMaterializer {
         var errorDescription: String? {
             switch self {
             case .notAuthenticated:
-                return "Sign in to view this outfit suggestion."
+                return "Sign in to view this Redress."
             case .suggestionUnavailable:
-                return "This outfit suggestion is no longer available."
+                return "This Redress is no longer available."
             case .notRecipient:
-                return "This outfit suggestion is not for your account."
+                return "This Redress is not for your account."
             case .noItemsFound:
                 return "Could not find the items for this outfit in your closet."
             case .saveFailed(let message):

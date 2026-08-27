@@ -1,0 +1,49 @@
+---
+description: Closet/Wishlist pushes (add, filter, item/outfit detail, packing) must use NavigationPath routes (not item: + clear-on-appear)
+globs: closet/Closet View/**/*.swift,closet/Wishlist View/**/*.swift,closet/Item View/ItemGridView.swift,closet/Item View/ItemDetailView.swift,closet/Item View/ItemPackView.swift,closet/Filter/ItemGridFilterRoutes.swift,closet/Item View/Add Item/**/*.swift,closet/Outfit Views/OutfitAddView.swift,closet/Outfit Views/OutfitDetailView.swift,closet/Profile View/ProfileRoutes.swift,closet/Profile View/ProfileView.swift
+alwaysApply: false
+---
+
+# Closet / Wishlist / Profile grid — tab path routes (not item: + clear-on-appear)
+
+## Problem (iOS 18 / 26)
+
+`navigationDestination(item: $…)` with `.onAppear { binding = nil }` blank-flashes and pops on newer iOS. The binding becoming `nil` means “pop.” That pattern looked fine on iOS 17 but fails on iOS 26.
+
+## Fix (same as Calendar / Profile)
+
+Closet and Wishlist own `NavigationStack(path: $navigationPath)`. Register **one** `navigationDestination(for: ItemGridFilterRoute.self)` that covers:
+
+| Push | Route |
+|---|---|
+| Filter (items) | `.itemFilter` |
+| Filter (outfits) | `.outfitFilter` |
+| + → ItemAddView | `.addItem` |
+| Queued multi-add → ItemAddView | `.addItemQueued` |
+| Outfits + → OutfitAddView | `.addOutfit(sessionID:)` |
+| Grid / pair → ItemDetailView | `.itemDetail(uri:)` |
+| Grid / item outfits → OutfitDetailView | `.outfitDetail(uri:)` |
+| Item detail Create Outfit | `.createOutfitFromItem(itemURI:sessionID:)` |
+| Items Pack → ItemPackView | `.packing` |
+| Pack Checklist → PackingChecklistView | `.packingChecklist` |
+| OutfitAddView “View Existing” duplicate | `.outfitDetail(uri:)` (reuse) |
+
+Profile owns pending Redress on `ProfileRoute.pendingRedress(...)`.
+
+- Toolbar / grid / detail / OutfitAddView only `navigationPath.append(...)`.
+- Leave path entries until system Back / `dismiss()`.
+- Do **not** nil route bindings in `onAppear`.
+
+`ItemGridView` requests pushes via `onOpenAddItem` / `onOpenAddOutfit` / `onOpenItemDetail` / `onOpenOutfitDetail` / `onOpenPacking` / `onOpenPendingRedress` (and filter callbacks). When those callbacks are set, it does **not** register the matching `navigationDestination(item:)`.
+
+`ItemDetailView` / `OutfitDetailView` / `OutfitAddView` take optional `navigationPath`. When set (Closet/Wishlist), nested Create Outfit / pair / outfit / duplicate-existing taps append routes. When nil (Profile, Redress, sheets, etc.), keep local `item:` destinations.
+
+Item Detail **Edit Image** is currently a **sheet** (nested `item:` froze). Path-route crop/edit for Item Detail + Item Add is **deferred** — see `item-edit-image-path-route-deferred.mdc`. Do not convert Outfit or non-tab-path hosts.
+
+Queued add shares `ImageQueueCoordinator` owned by Closet/Wishlist so crop → Add Item → next crop still works after path pop.
+
+## Don’t
+
+- `NavigationLink(destination: ItemAddView…)` on the Closet toolbar
+- `navigationDestination(item: $itemAddNavigation)` / `$outfitAddNavigation` / `$packingNavigation` / detail bindings + clear-on-appear on the Closet/Wishlist stack
+- Nesting another `NavigationStack` inside Add Item / Add Outfit for these tab pushes

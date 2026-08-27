@@ -11,6 +11,7 @@ import Foundation
 enum AccountDeletionService {
     /// Entity names that include a `userId` attribute matching the signed-in account.
     private static let userScopedEntityNames = [
+        "PackingChecklistDocument",
         "PackingChecklistItem",
         "PackingChecklistSection",
         "PackingAssignment",

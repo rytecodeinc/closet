@@ -10,8 +10,8 @@ alwaysApply: false
 
 - `ContentView` presents **bare** `CalendarView()` (no wrapper `NavigationStack`).
 - **One** `NavigationStack(path:)` **inside** `CalendarView`, same as Closet / Wishlist.
-- Path: **Calendar → EventDetail and/or EventAdd/Edit → Location or Items**.
-- Do **not** nest `NavigationStack` inside `EventDetailView` / `EventAddView`.
+- Path: **Calendar → EventDetail / OotdDetail and/or EventAdd/Edit or OotdAdd → Location or Items**.
+- Do **not** nest `NavigationStack` inside `EventDetailView` / `OotdDetailView` / `EventAddView` / `OotdAddView`.
 - Do **not** register Location / Items with `navigationDestination(item:)` on Event Add.
 
 ## Path routes (`CalendarRoute`)
@@ -20,15 +20,20 @@ Register **all** of these on Calendar’s stack with `navigationDestination(for:
 
 | Push | Route |
 |---|---|
-| Calendar → EventDetail | `.eventDetail(uri)` |
+| Calendar → EventDetail (or OotdDetail when `event.isOutfitOfTheDay`) | `.eventDetail(uri)` |
 | Calendar → EventAdd (create) | `.createEvent(id:initialDate:)` |
-| EventDetail → EventAdd (edit) | `.editEvent(uri)` |
+| Calendar → OotdAdd (create) | `.createOotd(id:initialDate:)` |
+| EventDetail → EventAdd (edit); OotdDetail → OotdAdd (edit) | `.editEvent(uri)` |
 | EventAdd → Location | `.location` |
-| EventAdd → Items | `.items(uri)` |
+| EventAdd / OotdAdd → Items | `.items(uri)` |
+| Items → Item filter | `.itemsFilter` |
+| Items → Outfit filter | `.outfitsFilter` |
 
 Leave values on the path until system Back / `dismiss()` pops them. Do **not** nil path entries in `onAppear`.
 
 Event Add and Event Detail only **append** routes (via `navigationPath`). They do not present Location or Items themselves.
+
+Event items/outfits (`EventIndividualItemSelection`) is mid-stack. **Wardrobe title** is a **sheet** (same as Closet / Profile) — not a path hop and not nested `isPresented`. **Filters** append `CalendarRoute.itemsFilter` / `.outfitsFilter`. Filter/wardrobe state lives in `EventItemsSelectionDraft` on Calendar (same pattern as `EventLocationDraft`).
 
 Location search writes back through `EventLocationDraft` on the stack (`environmentObject`), not through nested destinations or parent closures.
 

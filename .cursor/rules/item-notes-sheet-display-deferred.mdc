@@ -1,0 +1,34 @@
+---
+description: Deferred — Item Detail Notes sheet display/edit styling (thin border, not blank box)
+globs: closet/Item View/Add Item/Set Attributes/SetNotesView.swift,closet/Item View/AttributesSectionView.swift,closet/Item View/ItemDetailView.swift
+alwaysApply: false
+---
+
+# Deferred: Item Detail Notes sheet — display-first styling
+
+**Status:** Deferred — revisit later. Do **not** build this now.
+
+## Problem
+
+Notes sheet (`SetNotesView`, opened from `AttributesSectionView` on Item Detail) reads as a **thick gray bordered blank square** — `TextEditor` on `systemGray6` with corner radius. Feels like an empty form field, not a notes display you can edit.
+
+## Current (keep)
+
+- Item Detail → Attributes → Notes → sheet with `SelectionPanelHeader`, `TextEditor`, Save.
+- Same `SetNotesView` is also used from Item Add — consider both when revisiting, but Item Detail UX is the driver.
+
+## Revisit later
+
+1. **Thinner, lighter chrome** — replace heavy gray fill with subtle separator stroke (e.g. `Color(.separator)` / `primary.opacity(0.08)`, ~0.5–1 pt) or list-style inset, not a thick gray block.
+2. **Display-first, edit-on-tap** — show existing notes as readable body text when non-empty; empty state with placeholder hint (not a bare box). Tap/focus enters edit mode.
+3. Match patterns used elsewhere for “read + edit” (Event notes, attribute detail rows) rather than always-on `TextEditor` chrome.
+4. Optional: align Item Add notes sheet if the same component should feel consistent.
+
+## Out of scope unless asked
+
+- Outfit notes (`SetOutfitNotesView`) — separate pass.
+- Notes row preview on the attributes list (truncated line) — fine as-is unless redesign includes it.
+
+## When done
+
+Remove this rule.

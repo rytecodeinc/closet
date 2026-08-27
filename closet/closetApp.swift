@@ -77,6 +77,16 @@ struct closetApp: App {
                             Task {
                                 await PushNotificationService.shared.syncStoredTokenIfNeeded()
                             }
+                            // Flush Core Data changes queued while offline.
+                            if networkMonitor.isConnected {
+                                Task {
+                                    do {
+                                        try await syncService.syncAllItems()
+                                    } catch {
+                                        print("⚠️ Foreground sync deferred: \(error.localizedDescription)")
+                                    }
+                                }
+                            }
                         }
                     }
                 }

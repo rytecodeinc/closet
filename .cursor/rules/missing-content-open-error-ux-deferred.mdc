@@ -1,6 +1,6 @@
 ---
 description: Deferred — dedicated not-found / couldn’t-open UX for items, outfits, Redress, etc.
-globs: closet/Shared/UserNotificationsBellButton.swift,closet/Outfit Views/PendingOutfitDetailView.swift,closet/Services/OutfitSuggestionMaterializer.swift
+globs: closet/Shared/NotificationsView.swift,closet/Outfit Views/PendingOutfitDetailView.swift,closet/Services/OutfitSuggestionMaterializer.swift
 alwaysApply: false
 ---
 
@@ -10,16 +10,16 @@ alwaysApply: false
 
 ## Current baseline
 
-From notifications (`UserNotificationsView`):
+From notifications (`NotificationsView`):
 
 - Item like: `notificationsError = "Could not open this item."` or destination `Text("This item is no longer available.")`
 - Outfit like: same pattern for outfits
-- Redress suggestion: `notificationsError = "Could not open this outfit suggestion."`
+- Redress: `notificationsError = "Could not open this Redress."`
 
 Elsewhere:
 
-- `PendingOutfitDetailView` uses alerts such as **Couldn't Update Suggestion**
-- `OutfitSuggestionMaterializer` returns `"This outfit suggestion is no longer available."`
+- `PendingOutfitDetailView` uses alerts such as **Couldn't Update Redress**
+- `OutfitSuggestionMaterializer` returns `"This Redress is no longer available."`
 
 These replace the list or push a bare text view. No shared empty state, retry, or Back-friendly missing-content page.
 

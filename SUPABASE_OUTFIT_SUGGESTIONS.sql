@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS public.outfit_suggestions (
   recipient_user_id uuid NOT NULL REFERENCES auth.users (id) ON DELETE CASCADE,
   suggester_user_id uuid NOT NULL REFERENCES auth.users (id) ON DELETE CASCADE,
   status text NOT NULL DEFAULT 'pending'
-    CHECK (status IN ('pending', 'accepted', 'rejected', 'withdrawn')),
+    CHECK (status IN ('pending', 'accepted', 'declined', 'withdrawn')),
   proposed_name text,
   proposed_notes text,
   image_url text,
@@ -183,7 +183,8 @@ $$;
 
 GRANT EXECUTE ON FUNCTION public.recipient_has_duplicate_outfit(uuid, uuid[]) TO authenticated;
 
--- Same wardrobe membership rules as get_visible_wardrobe_outfits, applied to suggestion item_ids.
+-- Suggestion appears on a wardrobe when at least one item belongs to that wardrobe
+-- (allows mixed Closet/Wishlist Redress; owner can see private wardrobes).
 CREATE OR REPLACE FUNCTION public.outfit_suggestion_matches_wardrobe(
   p_recipient_id uuid,
   p_wardrobe_id uuid,
@@ -196,13 +197,14 @@ SECURITY DEFINER
 SET search_path = public AS
 $$
   WITH target_wardrobe AS (
-    SELECT w.id, lower(coalesce(w.type, '')) AS wardrobe_type
+    SELECT w.id
     FROM public.wardrobes w
     WHERE w.id = p_wardrobe_id
       AND w.user_id = p_recipient_id
       AND COALESCE(w.is_soft_deleted, false) = false
       AND (
-        w.visibility = 'public'
+        auth.uid() = p_recipient_id
+        OR w.visibility = 'public'
         OR (
           w.visibility = 'friends'
           AND EXISTS (
@@ -225,41 +227,13 @@ $$
       AND COALESCE(i.is_soft_deleted, false) = false
       AND COALESCE(i.is_draft, false) = false
   )
-  SELECT EXISTS (SELECT 1 FROM target_wardrobe tw)
-    AND EXISTS (SELECT 1 FROM suggestion_items)
-    AND NOT EXISTS (
+  SELECT EXISTS (SELECT 1 FROM target_wardrobe)
+    AND EXISTS (
       SELECT 1
       FROM suggestion_items si
-      WHERE CASE
-        WHEN (SELECT wardrobe_type FROM target_wardrobe) = 'wishlist' THEN
-          NOT EXISTS (
-            SELECT 1
-            FROM public.item_wardrobes iw
-            WHERE iw.item_id = si.item_id
-              AND iw.wardrobe_id = p_wardrobe_id
-          )
-          OR EXISTS (
-            SELECT 1
-            FROM public.item_wardrobes iw2
-            INNER JOIN public.wardrobes ww ON ww.id = iw2.wardrobe_id
-            WHERE iw2.item_id = si.item_id
-              AND lower(coalesce(ww.type, '')) = 'wishlist'
-              AND COALESCE(ww.is_soft_deleted, false) = false
-              AND NOT EXISTS (
-                SELECT 1
-                FROM public.item_wardrobes iw3
-                WHERE iw3.item_id = si.item_id
-                  AND iw3.wardrobe_id = p_wardrobe_id
-              )
-          )
-        ELSE
-          NOT EXISTS (
-            SELECT 1
-            FROM public.item_wardrobes iw
-            WHERE iw.item_id = si.item_id
-              AND iw.wardrobe_id = p_wardrobe_id
-          )
-      END
+      INNER JOIN public.item_wardrobes iw
+        ON iw.item_id = si.item_id
+       AND iw.wardrobe_id = p_wardrobe_id
     );
 $$;
 
@@ -780,7 +754,7 @@ DECLARE
 BEGIN
   UPDATE public.outfit_suggestions
   SET
-    status = CASE WHEN v_accept THEN 'accepted' ELSE 'rejected' END,
+    status = CASE WHEN v_accept THEN 'accepted' ELSE 'declined' END,
     updated_at = now()
   WHERE id = p_suggestion_id
     AND recipient_user_id = auth.uid()
@@ -793,3 +767,30 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION public.respond_to_outfit_suggestion(uuid, text) TO authenticated;
+
+-- ---------------------------------------------------------------------------
+-- Migrate existing `outfit_suggestions` status: rejected → declined (friends parity)
+-- Safe to re-run after CREATE TABLE IF NOT EXISTS (does not alter CHECK on existing tables).
+-- ---------------------------------------------------------------------------
+UPDATE public.outfit_suggestions
+SET status = 'declined'
+WHERE status = 'rejected';
+
+DO $$
+DECLARE
+  r record;
+BEGIN
+  FOR r IN
+    SELECT c.conname
+    FROM pg_constraint c
+    WHERE c.conrelid = 'public.outfit_suggestions'::regclass
+      AND c.contype = 'c'
+      AND pg_get_constraintdef(c.oid) LIKE '%status%'
+  LOOP
+    EXECUTE format('ALTER TABLE public.outfit_suggestions DROP CONSTRAINT %I', r.conname);
+  END LOOP;
+END $$;
+
+ALTER TABLE public.outfit_suggestions
+  ADD CONSTRAINT outfit_suggestions_status_check
+  CHECK (status IN ('pending', 'accepted', 'declined', 'withdrawn'));

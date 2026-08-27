@@ -41,6 +41,9 @@ struct SocialEngagementActionsRow: View {
     var showsMoveToClosetButton: Bool
     var showsWornSegment: Bool = true
     var disabledSegments: Set<SocialEngagementToolbarSegment> = []
+    /// Leading control that toggles wardrobe hero between 1×1 and 2×2 (4-up) layout.
+    var isGridLayout: Binding<Bool>? = nil
+    var isGridLayoutEnabled: Bool = true
     var onLike: () -> Void
     var onCalendar: () -> Void
     var onRedress: () -> Void
@@ -89,6 +92,8 @@ struct SocialEngagementActionsRow: View {
         showsMoveToClosetButton: Bool = false,
         showsWornSegment: Bool = true,
         disabledSegments: Set<SocialEngagementToolbarSegment> = [],
+        isGridLayout: Binding<Bool>? = nil,
+        isGridLayoutEnabled: Bool = true,
         onLike: @escaping () -> Void = {},
         onCalendar: @escaping () -> Void = {},
         onRedress: @escaping () -> Void = {},
@@ -107,6 +112,8 @@ struct SocialEngagementActionsRow: View {
         self.showsMoveToClosetButton = showsMoveToClosetButton
         self.showsWornSegment = showsWornSegment
         self.disabledSegments = disabledSegments
+        self.isGridLayout = isGridLayout
+        self.isGridLayoutEnabled = isGridLayoutEnabled
         self.onLike = onLike
         self.onCalendar = onCalendar
         self.onRedress = onRedress
@@ -145,6 +152,19 @@ struct SocialEngagementActionsRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 24) {
+                if let isGridLayout {
+                    Button {
+                        isGridLayout.wrappedValue.toggle()
+                    } label: {
+                        Image(systemName: isGridLayout.wrappedValue ? "square" : "square.grid.2x2")
+                            .imageScale(.large)
+                            .frame(width: actionColumnWidth, alignment: .center)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!isGridLayoutEnabled)
+                    .accessibilityLabel(isGridLayout.wrappedValue ? "Show one at a time" : "Show four at a glance")
+                }
+
                 if showsLikeButton {
                     Group {
                         if isLikeInteractive {
