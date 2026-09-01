@@ -19,19 +19,22 @@ struct EventIndividualItemSelection: View {
     @EnvironmentObject private var authSession: AuthSession
 
     @ObservedObject var event: Event
+    /// Calendar tab path — filter appends routes (no nested `isPresented`).
+    @Binding var navigationPath: NavigationPath
     /// When nil, the user's primary closet wardrobe is used.
     let initialWardrobe: Wardrobe?
+    /// When true, dismiss without saving removes an empty standalone OOTD draft.
+    var deleteEmptyOotdDraftOnDismiss: Bool = false
+    private let onItemsFilter: () -> Void
+    private let onOutfitsFilter: () -> Void
+
+    @EnvironmentObject private var itemsDraft: EventItemsSelectionDraft
 
     @FetchRequest(
         entity: Wardrobe.entity(),
         sortDescriptors: [NSSortDescriptor(keyPath: \Wardrobe.name, ascending: true)]
     ) private var allWardrobes: FetchedResults<Wardrobe>
 
-    @StateObject private var filterModel = ItemFilterModel()
-    @StateObject private var outfitFilterModel = OutfitFilterModel()
-    @StateObject private var tabBarHideState = TabBarHideState()
-
-    @State private var selectedWardrobe: Wardrobe?
     @State private var contentSegment: EventContentSegment = .items
     @State private var closetItems: [Item] = []
     @State private var outfits: [Outfit] = []
@@ -39,15 +42,14 @@ struct EventIndividualItemSelection: View {
     @State private var selectedItemIDs: [UUID] = []
     @State private var selectedItemsById: [UUID: Item] = [:]
     @State private var selectedOutfitsById: [UUID: Outfit] = [:]
-    @State private var showWardrobeSelection = false
-    @State private var showItemFilter = false
-    @State private var showOutfitFilter = false
+    @State private var showWardrobeSheet = false
     @State private var isSearchActive = false
     @FocusState private var isSearchFocused: Bool
     @State private var searchDebounceTask: Task<Void, Never>?
     @State private var didInitialize = false
     @State private var isSelectedFilterActive = false
     @State private var showDiscardAlert = false
+    @State private var showSaveAsOutfitAlert = false
     @State private var originalItemIDs: [UUID] = []
     @State private var originalOutfitIDs: Set<UUID> = []
 
@@ -64,6 +66,13 @@ struct EventIndividualItemSelection: View {
         GridItem(.flexible(), spacing: 2),
         GridItem(.flexible(), spacing: 2)
     ]
+
+    private var filterModel: ItemFilterModel { itemsDraft.itemFilterModel }
+    private var outfitFilterModel: OutfitFilterModel { itemsDraft.outfitFilterModel }
+    private var selectedWardrobe: Wardrobe? {
+        get { itemsDraft.selectedWardrobe }
+        nonmutating set { itemsDraft.selectedWardrobe = newValue }
+    }
 
     private var itemSquareSize: CGFloat { UIScreen.main.bounds.width / 3.05 }
     private var outfitSquareSize: CGFloat { UIScreen.main.bounds.width / 3.05 }
@@ -141,9 +150,24 @@ struct EventIndividualItemSelection: View {
         return key
     }
 
-    init(event: Event, selectedWardrobe: Wardrobe? = nil) {
+    init(
+        event: Event,
+        navigationPath: Binding<NavigationPath>,
+        initialWardrobe: Wardrobe? = nil,
+        deleteEmptyOotdDraftOnDismiss: Bool = false,
+        onItemsFilter: (() -> Void)? = nil,
+        onOutfitsFilter: (() -> Void)? = nil
+    ) {
         self.event = event
-        self.initialWardrobe = selectedWardrobe
+        self.initialWardrobe = initialWardrobe
+        self.deleteEmptyOotdDraftOnDismiss = deleteEmptyOotdDraftOnDismiss
+        self._navigationPath = navigationPath
+        self.onItemsFilter = onItemsFilter ?? {
+            navigationPath.wrappedValue.append(CalendarRoute.itemsFilter)
+        }
+        self.onOutfitsFilter = onOutfitsFilter ?? {
+            navigationPath.wrappedValue.append(CalendarRoute.outfitsFilter)
+        }
     }
 
     var body: some View {
@@ -162,26 +186,8 @@ struct EventIndividualItemSelection: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
-        .navigationDestination(isPresented: $showWardrobeSelection) {
-            SingleWardrobeSelectionView(
-                selectedWardrobe: $selectedWardrobe,
-                wardrobeType: "closet"
-            )
-        }
-        .navigationDestination(isPresented: $showItemFilter) {
-            ItemFilterView(
-                filterModel: filterModel,
-                tabBarHideState: tabBarHideState,
-                wardrobeType: "closet",
-                selectedWardrobe: selectedWardrobe
-            )
-        }
-        .navigationDestination(isPresented: $showOutfitFilter) {
-            OutfitFilterView(
-                filterModel: outfitFilterModel,
-                wardrobeType: "closet",
-                selectedWardrobe: selectedWardrobe
-            )
+        .sheet(isPresented: $showWardrobeSheet) {
+            wardrobeSelectionSheet
         }
         .onAppear {
             guard !didInitialize else { return }
@@ -191,17 +197,15 @@ struct EventIndividualItemSelection: View {
             captureOriginalSelection()
             refreshContent()
         }
-        .onChange(of: selectedWardrobe) { _, wardrobe in
-            if wardrobe?.isDefault != true {
+        .onChange(of: itemsDraft.selectedWardrobe?.objectID.uriRepresentation().absoluteString) { _, _ in
+            if itemsDraft.selectedWardrobe?.isDefault != true {
                 filterModel.selectedWardrobes.removeAll()
             }
             refreshContent()
         }
-        .onChange(of: showItemFilter) { _, isShowing in
-            if !isShowing { fetchClosetItems() }
-        }
-        .onChange(of: showOutfitFilter) { _, isShowing in
-            if !isShowing { fetchOutfits() }
+        .onChange(of: navigationPath.count) { _, _ in
+            fetchClosetItems()
+            fetchOutfits()
         }
         .onChange(of: itemFilterKey) { _, _ in
             fetchClosetItems()
@@ -237,11 +241,24 @@ struct EventIndividualItemSelection: View {
         }
         .alert("Discard Changes?", isPresented: $showDiscardAlert) {
             Button("Discard", role: .destructive) {
+                cleanupEmptyOotdDraftIfNeeded()
                 dismiss()
             }
             Button("Keep Editing", role: .cancel) {}
         } message: {
             Text("You have unsaved edits. Going back will discard them.")
+        }
+        .alert("Save Wardrobe", isPresented: $showSaveAsOutfitAlert) {
+            Button("Save as Items") {
+                commitSaveSelection(saveMultipleAsOutfit: false)
+                dismiss()
+            }
+            Button("Save as Outfit") {
+                commitSaveSelection(saveMultipleAsOutfit: true)
+                dismiss()
+            }
+        } message: {
+            Text("You selected multiple items. Save them as individual items on this event, or combine them into an outfit in your closet.")
         }
     }
 
@@ -250,7 +267,7 @@ struct EventIndividualItemSelection: View {
     private var wardrobeHeader: some View {
         SelectionHeader(
             title: wardrobeTitle,
-            onTitleTap: { showWardrobeSelection = true }
+            onTitleTap: { showWardrobeSheet = true }
         )
         .overlay {
             HStack {
@@ -264,8 +281,7 @@ struct EventIndividualItemSelection: View {
                 }
                 Spacer()
                 Button("Save") {
-                    saveSelection()
-                    dismiss()
+                    attemptSaveSelection()
                 }
             }
             .padding(.horizontal, 16)
@@ -288,36 +304,70 @@ struct EventIndividualItemSelection: View {
 
     @ViewBuilder
     private var actionsBar: some View {
-        if contentSegment == .items {
-            ItemFilterSortSearchBar(
-                sortOrder: $filterModel.sortOrder,
-                searchQuery: $filterModel.searchQuery,
-                isSearchActive: $isSearchActive,
-                isSearchFocused: $isSearchFocused,
-                onFilter: { showItemFilter = true },
-                onDismissSearch: { dismissSearch(clearQueries: true) },
-                onSelectedFilter: showsSelectedFilter
-                    ? { isSelectedFilterActive.toggle() }
-                    : nil,
-                isSelectedFilterActive: isSelectedFilterActive,
-                activeFilterCount: filterModel.activeFilterCount
-            )
-        } else {
-            ItemFilterSortSearchBar(
-                sortOrder: $outfitFilterModel.sortOrder,
-                searchQuery: $outfitFilterModel.searchQuery,
-                isSearchActive: $isSearchActive,
-                isSearchFocused: $isSearchFocused,
-                onFilter: { showOutfitFilter = true },
-                onDismissSearch: { dismissSearch(clearQueries: true) },
-                onSelectedFilter: showsSelectedFilter
-                    ? { isSelectedFilterActive.toggle() }
-                    : nil,
-                isSelectedFilterActive: isSelectedFilterActive,
-                activeFilterCount: outfitFilterModel.activeFilterCount,
-                searchPlaceholder: "Name, category, tag"
-            )
+        EventSelectionFilterBar(
+            filterModel: itemsDraft.itemFilterModel,
+            outfitFilterModel: itemsDraft.outfitFilterModel,
+            contentSegment: contentSegment,
+            isSearchActive: $isSearchActive,
+            isSearchFocused: $isSearchFocused,
+            onItemsFilter: onItemsFilter,
+            onOutfitsFilter: onOutfitsFilter,
+            onDismissSearch: { dismissSearch(clearQueries: true) },
+            showsSelectedFilter: showsSelectedFilter,
+            isSelectedFilterActive: isSelectedFilterActive,
+            onSelectedFilter: { isSelectedFilterActive.toggle() }
+        )
+    }
+
+    private var wardrobeSelectionSheet: some View {
+        NavigationView {
+            List {
+                ForEach(closetWardrobes, id: \.objectID) { wardrobe in
+                    Button {
+                        selectWardrobeFromSheet(wardrobe)
+                    } label: {
+                        HStack {
+                            Text(wardrobe.name ?? "Untitled")
+                                .foregroundColor(.primary)
+                            Spacer()
+                            if wardrobe.isDefault == true {
+                                Text("Default")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(
+                                        Capsule()
+                                            .fill(Color(UIColor.secondarySystemBackground))
+                                    )
+                            }
+                            if wardrobe.objectID == selectedWardrobe?.objectID {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .listStyle(.plain)
+            .navigationTitle("Your Wardrobes")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Color(UIColor.secondarySystemBackground), for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
         }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func selectWardrobeFromSheet(_ wardrobe: Wardrobe) {
+        if selectedWardrobe?.objectID != wardrobe.objectID {
+            filterModel.clearAll()
+            outfitFilterModel.clearAll()
+        }
+        selectedWardrobe = wardrobe
+        showWardrobeSheet = false
     }
 
     // MARK: - Pages
@@ -479,7 +529,28 @@ struct EventIndividualItemSelection: View {
         if hasUnsavedChanges {
             showDiscardAlert = true
         } else {
+            cleanupEmptyOotdDraftIfNeeded()
             dismiss()
+        }
+    }
+
+    private func cleanupEmptyOotdDraftIfNeeded() {
+        guard deleteEmptyOotdDraftOnDismiss, event.isOutfitOfTheDay else { return }
+        let itemCount = (event.items as? NSOrderedSet)?.count ?? 0
+        let outfitCount = (event.outfits as? Set<Outfit>)?.count ?? 0
+        guard itemCount == 0, outfitCount == 0 else { return }
+
+        if event.objectID.isTemporaryID {
+            viewContext.delete(event)
+        } else {
+            softDelete(event)
+        }
+        guard viewContext.hasChanges else { return }
+        do {
+            try viewContext.save()
+            SyncService.shared.syncEventIfNeeded(event)
+        } catch {
+            print("Failed to discard empty OOTD draft: \(error)")
         }
     }
 
@@ -674,7 +745,16 @@ struct EventIndividualItemSelection: View {
 
     // MARK: - Save
 
-    private func saveSelection() {
+    private func attemptSaveSelection() {
+        if selectedItemIDs.count > 1 {
+            showSaveAsOutfitAlert = true
+            return
+        }
+        commitSaveSelection(saveMultipleAsOutfit: nil)
+        dismiss()
+    }
+
+    private func commitSaveSelection(saveMultipleAsOutfit: Bool?) {
         if let existingItems = event.items as? NSOrderedSet {
             event.removeFromItems(existingItems)
         }
@@ -695,6 +775,17 @@ struct EventIndividualItemSelection: View {
 
         syncEventUserIdFromLinkedEntities(event)
 
+        if EventTripDayWardrobe.shouldMaterializeLooseItemsOnSave(
+            on: event,
+            saveMultipleAsOutfit: saveMultipleAsOutfit
+        ) {
+            _ = EventTripDayWardrobe.materializeLooseItemsIfNeeded(
+                on: event,
+                userId: event.userId ?? currentUserId,
+                in: viewContext
+            )
+        }
+
         if !event.objectID.isTemporaryID {
             setUpdatedAt(event)
             do {
@@ -703,6 +794,49 @@ struct EventIndividualItemSelection: View {
             } catch {
                 print("Failed to save event selection: \(error)")
             }
+        }
+    }
+}
+
+private struct EventSelectionFilterBar: View {
+    @ObservedObject var filterModel: ItemFilterModel
+    @ObservedObject var outfitFilterModel: OutfitFilterModel
+    let contentSegment: EventContentSegment
+    @Binding var isSearchActive: Bool
+    var isSearchFocused: FocusState<Bool>.Binding
+    var onItemsFilter: () -> Void
+    var onOutfitsFilter: () -> Void
+    var onDismissSearch: () -> Void
+    var showsSelectedFilter: Bool
+    var isSelectedFilterActive: Bool
+    var onSelectedFilter: () -> Void
+
+    var body: some View {
+        if contentSegment == .items {
+            ItemFilterSortSearchBar(
+                sortOrder: $filterModel.sortOrder,
+                searchQuery: $filterModel.searchQuery,
+                isSearchActive: $isSearchActive,
+                isSearchFocused: isSearchFocused,
+                onFilter: onItemsFilter,
+                onDismissSearch: onDismissSearch,
+                onSelectedFilter: showsSelectedFilter ? onSelectedFilter : nil,
+                isSelectedFilterActive: isSelectedFilterActive,
+                activeFilterCount: filterModel.activeFilterCount
+            )
+        } else {
+            ItemFilterSortSearchBar(
+                sortOrder: $outfitFilterModel.sortOrder,
+                searchQuery: $outfitFilterModel.searchQuery,
+                isSearchActive: $isSearchActive,
+                isSearchFocused: isSearchFocused,
+                onFilter: onOutfitsFilter,
+                onDismissSearch: onDismissSearch,
+                onSelectedFilter: showsSelectedFilter ? onSelectedFilter : nil,
+                isSelectedFilterActive: isSelectedFilterActive,
+                activeFilterCount: outfitFilterModel.activeFilterCount,
+                searchPlaceholder: "Name, category, tag"
+            )
         }
     }
 }

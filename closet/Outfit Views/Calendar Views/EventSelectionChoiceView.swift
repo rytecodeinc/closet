@@ -10,6 +10,8 @@ import CoreData
 
 struct EventSelectionChoiceView: View {
     @Environment(\.managedObjectContext) private var viewContext
+    @State private var navigationPath = NavigationPath()
+    @StateObject private var itemsDraft = EventItemsSelectionDraft()
     let event: Event
 
     var body: some View {
@@ -24,8 +26,9 @@ struct EventSelectionChoiceView: View {
             .padding(.horizontal)
             
             NavigationLink("Select Individual Items") {
-                EventIndividualItemSelection(event: event)
+                EventIndividualItemSelection(event: event, navigationPath: $navigationPath)
                     .environment(\.managedObjectContext, viewContext)
+                    .environmentObject(itemsDraft)
             }
             .buttonStyle(.bordered)
             .frame(maxWidth: .infinity)

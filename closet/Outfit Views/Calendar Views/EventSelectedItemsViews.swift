@@ -22,15 +22,19 @@ enum EventSelectedThumbnail: Identifiable {
 
 struct EventSelectedItemsDisplayArea: View {
     let thumbnails: [EventSelectedThumbnail]
+    /// When true, mosaic fills its container edge-to-edge with no rounded inset.
+    var fillsEdgeToEdge: Bool = false
 
     private let gap: CGFloat = 1
 
-    init(thumbnails: [EventSelectedThumbnail]) {
+    init(thumbnails: [EventSelectedThumbnail], fillsEdgeToEdge: Bool = false) {
         self.thumbnails = thumbnails
+        self.fillsEdgeToEdge = fillsEdgeToEdge
     }
 
-    init(items: [Item]) {
+    init(items: [Item], fillsEdgeToEdge: Bool = false) {
         self.thumbnails = items.map { .item($0) }
+        self.fillsEdgeToEdge = fillsEdgeToEdge
     }
 
     var body: some View {
@@ -38,7 +42,7 @@ struct EventSelectedItemsDisplayArea: View {
             switch thumbnails.count {
             case 1:
                 eventCell(for: thumbnails[0])
-                    .aspectRatio(1, contentMode: .fit)
+                    .aspectRatio(1, contentMode: fillsEdgeToEdge ? .fill : .fit)
             case 2:
                 // Two equal squares sharing the row width (not a full-width square).
                 HStack(spacing: gap) {
@@ -81,7 +85,9 @@ struct EventSelectedItemsDisplayArea: View {
                 }
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        .modifier(EventSelectedItemsClipModifier(fillsEdgeToEdge: fillsEdgeToEdge))
     }
 
     @ViewBuilder
@@ -89,9 +95,9 @@ struct EventSelectedItemsDisplayArea: View {
         Group {
             switch thumbnail {
             case .item(let item):
-                EventItemThumbnailView(item: item)
+                EventItemThumbnailView(item: item, clipsRounded: !fillsEdgeToEdge)
             case .outfit(let outfit):
-                EventOutfitThumbnailView(outfit: outfit)
+                EventOutfitThumbnailView(outfit: outfit, clipsRounded: !fillsEdgeToEdge)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -99,55 +105,87 @@ struct EventSelectedItemsDisplayArea: View {
     }
 }
 
+private struct EventSelectedItemsClipModifier: ViewModifier {
+    let fillsEdgeToEdge: Bool
+
+    func body(content: Content) -> some View {
+        if fillsEdgeToEdge {
+            content
+        } else {
+            content.clipShape(RoundedRectangle(cornerRadius: 4))
+        }
+    }
+}
+
 struct EventItemThumbnailView: View {
     let item: Item
+    var clipsRounded: Bool = true
 
     var body: some View {
-        if let primaryPhoto = (item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }),
-           let data = primaryPhoto.data,
-           let uiImage = UIImage(data: data) {
-            Image(uiImage: uiImage)
-                .resizable()
-                .aspectRatio(1, contentMode: .fill)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-        } else if let imageData = item.image,
-                  let uiImage = UIImage(data: imageData) {
-            Image(uiImage: uiImage)
-                .resizable()
-                .aspectRatio(1, contentMode: .fill)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-        } else {
-            RoundedRectangle(cornerRadius: 4)
-                .fill(Color(.systemGray5))
-                .aspectRatio(1, contentMode: .fit)
-                .overlay(
-                    Image(systemName: "photo")
-                        .foregroundColor(.secondary)
-                        .font(.caption)
-                )
+        ZStack {
+            Color(.systemBackground)
+            if let primaryPhoto = (item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }),
+               let data = primaryPhoto.data,
+               let uiImage = UIImage(data: data) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .aspectRatio(1, contentMode: .fill)
+            } else if let imageData = item.image,
+                      let uiImage = UIImage(data: imageData) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .aspectRatio(1, contentMode: .fill)
+            } else {
+                Color(.systemGray5)
+                    .overlay(
+                        Image(systemName: "photo")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                    )
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        .modifier(EventThumbnailRoundedClip(enabled: clipsRounded))
     }
 }
 
 struct EventOutfitThumbnailView: View {
     let outfit: Outfit
+    var clipsRounded: Bool = true
 
     var body: some View {
-        if let imageData = outfit.image,
-           let uiImage = UIImage(data: imageData) {
-            Image(uiImage: uiImage)
-                .resizable()
-                .aspectRatio(1, contentMode: .fill)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
+        ZStack {
+            // Opaque base so transparent collage pixels don’t show List/grouped gray behind.
+            Color(.systemBackground)
+            if let imageData = outfit.image,
+               let uiImage = UIImage(data: imageData) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .aspectRatio(1, contentMode: .fill)
+            } else {
+                Color(.systemGray5)
+                    .overlay(
+                        Image(systemName: "photo")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                    )
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        .modifier(EventThumbnailRoundedClip(enabled: clipsRounded))
+    }
+}
+
+private struct EventThumbnailRoundedClip: ViewModifier {
+    let enabled: Bool
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.clipShape(RoundedRectangle(cornerRadius: 4))
         } else {
-            RoundedRectangle(cornerRadius: 4)
-                .fill(Color(.systemGray5))
-                .aspectRatio(1, contentMode: .fit)
-                .overlay(
-                    Image(systemName: "photo")
-                        .foregroundColor(.secondary)
-                        .font(.caption)
-                )
+            content
         }
     }
 }

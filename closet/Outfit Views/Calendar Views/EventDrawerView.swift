@@ -52,8 +52,14 @@ struct EventDrawerView: View {
         let request: NSFetchRequest<Event> = Event.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Event.startDate, ascending: true)]
 
-        // Use startDate instead of date, exclude soft-deleted events, and scope to account
-        let datePredicate = NSPredicate(format: "startDate >= %@ AND startDate < %@", startOfDay as NSDate, endOfDay as NSDate)
+        // Any event that occupies this calendar day (including multi-day spans).
+        let overlapsDay = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            NSPredicate(format: "startDate < %@", endOfDay as NSDate),
+            NSCompoundPredicate(orPredicateWithSubpredicates: [
+                NSPredicate(format: "endDate >= %@", startOfDay as NSDate),
+                NSPredicate(format: "endDate == nil AND startDate >= %@", startOfDay as NSDate),
+            ]),
+        ])
         let softDeleteFilter = NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
         let userPredicate: NSPredicate
         if let uid = ownerUserId, !uid.isEmpty {
@@ -62,10 +68,15 @@ struct EventDrawerView: View {
             userPredicate = NSPredicate(value: false)
         }
         request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
-            datePredicate, softDeleteFilter, userPredicate,
+            overlapsDay, softDeleteFilter, userPredicate,
         ])
 
         _events = FetchRequest(fetchRequest: request)
+    }
+
+    /// Trip-linked day OOTDs are folded into the parent multi-day event row for this date.
+    private var visibleEvents: [Event] {
+        events.filter { !$0.isTripLinkedDayOOTD }
     }
 
     var body: some View {
@@ -109,7 +120,7 @@ struct EventDrawerView: View {
                 Divider()
 
                 // Events list section
-                if events.isEmpty {
+                if visibleEvents.isEmpty {
                     // Empty state - outside of List to avoid dividers
                     VStack(spacing: 12) {
                         Image(systemName: "calendar")
@@ -126,11 +137,11 @@ struct EventDrawerView: View {
                     .padding(.vertical, 40)
                 } else {
                     List {
-                        ForEach(events, id: \.objectID) { event in
+                        ForEach(visibleEvents, id: \.objectID) { event in
                             Button {
                                 onSelectEvent(event)
                             } label: {
-                                EventRowView(event: event)
+                                EventRowView(event: event, wardrobeDay: selectedDate)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .contentShape(Rectangle())
                             }
@@ -139,7 +150,7 @@ struct EventDrawerView: View {
                         }
                         .onDelete { indexSet in
                             for index in indexSet {
-                                let event = events[index]
+                                let event = visibleEvents[index]
                                 deleteEvent(event)
                             }
                         }
@@ -183,8 +194,11 @@ struct EventDrawerView: View {
 
 // MARK: - Event Row View
 struct EventRowView: View {
+    @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.appCapabilities) private var appCapabilities
     let event: Event
+    /// Calendar day being viewed in the sheet; used to resolve per-day trip wardrobe thumbnails.
+    var wardrobeDay: Date? = nil
 
     /// Fits widest compact start label (e.g. "12PM") so AM/PM columns align across rows.
     private static let startTimeColumnWidth: CGFloat = 52
@@ -209,13 +223,22 @@ struct EventRowView: View {
         return endText
     }
 
-    /// Compact start time in the leading column (e.g. "6PM").
+    /// Compact start time in the leading column (e.g. "6PM"); all-day shows "ALL".
+    /// OOTD uses a hanger icon instead (see `leadingTimeColumn`).
     private var compactStartTimeLabel: String? {
-        guard let start = event.startDate, !isAllDay else { return nil }
+        guard event.startDate != nil else { return nil }
+        if event.isOutfitOfTheDay { return nil }
+        if isAllDay { return "ALL" }
+        guard let start = event.startDate else { return nil }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "ha"
         return formatter.string(from: start).uppercased()
+    }
+
+    /// Hide clock + "All day" when the leading column already conveys all-day (ALL / OOTD).
+    private var showsTimeDetailRow: Bool {
+        !isAllDay
     }
 
     private func compactEndTimeLabel(from date: Date) -> String {
@@ -239,16 +262,30 @@ struct EventRowView: View {
         return "\(minutes) min"
     }
 
+    @ViewBuilder
+    private var leadingTimeColumn: some View {
+        Group {
+            if event.isOutfitOfTheDay {
+                Image(systemName: "hanger")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                    .accessibilityLabel("Outfit of the Day")
+            } else {
+                Text(compactStartTimeLabel ?? " ")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                    .opacity(compactStartTimeLabel == nil ? 0 : 1)
+                    .accessibilityHidden(compactStartTimeLabel == nil)
+            }
+        }
+        .multilineTextAlignment(.trailing)
+        .frame(width: Self.startTimeColumnWidth, alignment: .trailing)
+        .padding(.top, 5)
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            Text(compactStartTimeLabel ?? " ")
-                .font(.headline)
-                .foregroundColor(.primary)
-                .multilineTextAlignment(.trailing)
-                .frame(width: Self.startTimeColumnWidth, alignment: .trailing)
-                .padding(.top, 5)
-                .opacity(compactStartTimeLabel == nil ? 0 : 1)
-                .accessibilityHidden(compactStartTimeLabel == nil)
+            leadingTimeColumn
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .center, spacing: 6) {
@@ -266,16 +303,18 @@ struct EventRowView: View {
                 }
                 .padding(.top, 5)
 
-                HStack(alignment: .center, spacing: 6) {
-                    Image(systemName: "clock")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                        .frame(width: 14, alignment: .center)
+                if showsTimeDetailRow {
+                    HStack(alignment: .center, spacing: 6) {
+                        Image(systemName: "clock")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                            .frame(width: 14, alignment: .center)
 
-                    Text(eventTimeDisplay)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(eventTimeDisplay)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
 
                 if let locationDisplay = eventLocationDisplay {
@@ -331,26 +370,11 @@ struct EventRowView: View {
     }
 
     private var firstThumbnailImage: UIImage? {
-        if let outfitsSet = event.outfits as? Set<Outfit> {
-            for outfit in outfitsSet {
-                if let imageData = outfit.image,
-                   let uiImage = UIImage(data: imageData) {
-                    return uiImage
-                }
-            }
+        if let wardrobeDay,
+           let dayImage = event.wardrobeThumbnailImage(for: wardrobeDay, in: viewContext) {
+            return dayImage
         }
-
-        if let itemsOrderedSet = event.items as? NSOrderedSet {
-            for item in itemsOrderedSet.array as? [Item] ?? [] {
-                if let primaryPhoto = (item.photos as? Set<Photo>)?.first(where: { $0.isPrimary }),
-                   let data = primaryPhoto.data,
-                   let uiImage = UIImage(data: data) {
-                    return uiImage
-                }
-            }
-        }
-
-        return nil
+        return event.calendarThumbnailImage
     }
 }
 
