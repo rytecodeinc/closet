@@ -1,0 +1,21 @@
+---
+description: Deferred — other-user profile Friends count + open their friends list
+globs: closet/Profile View/ProfileView.swift,closet/Profile View/FriendsListView.swift
+alwaysApply: false
+---
+
+# Deferred: other-user profile Friends count
+
+**Status:** Deferred until other-user Profile layout is revised to match own profile.
+
+## Current
+
+- Own profile shows **Friends** (mutual count) → **Followers** → **Following**.
+- Friends opens dedicated `FriendsListView` (`ProfileRoute.friendsList`).
+- `FriendsListView` / `fetchFriends(forUserId:)` already support any `userId` (RPC `get_user_friends_profiles`).
+
+## When revising other-user header
+
+- Add Friends count before Followers (same stack as own).
+- Tap → `.friendsList(userId: viewedUserId)` so it opens **their** mutual friends.
+- Count via `fetchFriendCount(forUserId:)` / `cachedViewedUserFriendCount`.
