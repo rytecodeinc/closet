@@ -63,6 +63,8 @@ struct OutfitAddView: View {
     let preselectedRedressItem: VisibleWardrobeItem?
     /// Wardrobe type for `preselectedRedressItem` (`closet` / `wishlist`).
     let preselectedRedressWardrobeType: String
+    /// Specific recipient wardrobe the user was browsing — Redress items sheet opens here.
+    let preselectedRedressWardrobeId: UUID?
 
     /// When set, composes an outfit suggestion for another user (Redress mode).
     let redressRecipient: PublicUserProfile?
@@ -192,6 +194,7 @@ struct OutfitAddView: View {
         self.preselectedItemURI = nil
         self.preselectedRedressItem = nil
         self.preselectedRedressWardrobeType = "closet"
+        self.preselectedRedressWardrobeId = nil
         self.sessionID = sessionID
         self.navigationPath = navigationPath
     }
@@ -220,6 +223,7 @@ struct OutfitAddView: View {
         self.preselectedItemURI = preselectedItemURI
         self.preselectedRedressItem = nil
         self.preselectedRedressWardrobeType = "closet"
+        self.preselectedRedressWardrobeId = nil
         self.sessionID = sessionID
         self.navigationPath = navigationPath
     }
@@ -228,6 +232,7 @@ struct OutfitAddView: View {
         redressRecipient: PublicUserProfile,
         preselectedItem: VisibleWardrobeItem? = nil,
         preselectedWardrobeType: String = "closet",
+        preselectedWardrobeId: UUID? = nil,
         editingSuggestionId: UUID? = nil,
         editingSuggestionWardrobeId: UUID? = nil,
         editingProposedName: String? = nil,
@@ -252,8 +257,12 @@ struct OutfitAddView: View {
         self.preselectedItemURI = nil
         self.preselectedRedressItem = preselectedItem
         self.preselectedRedressWardrobeType = preselectedWardrobeType.lowercased() == "wishlist" ? "wishlist" : "closet"
+        self.preselectedRedressWardrobeId = preselectedWardrobeId ?? editingSuggestionWardrobeId
         self.sessionID = sessionID
         self.navigationPath = navigationPath
+        _itemsSheetItemTypeSegment = State(
+            initialValue: self.preselectedRedressWardrobeType == "wishlist" ? .wishlist : .closet
+        )
     }
 
     private var squareSize: CGFloat {
@@ -262,7 +271,11 @@ struct OutfitAddView: View {
 
     private func openItemsSheet() {
         itemsSheetSessionID = UUID()
-        itemsSheetItemTypeSegment = wardrobeType == "wishlist" ? .wishlist : .closet
+        if isRedressMode {
+            itemsSheetItemTypeSegment = preselectedRedressWardrobeType == "wishlist" ? .wishlist : .closet
+        } else {
+            itemsSheetItemTypeSegment = wardrobeType == "wishlist" ? .wishlist : .closet
+        }
         itemsSheetDetent = .medium
         isItemsSheetPresented = true
     }
@@ -272,6 +285,7 @@ struct OutfitAddView: View {
             if isRedressMode, let recipient = redressRecipient {
                 RedressItemSelectionView(
                     recipientUserId: recipient.userId,
+                    initialWardrobeId: preselectedRedressWardrobeId,
                     itemTypeSegment: $itemsSheetItemTypeSegment,
                     isOnCanvas: { item in
                         redressCanvasItems.contains(where: { $0.item.id == item.id })
@@ -314,7 +328,7 @@ struct OutfitAddView: View {
                             isItemsSectionExpanded = false
                             didApplyPreselectedItem = true
                             itemsSheetItemTypeSegment = preselectedRedressWardrobeType == "wishlist" ? .wishlist : .closet
-                            addRedressItemToCanvas(item)
+                            addPreselectedRedressItemToCanvas(item)
                         } else {
                             ensureAttributeOutfitDraft()
                             isItemsSectionExpanded = false
@@ -1011,35 +1025,35 @@ struct OutfitAddView: View {
 
     private var redressCanvasSelectionMenu: some View {
         VStack(spacing: 4) {
-            redressCanvasMenuButton(
+            canvasMenuButton(
                 systemName: "square.filled.on.square",
                 accessibilityLabel: "Bring to front"
             ) {
                 guard let item = selectedRedressCanvasItem else { return }
                 bringRedressItemToFront(item)
             }
-            redressCanvasMenuButton(
+            canvasMenuButton(
                 systemName: "square.on.square",
                 accessibilityLabel: "Push to back"
             ) {
                 guard let item = selectedRedressCanvasItem else { return }
                 pushRedressItemToBack(item)
             }
-            redressCanvasMenuButton(
+            canvasMenuButton(
                 systemName: "plus.magnifyingglass",
                 accessibilityLabel: "Scale larger"
             ) {
                 guard let item = selectedRedressCanvasItem else { return }
                 scaleRedressItem(item, by: 1.15)
             }
-            redressCanvasMenuButton(
+            canvasMenuButton(
                 systemName: "minus.magnifyingglass",
                 accessibilityLabel: "Scale smaller"
             ) {
                 guard let item = selectedRedressCanvasItem else { return }
                 scaleRedressItem(item, by: 1 / 1.15)
             }
-            redressCanvasMenuButton(
+            canvasMenuButton(
                 systemName: "trash",
                 accessibilityLabel: "Remove from canvas",
                 tint: .red
@@ -1062,7 +1076,7 @@ struct OutfitAddView: View {
         return redressCanvasItems.first(where: { $0.id == selectedItemID })
     }
 
-    private func redressCanvasMenuButton(
+    private func canvasMenuButton(
         systemName: String,
         accessibilityLabel: String,
         tint: Color = .primary,
@@ -1121,6 +1135,16 @@ struct OutfitAddView: View {
             }
             .clipped()
             .contentShape(Rectangle())
+            .overlay(alignment: .trailing) {
+                if selectedItemID != nil {
+                    VStack(spacing: 0) {
+                        outfitCanvasSelectionMenu
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.top, 10)
+                    .padding(.trailing, 10)
+                }
+            }
 
         if selectedItemID != nil {
             canvas
@@ -1128,6 +1152,59 @@ struct OutfitAddView: View {
         } else {
             canvas
         }
+    }
+
+    private var outfitCanvasSelectionMenu: some View {
+        VStack(spacing: 4) {
+            canvasMenuButton(
+                systemName: "square.filled.on.square",
+                accessibilityLabel: "Bring to front"
+            ) {
+                guard let item = selectedOutfitCanvasItem else { return }
+                bringToFront(item)
+            }
+            canvasMenuButton(
+                systemName: "square.on.square",
+                accessibilityLabel: "Push to back"
+            ) {
+                guard let item = selectedOutfitCanvasItem else { return }
+                pushOutfitItemToBack(item)
+            }
+            canvasMenuButton(
+                systemName: "plus.magnifyingglass",
+                accessibilityLabel: "Scale larger"
+            ) {
+                guard let item = selectedOutfitCanvasItem else { return }
+                scaleOutfitItem(item, by: 1.15)
+            }
+            canvasMenuButton(
+                systemName: "minus.magnifyingglass",
+                accessibilityLabel: "Scale smaller"
+            ) {
+                guard let item = selectedOutfitCanvasItem else { return }
+                scaleOutfitItem(item, by: 1 / 1.15)
+            }
+            canvasMenuButton(
+                systemName: "trash",
+                accessibilityLabel: "Remove from canvas",
+                tint: .red
+            ) {
+                guard let item = selectedOutfitCanvasItem else { return }
+                removeItem(item)
+            }
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 4)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        }
+    }
+
+    private var selectedOutfitCanvasItem: OutfitItem? {
+        guard let selectedItemID else { return nil }
+        return outfitItems.first(where: { $0.id == selectedItemID })
     }
 
     private var standardOutfitCanvasStack: some View {
@@ -1380,9 +1457,8 @@ struct OutfitAddView: View {
             if !redressCanvasItemsOrdered.isEmpty {
                 RedressFeaturedItemsSubsectionRow(
                     pairedItems: redressCanvasItemsOrdered,
-                    wishlistItems: redressWishlistCanvasItems,
-                    closetItems: redressClosetCanvasItems,
-                    showsWardrobeLabels: shouldSplitRedressCanvasByWardrobeType,
+                    wardrobeSections: redressNamedWardrobeSections,
+                    showsWardrobeLabels: shouldSplitRedressCanvasByWardrobe,
                     onSelectItem: { selectRedressItemOnCanvas($0) },
                     onViewAll: { openItemsSheet() }
                 )
@@ -1396,20 +1472,64 @@ struct OutfitAddView: View {
         redressCanvasItems.map(\.item)
     }
 
-    private var redressWishlistCanvasItems: [VisibleWardrobeItem] {
-        redressCanvasItems
-            .filter { $0.sourceWardrobeType == "wishlist" }
-            .map(\.item)
+    /// Split ITEMS when canvas items come from more than one wardrobe.
+    private var shouldSplitRedressCanvasByWardrobe: Bool {
+        redressNamedWardrobeSections.count >= 2
     }
 
-    private var redressClosetCanvasItems: [VisibleWardrobeItem] {
-        redressCanvasItems
-            .filter { $0.sourceWardrobeType != "wishlist" }
-            .map(\.item)
-    }
+    /// Named wardrobe groups; source wardrobe first, then any other wardrobes underneath.
+    private var redressNamedWardrobeSections: [RedressWardrobeItemsSection] {
+        let sourceId = preselectedRedressWardrobeId
 
-    private var shouldSplitRedressCanvasByWardrobeType: Bool {
-        !redressWishlistCanvasItems.isEmpty && !redressClosetCanvasItems.isEmpty
+        struct Acc {
+            var name: String
+            var type: String
+            var items: [VisibleWardrobeItem]
+        }
+        var grouped: [UUID: Acc] = [:]
+        var orderKeys: [UUID] = []
+
+        for canvasItem in redressCanvasItems {
+            let key = canvasItem.sourceWardrobeId
+                ?? (canvasItem.sourceWardrobeType == "wishlist"
+                    ? UUID(uuidString: "00000000-0000-0000-0000-00000000FFFF")!
+                    : UUID(uuidString: "00000000-0000-0000-0000-00000000FFFE")!)
+            if grouped[key] == nil {
+                grouped[key] = Acc(
+                    name: canvasItem.displayWardrobeName,
+                    type: canvasItem.sourceWardrobeType,
+                    items: []
+                )
+                orderKeys.append(key)
+            }
+            grouped[key]?.items.append(canvasItem.item)
+        }
+
+        let sections = orderKeys.compactMap { key -> RedressWardrobeItemsSection? in
+            guard let acc = grouped[key], !acc.items.isEmpty else { return nil }
+            return RedressWardrobeItemsSection(
+                id: key,
+                name: acc.name,
+                wardrobeType: acc.type,
+                items: acc.items
+            )
+        }
+
+        guard sections.count >= 2 else { return sections }
+
+        return sections.sorted { a, b in
+            // Source wardrobe first when present.
+            if let sourceId {
+                if a.id == sourceId && b.id != sourceId { return true }
+                if b.id == sourceId && a.id != sourceId { return false }
+            }
+            // Prefer matching source type next, then name.
+            let sourceType = preselectedRedressWardrobeType
+            let ra = a.wardrobeType == sourceType ? 0 : 1
+            let rb = b.wardrobeType == sourceType ? 0 : 1
+            if ra != rb { return ra < rb }
+            return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+        }
     }
 
     private func selectRedressItemOnCanvas(_ item: VisibleWardrobeItem) {
@@ -1550,6 +1670,8 @@ struct OutfitAddView: View {
                 canvasItemID: canvasItem.id,
                 itemID: canvasItem.item.id,
                 sourceWardrobeType: canvasItem.sourceWardrobeType,
+                sourceWardrobeId: canvasItem.sourceWardrobeId,
+                sourceWardrobeName: canvasItem.sourceWardrobeName,
                 name: canvasItem.item.name,
                 thumbnailUrl: canvasItem.item.thumbnailUrl,
                 imageUrl: canvasItem.item.imageUrl,
@@ -1572,6 +1694,8 @@ struct OutfitAddView: View {
                 canvasItemID: canvasItem.id,
                 itemID: canvasItem.item.id,
                 sourceWardrobeType: canvasItem.sourceWardrobeType,
+                sourceWardrobeId: canvasItem.sourceWardrobeId,
+                sourceWardrobeName: canvasItem.sourceWardrobeName,
                 name: canvasItem.item.name,
                 thumbnailUrl: canvasItem.item.thumbnailUrl,
                 imageUrl: canvasItem.item.imageUrl,
@@ -1685,6 +1809,8 @@ struct OutfitAddView: View {
                         imageUrl: snapshot.imageUrl
                     ),
                     sourceWardrobeType: snapshot.sourceWardrobeType,
+                    sourceWardrobeId: snapshot.sourceWardrobeId ?? reused?.sourceWardrobeId,
+                    sourceWardrobeName: snapshot.sourceWardrobeName ?? reused?.sourceWardrobeName,
                     position: CGPoint(x: snapshot.positionX, y: snapshot.positionY),
                     displaySize: reused.map(\.displaySize)
                         ?? CGSize(width: snapshot.displayWidth, height: snapshot.displayHeight),
@@ -1756,6 +1882,8 @@ struct OutfitAddView: View {
             return
         }
 
+        let seedType = preselectedRedressWardrobeType
+        let seedWardrobeId = preselectedRedressWardrobeId ?? editingSuggestionWardrobeId
         redressCanvasItems = thumbs.enumerated().map { index, thumb in
             RedressCanvasItem(
                 item: VisibleWardrobeItem(
@@ -1764,7 +1892,9 @@ struct OutfitAddView: View {
                     thumbnailUrl: thumb.thumbnailUrl,
                     imageUrl: thumb.thumbnailUrl
                 ),
-                sourceWardrobeType: "closet",
+                sourceWardrobeType: seedType,
+                sourceWardrobeId: seedWardrobeId,
+                sourceWardrobeName: nil,
                 position: center,
                 displaySize: RedressCanvasItem.defaultDisplaySize(canvasSize: squareSize),
                 scale: 1,
@@ -1792,16 +1922,29 @@ struct OutfitAddView: View {
 
             await MainActor.run {
                 let center = CGPoint(x: squareSize / 2, y: squareSize / 2)
+                // Apply transforms + wardrobe metadata onto seeded canvas items.
                 for index in redressCanvasItems.indices {
                     let itemId = redressCanvasItems[index].item.id
                     guard let saved = transformsByItemId[itemId] else { continue }
-                    redressCanvasItems[index].position = CGPoint(
-                        x: saved.positionX,
-                        y: saved.positionY
+                    let existing = redressCanvasItems[index]
+                    let type: String = {
+                        if let raw = saved.sourceWardrobeType?.lowercased() {
+                            return raw == "wishlist" ? "wishlist" : "closet"
+                        }
+                        return existing.sourceWardrobeType
+                    }()
+                    redressCanvasItems[index] = RedressCanvasItem(
+                        id: existing.id,
+                        item: existing.item,
+                        sourceWardrobeType: type,
+                        sourceWardrobeId: saved.sourceWardrobeId.flatMap(UUID.init(uuidString:)) ?? existing.sourceWardrobeId,
+                        sourceWardrobeName: saved.sourceWardrobeName ?? existing.sourceWardrobeName,
+                        position: CGPoint(x: saved.positionX, y: saved.positionY),
+                        displaySize: existing.displaySize,
+                        scale: saved.scale,
+                        rotation: saved.rotation,
+                        zIndex: saved.zIndex
                     )
-                    redressCanvasItems[index].scale = saved.scale
-                    redressCanvasItems[index].rotation = saved.rotation
-                    redressCanvasItems[index].zIndex = saved.zIndex
                 }
 
                 // If seed was empty, build from transforms + record item ids.
@@ -1810,6 +1953,7 @@ struct OutfitAddView: View {
                     let orderedIds = fromTransforms.isEmpty ? record.itemIds : fromTransforms
                     redressCanvasItems = orderedIds.enumerated().map { index, itemId in
                         let saved = transformsByItemId[itemId]
+                        let savedType = saved?.sourceWardrobeType?.lowercased() == "wishlist" ? "wishlist" : "closet"
                         return RedressCanvasItem(
                             item: VisibleWardrobeItem(
                                 id: itemId,
@@ -1817,7 +1961,11 @@ struct OutfitAddView: View {
                                 thumbnailUrl: nil,
                                 imageUrl: nil
                             ),
-                            sourceWardrobeType: "closet",
+                            sourceWardrobeType: saved?.sourceWardrobeType != nil ? savedType : (preselectedRedressWardrobeType),
+                            sourceWardrobeId: saved?.sourceWardrobeId.flatMap(UUID.init(uuidString:))
+                                ?? preselectedRedressWardrobeId
+                                ?? editingSuggestionWardrobeId,
+                            sourceWardrobeName: saved?.sourceWardrobeName,
                             position: CGPoint(
                                 x: saved?.positionX ?? center.x,
                                 y: saved?.positionY ?? center.y
@@ -1836,16 +1984,44 @@ struct OutfitAddView: View {
         }
     }
 
-    private func addRedressItemToCanvas(_ item: VisibleWardrobeItem) {
+    private func addPreselectedRedressItemToCanvas(_ item: VisibleWardrobeItem) {
         guard isRedressMode else { return }
         guard !redressCanvasItems.contains(where: { $0.item.id == item.id }) else { return }
         saveState()
 
         let center = CGPoint(x: squareSize / 2, y: squareSize / 2)
-        let sourceType = itemsSheetItemTypeSegment == .wishlist ? "wishlist" : "closet"
+        let canvasItem = RedressCanvasItem(
+            item: item,
+            sourceWardrobeType: preselectedRedressWardrobeType,
+            sourceWardrobeId: preselectedRedressWardrobeId,
+            sourceWardrobeName: nil,
+            position: center,
+            displaySize: RedressCanvasItem.defaultDisplaySize(canvasSize: squareSize),
+            scale: 1.0,
+            rotation: 0.0,
+            zIndex: redressCanvasItems.count
+        )
+        redressCanvasItems.append(canvasItem)
+        selectedItemID = canvasItem.id
+        if !isItemsSectionExpanded {
+            withAnimation {
+                isItemsSectionExpanded = true
+            }
+        }
+    }
+
+    private func addRedressItemToCanvas(_ item: VisibleWardrobeItem, wardrobe: VisibleWardrobe) {
+        guard isRedressMode else { return }
+        guard !redressCanvasItems.contains(where: { $0.item.id == item.id }) else { return }
+        saveState()
+
+        let center = CGPoint(x: squareSize / 2, y: squareSize / 2)
+        let sourceType = wardrobe.wardrobeType == "wishlist" ? "wishlist" : "closet"
         let canvasItem = RedressCanvasItem(
             item: item,
             sourceWardrobeType: sourceType,
+            sourceWardrobeId: wardrobe.id,
+            sourceWardrobeName: wardrobe.name,
             position: center,
             displaySize: RedressCanvasItem.defaultDisplaySize(canvasSize: squareSize),
             scale: 1.0,
@@ -2046,11 +2222,33 @@ struct OutfitAddView: View {
         if let index = outfitItems.firstIndex(where: { $0.id == outfitItem.id }) {
             outfitItems[index].zIndex = maxZIndex + 1
         }
+        selectedItemID = outfitItem.id
+    }
+
+    private func pushOutfitItemToBack(_ outfitItem: OutfitItem) {
+        saveState()
+        let minZIndex = outfitItems.map(\.zIndex).min() ?? 0
+        if let index = outfitItems.firstIndex(where: { $0.id == outfitItem.id }) {
+            outfitItems[index].zIndex = minZIndex - 1
+        }
+        selectedItemID = outfitItem.id
+    }
+
+    private func scaleOutfitItem(_ outfitItem: OutfitItem, by factor: CGFloat) {
+        guard let index = outfitItems.firstIndex(where: { $0.id == outfitItem.id }) else { return }
+        let next = max(0.3, min(4.0, outfitItems[index].scale * factor))
+        guard abs(next - outfitItems[index].scale) > 0.0001 else { return }
+        saveState()
+        updateItemScale(outfitItem, next)
+        selectedItemID = outfitItem.id
     }
 
     private func removeItem(_ outfitItem: OutfitItem) {
         saveState()
         outfitItems.removeAll { $0.id == outfitItem.id }
+        if selectedItemID == outfitItem.id {
+            selectedItemID = nil
+        }
     }
 
     private func clearAllItems() {
@@ -2330,7 +2528,10 @@ struct OutfitAddView: View {
                         positionY: canvasItem.position.y,
                         scale: canvasItem.scale,
                         rotation: canvasItem.rotation,
-                        zIndex: canvasItem.zIndex
+                        zIndex: canvasItem.zIndex,
+                        sourceWardrobeId: canvasItem.sourceWardrobeId?.uuidString,
+                        sourceWardrobeName: canvasItem.sourceWardrobeName,
+                        sourceWardrobeType: canvasItem.sourceWardrobeType
                     )
                 }
                 let transformationJSON = String(data: try JSONEncoder().encode(savedItems), encoding: .utf8) ?? "[]"
@@ -2465,6 +2666,50 @@ struct SavedOutfitItem: Codable {
     let scale: CGFloat
     let rotation: Double
     let zIndex: Int
+    /// Wardrobe the item was picked from when composing Redress (optional for older payloads).
+    let sourceWardrobeId: String?
+    let sourceWardrobeName: String?
+    let sourceWardrobeType: String?
+
+    init(
+        itemID: String,
+        positionX: CGFloat,
+        positionY: CGFloat,
+        scale: CGFloat,
+        rotation: Double,
+        zIndex: Int,
+        sourceWardrobeId: String? = nil,
+        sourceWardrobeName: String? = nil,
+        sourceWardrobeType: String? = nil
+    ) {
+        self.itemID = itemID
+        self.positionX = positionX
+        self.positionY = positionY
+        self.scale = scale
+        self.rotation = rotation
+        self.zIndex = zIndex
+        self.sourceWardrobeId = sourceWardrobeId
+        self.sourceWardrobeName = sourceWardrobeName
+        self.sourceWardrobeType = sourceWardrobeType
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case itemID, positionX, positionY, scale, rotation, zIndex
+        case sourceWardrobeId, sourceWardrobeName, sourceWardrobeType
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        itemID = try c.decode(String.self, forKey: .itemID)
+        positionX = try c.decode(CGFloat.self, forKey: .positionX)
+        positionY = try c.decode(CGFloat.self, forKey: .positionY)
+        scale = try c.decode(CGFloat.self, forKey: .scale)
+        rotation = try c.decode(Double.self, forKey: .rotation)
+        zIndex = try c.decode(Int.self, forKey: .zIndex)
+        sourceWardrobeId = try c.decodeIfPresent(String.self, forKey: .sourceWardrobeId)
+        sourceWardrobeName = try c.decodeIfPresent(String.self, forKey: .sourceWardrobeName)
+        sourceWardrobeType = try c.decodeIfPresent(String.self, forKey: .sourceWardrobeType)
+    }
 }
 
 // MARK: - Canvas State Snapshot (for undo/redo)
@@ -2487,6 +2732,8 @@ struct RedressCanvasStateSnapshot {
     let canvasItemID: UUID
     let itemID: UUID
     let sourceWardrobeType: String
+    let sourceWardrobeId: UUID?
+    let sourceWardrobeName: String?
     let name: String?
     let thumbnailUrl: String?
     let imageUrl: String?

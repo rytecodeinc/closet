@@ -59,6 +59,8 @@
         <attribute name="isSoftDeleted" optional="YES" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
         <attribute name="syncedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="notes" optional="YES" attributeType="String"/>
+        <attribute name="theme" optional="YES" attributeType="String"/>
+        <attribute name="occasion" optional="YES" attributeType="String"/>
         <!-- private | friends | public — default private (see EventVisibility / WardrobeVisibility raw values) -->
         <attribute name="visibility" optional="YES" attributeType="String" defaultValueString="private"/>
         <relationship name="items" optional="YES" toMany="YES" deletionRule="Nullify" ordered="YES" destinationEntity="Item" inverseName="events" inverseEntity="Item"/>
@@ -301,5 +303,16 @@
         <relationship name="packingAssignments" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="PackingAssignment" inverseName="wardrobe" inverseEntity="PackingAssignment"/>
         <relationship name="packingChecklistItems" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="PackingChecklistItem" inverseName="wardrobe" inverseEntity="PackingChecklistItem"/>
         <relationship name="packingChecklistSections" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="PackingChecklistSection" inverseName="wardrobe" inverseEntity="PackingChecklistSection"/>
+        <relationship name="packingChecklistDocuments" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="PackingChecklistDocument" inverseName="wardrobe" inverseEntity="PackingChecklistDocument"/>
+    </entity>
+    <entity name="PackingChecklistDocument" representedClassName="PackingChecklistDocument" syncable="YES" codeGenerationType="class">
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="kind" optional="YES" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="bodyJSON" optional="YES" attributeType="Binary"/>
+        <attribute name="userId" optional="YES" attributeType="String"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="syncedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <relationship name="wardrobe" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Wardrobe" inverseName="packingChecklistDocuments" inverseEntity="Wardrobe"/>
     </entity>
 </model>

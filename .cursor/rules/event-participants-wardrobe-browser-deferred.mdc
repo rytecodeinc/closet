@@ -1,0 +1,22 @@
+---
+description: Deferred — Participants wardrobe browser on Event Detail (post-accept)
+globs: closet/Outfit Views/Calendar Views/EventDetailView.swift,closet/Outfit Views/Calendar Views/EventInviteeView.swift
+alwaysApply: false
+---
+
+# Deferred: Participants wardrobe browser
+
+**Status:** Deferred. Pending invite preview shows **host** wardrobe thumbs only (`get_event_invite_wardrobe`).
+
+## Spec (locked)
+
+- Own wardrobe: existing grid / single-square (guest edit after Accept).
+- Separate **Participants** control: browse other participants’ event looks (**read-only**).
+- Cap 4 people; multi-day same as host.
+- Empty own wardrobe: Event Add–style placeholder.
+
+## When building
+
+- Add Participants toggle next to grid/square on host + accepted-guest Event Detail.
+- RPC may need per-owner wardrobe entries (not only host).
+- Do not change pending `EventInviteeView` editability (Accept = Going only).

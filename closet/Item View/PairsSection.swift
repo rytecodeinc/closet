@@ -221,8 +221,8 @@ struct SetItemCell: View {
 /// ITEMS section preview for Redress mode (remote recipient items on canvas).
 struct RedressFeaturedItemsSubsectionRow: View {
     let pairedItems: [VisibleWardrobeItem]
-    var wishlistItems: [VisibleWardrobeItem] = []
-    var closetItems: [VisibleWardrobeItem] = []
+    /// Named wardrobe groups when canvas items come from more than one wardrobe.
+    var wardrobeSections: [RedressWardrobeItemsSection] = []
     var showsWardrobeLabels: Bool = false
     var isReadOnly: Bool = false
     let onSelectItem: (VisibleWardrobeItem) -> Void
@@ -240,23 +240,18 @@ struct RedressFeaturedItemsSubsectionRow: View {
 
     private let chevronColumnWidth: CGFloat = 20
 
-    private var shouldSplitByWardrobeType: Bool {
-        showsWardrobeLabels && (!wishlistItems.isEmpty || !closetItems.isEmpty)
+    private var shouldSplitByNamedWardrobes: Bool {
+        showsWardrobeLabels && wardrobeSections.count >= 2
     }
 
     var body: some View {
         HStack(alignment: .center, spacing: 2) {
             VStack(alignment: .leading, spacing: 4) {
-                if shouldSplitByWardrobeType {
-                    if !wishlistItems.isEmpty {
-                        wardrobeLabel("WISHLIST")
-                            .padding(.top, 4)
-                        itemGrid(wishlistItems)
-                    }
-                    if !closetItems.isEmpty {
-                        wardrobeLabel("CLOSET")
-                            .padding(.top, wishlistItems.isEmpty ? 4 : 0)
-                        itemGrid(closetItems)
+                if shouldSplitByNamedWardrobes {
+                    ForEach(Array(wardrobeSections.enumerated()), id: \.element.id) { index, section in
+                        wardrobeLabel(section.name.uppercased())
+                            .padding(.top, index == 0 ? 4 : 0)
+                        itemGrid(section.items)
                     }
                 } else {
                     itemGrid(pairedItems)

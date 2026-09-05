@@ -11,6 +11,8 @@ struct RedressCanvasItem: Identifiable {
     let id: UUID
     let item: VisibleWardrobeItem
     let sourceWardrobeType: String
+    let sourceWardrobeId: UUID?
+    let sourceWardrobeName: String?
     var position: CGPoint
     let displaySize: CGSize
     var scale: CGFloat
@@ -21,6 +23,8 @@ struct RedressCanvasItem: Identifiable {
         id: UUID = UUID(),
         item: VisibleWardrobeItem,
         sourceWardrobeType: String,
+        sourceWardrobeId: UUID? = nil,
+        sourceWardrobeName: String? = nil,
         position: CGPoint,
         displaySize: CGSize,
         scale: CGFloat,
@@ -29,7 +33,9 @@ struct RedressCanvasItem: Identifiable {
     ) {
         self.id = id
         self.item = item
-        self.sourceWardrobeType = sourceWardrobeType
+        self.sourceWardrobeType = sourceWardrobeType.lowercased() == "wishlist" ? "wishlist" : "closet"
+        self.sourceWardrobeId = sourceWardrobeId
+        self.sourceWardrobeName = sourceWardrobeName
         self.position = position
         self.displaySize = displaySize
         self.scale = scale
@@ -41,14 +47,31 @@ struct RedressCanvasItem: Identifiable {
         let side = canvasSize * 0.45
         return CGSize(width: side, height: side)
     }
+
+    var displayWardrobeName: String {
+        if let sourceWardrobeName, !sourceWardrobeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return sourceWardrobeName
+        }
+        return sourceWardrobeType == "wishlist" ? "Wishlist" : "Closet"
+    }
+}
+
+/// ITEMS subsection for Redress when canvas spans Closet + Wishlist wardrobes.
+struct RedressWardrobeItemsSection: Identifiable {
+    let id: UUID
+    let name: String
+    let wardrobeType: String
+    let items: [VisibleWardrobeItem]
 }
 
 struct RedressItemSelectionView: View {
     let recipientUserId: UUID
+    /// When set, prefer this wardrobe (must match current Closet/Wishlist segment).
+    var initialWardrobeId: UUID? = nil
     @Binding var itemTypeSegment: OutfitItemTypeSegment
     let isOnCanvas: (VisibleWardrobeItem) -> Bool
     let canvasItemCount: Int
-    let onAddItem: (VisibleWardrobeItem) -> Void
+    let onAddItem: (VisibleWardrobeItem, VisibleWardrobe) -> Void
 
     @EnvironmentObject private var supabaseService: SupabaseService
 
@@ -58,16 +81,26 @@ struct RedressItemSelectionView: View {
     @State private var isLoadingWardrobes = false
     @State private var isLoadingItems = false
     @State private var loadError: String?
-    @State private var showWardrobeSelection = false
     @State private var showFilter = false
+    @State private var showWardrobeSelection = false
     @State private var isSearchActive = false
     @State private var didInitializeSession = false
+    @State private var didApplyInitialWardrobePreference = false
     @StateObject private var filterModel = ItemFilterModel()
     @FocusState private var isSearchFocused: Bool
 
     private var filteredWardrobes: [VisibleWardrobe] {
         let targetType = itemTypeSegment == .wishlist ? "wishlist" : "closet"
-        return wardrobes.filter { $0.wardrobeType == targetType }
+        return wardrobes.filter { wardrobe in
+            guard wardrobe.wardrobeType == targetType else { return false }
+            // Match get_redress_wardrobes: never offer private; friends-only only when API returned it.
+            switch wardrobe.wardrobeVisibility {
+            case .public, .friends:
+                return true
+            case .private:
+                return false
+            }
+        }
     }
 
     private var wardrobeTitle: String {
@@ -88,13 +121,13 @@ struct RedressItemSelectionView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SelectionPanelHeader(title: wardrobeTitle, onTitleTap: { showWardrobeSelection = true }) {
-                Picker("Item Type", selection: $itemTypeSegment) {
-                    Text(OutfitItemTypeSegment.closet.rawValue).tag(OutfitItemTypeSegment.closet)
-                    Text(OutfitItemTypeSegment.wishlist.rawValue).tag(OutfitItemTypeSegment.wishlist)
-                }
-                .pickerStyle(.segmented)
-            }
+            SelectionPanelHeader(
+                title: wardrobeTitle,
+                onTitleTap: { showWardrobeSelection = true },
+                actionPlacement: .barAboveTitle,
+                leading: { itemTypeMenuPicker },
+                trailing: { EmptyView() }
+            )
 
             selectionActionsBar
 
@@ -124,11 +157,13 @@ struct RedressItemSelectionView: View {
                         ) {
                             ForEach(displayedItems) { item in
                                 Button {
-                                    onAddItem(item)
+                                    guard let wardrobe = selectedWardrobe else { return }
+                                    onAddItem(item, wardrobe)
                                 } label: {
                                     RedressItemGridCell(item: item, isOnCanvas: isOnCanvas(item))
                                 }
                                 .buttonStyle(.plain)
+                                .disabled(selectedWardrobe == nil)
                             }
                         }
                     }
@@ -159,11 +194,17 @@ struct RedressItemSelectionView: View {
         .onChange(of: canvasItemCount) { _, _ in
             // Refresh grid checkmarks when canvas changes.
         }
-        .navigationDestination(isPresented: $showWardrobeSelection) {
-            RedressWardrobeSelectionView(
-                wardrobes: filteredWardrobes,
-                selectedWardrobe: $selectedWardrobe
-            )
+        // Same as OutfitItemSelectionView: sheet for wardrobe pick (not a nested nav push).
+        // Pushing from this sheet cancels `.task` / re-applies source wardrobe and undoes the tap.
+        .sheet(isPresented: $showWardrobeSelection) {
+            NavigationStack {
+                RedressWardrobeSelectionView(
+                    wardrobes: filteredWardrobes,
+                    selectedWardrobe: $selectedWardrobe
+                )
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
     }
 
@@ -179,6 +220,27 @@ struct RedressItemSelectionView: View {
             searchPlaceholder: "Name",
             backgroundColor: Color(UIColor.secondarySystemBackground)
         )
+    }
+
+    private var itemTypeMenuPicker: some View {
+        Menu {
+            Picker("Item Type", selection: $itemTypeSegment) {
+                Text(OutfitItemTypeSegment.closet.rawValue).tag(OutfitItemTypeSegment.closet)
+                Text(OutfitItemTypeSegment.wishlist.rawValue).tag(OutfitItemTypeSegment.wishlist)
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(itemTypeSegment.rawValue)
+                    .font(.subheadline.weight(.semibold))
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(.primary)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Item type, \(itemTypeSegment.rawValue)")
     }
 
     private func resetFiltersForNewSession() {
@@ -205,7 +267,7 @@ struct RedressItemSelectionView: View {
             await MainActor.run {
                 wardrobes = fetched
                 isLoadingWardrobes = false
-                bootstrapWardrobeForCurrentSegment()
+                applyInitialWardrobePreference()
             }
             await loadItems()
         } catch {
@@ -248,13 +310,43 @@ struct RedressItemSelectionView: View {
 
     private func bootstrapWardrobeIfNeeded() {
         guard selectedWardrobe == nil else { return }
+        applyInitialWardrobePreference()
+    }
+
+    /// Prefer the browsing-source wardrobe when present; keep Closet/Wishlist segment in sync.
+    private func applyInitialWardrobePreference() {
+        // Only seed once — re-running after a user pick (e.g. `.task` restart) must not stomp selection.
+        guard !didApplyInitialWardrobePreference else {
+            if selectedWardrobe == nil {
+                bootstrapWardrobeForCurrentSegment()
+            }
+            return
+        }
+        didApplyInitialWardrobePreference = true
+
+        if let initialId = initialWardrobeId,
+           let match = wardrobes.first(where: { $0.id == initialId }) {
+            let matchSegment: OutfitItemTypeSegment = match.wardrobeType == "wishlist" ? .wishlist : .closet
+            if itemTypeSegment != matchSegment {
+                itemTypeSegment = matchSegment
+            }
+            selectedWardrobe = match
+            return
+        }
         bootstrapWardrobeForCurrentSegment()
     }
 
     private func bootstrapWardrobeForCurrentSegment() {
         let segmentWardrobes = filteredWardrobes
+        // Keep a valid in-segment selection (user may have changed wardrobe in the picker).
         if let selected = selectedWardrobe,
            segmentWardrobes.contains(where: { $0.id == selected.id }) {
+            return
+        }
+        // Only fall back to source wardrobe when nothing valid is selected for this segment.
+        if let initialId = initialWardrobeId,
+           let match = segmentWardrobes.first(where: { $0.id == initialId }) {
+            selectedWardrobe = match
             return
         }
         selectedWardrobe = primaryWardrobe(in: segmentWardrobes)
@@ -318,20 +410,32 @@ private struct RedressWardrobeSelectionView: View {
                         HStack {
                             Text(wardrobe.name)
                                 .foregroundStyle(.primary)
-                            Spacer(minLength: 0)
+                            Spacer()
                             if selectedWardrobe?.id == wardrobe.id {
                                 Image(systemName: "checkmark")
                                     .foregroundStyle(.blue)
                             }
                         }
                     }
-                    .buttonStyle(.plain)
                 }
             }
         }
         .listStyle(.plain)
-        .navigationTitle("Wardrobes")
+        .navigationTitle("Select Wardrobe")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    dismiss()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text("Back")
+                    }
+                }
+            }
+        }
     }
 }
 

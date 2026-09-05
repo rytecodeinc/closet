@@ -162,49 +162,54 @@ struct OutfitItemSelectionView: View {
                 selectedWardrobe: selectedWardrobe
             )
         }
-        .navigationDestination(isPresented: $showWardrobeSelection) {
-            SingleWardrobeSelectionView(
-                selectedWardrobe: $selectedWardrobe,
-                wardrobeType: itemsSheetWardrobeType
-            )
+        // Sheet (not nested `navigationDestination(isPresented:)`) — items sheet is already inside
+        // Outfit Add’s NavigationStack / Edit Outfit fullScreenCover; nested isPresented freezes.
+        .sheet(isPresented: $showWardrobeSelection) {
+            NavigationStack {
+                SingleWardrobeSelectionView(
+                    selectedWardrobe: $selectedWardrobe,
+                    wardrobeType: itemsSheetWardrobeType
+                )
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
     }
 
     @ViewBuilder
     private var selectionHeader: some View {
         if wardrobeType == "wishlist" {
-            outfitItemsPanel(showsSegmentPicker: true)
+            outfitItemsPanel(showsItemTypeMenu: true)
         } else {
-            outfitItemsPanel(showsSegmentPicker: false)
+            outfitItemsPanel(showsItemTypeMenu: false)
         }
     }
 
     @ViewBuilder
-    private func outfitItemsPanel(showsSegmentPicker: Bool) -> some View {
-        if onShowAddedItems != nil {
-            if showsSegmentPicker {
-                SelectionPanelHeader(
-                    title: wardrobeTitle,
-                    onTitleTap: wardrobeTitleTap,
-                    actionPlacement: .barAboveTitle,
-                    leading: { EmptyView() },
-                    trailing: { selectionHeaderTrailing },
-                    picker: { itemTypeSegmentPicker }
-                )
-            } else {
-                SelectionPanelHeader(
-                    title: wardrobeTitle,
-                    onTitleTap: wardrobeTitleTap,
-                    actionPlacement: .barAboveTitle,
-                    leading: { EmptyView() },
-                    trailing: { selectionHeaderTrailing }
-                )
-            }
-        } else if showsSegmentPicker {
+    private func outfitItemsPanel(showsItemTypeMenu: Bool) -> some View {
+        if onShowAddedItems != nil, showsItemTypeMenu {
             SelectionPanelHeader(
                 title: wardrobeTitle,
                 onTitleTap: wardrobeTitleTap,
-                picker: { itemTypeSegmentPicker }
+                actionPlacement: .barAboveTitle,
+                leading: { itemTypeMenuPicker },
+                trailing: { selectionHeaderTrailing }
+            )
+        } else if onShowAddedItems != nil {
+            SelectionPanelHeader(
+                title: wardrobeTitle,
+                onTitleTap: wardrobeTitleTap,
+                actionPlacement: .barAboveTitle,
+                leading: { EmptyView() },
+                trailing: { selectionHeaderTrailing }
+            )
+        } else if showsItemTypeMenu {
+            SelectionPanelHeader(
+                title: wardrobeTitle,
+                onTitleTap: wardrobeTitleTap,
+                actionPlacement: .barAboveTitle,
+                leading: { itemTypeMenuPicker },
+                trailing: { EmptyView() }
             )
         } else {
             SelectionPanelHeader(
@@ -214,14 +219,25 @@ struct OutfitItemSelectionView: View {
         }
     }
 
-    private var itemTypeSegmentPicker: some View {
-        Picker("Item Type", selection: $itemTypeSegment) {
-            Text(OutfitItemTypeSegment.closet.rawValue)
-                .tag(OutfitItemTypeSegment.closet)
-            Text(OutfitItemTypeSegment.wishlist.rawValue)
-                .tag(OutfitItemTypeSegment.wishlist)
+    private var itemTypeMenuPicker: some View {
+        Menu {
+            Picker("Item Type", selection: $itemTypeSegment) {
+                Text(OutfitItemTypeSegment.closet.rawValue).tag(OutfitItemTypeSegment.closet)
+                Text(OutfitItemTypeSegment.wishlist.rawValue).tag(OutfitItemTypeSegment.wishlist)
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(itemTypeSegment.rawValue)
+                    .font(.subheadline.weight(.semibold))
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(.primary)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
         }
-        .pickerStyle(.segmented)
+        .buttonStyle(.plain)
+        .accessibilityLabel("Item type, \(itemTypeSegment.rawValue)")
     }
 
     @ViewBuilder

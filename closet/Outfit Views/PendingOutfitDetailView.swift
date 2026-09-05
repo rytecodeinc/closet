@@ -256,18 +256,18 @@ struct PendingOutfitDetailView: View {
                 isPresented: $isOutfitImageFullScreen
             )
         }
-        .alert("Couldn't Update Suggestion", isPresented: suggestionActionErrorPresented) {
+        .alert("Couldn't Update Redress", isPresented: suggestionActionErrorPresented) {
             Button("OK", role: .cancel) { suggestionActionError = nil }
         } message: {
             Text(suggestionActionError ?? "")
         }
-        .alert("Withdraw Suggestion?", isPresented: $showWithdrawConfirmation) {
+        .alert("Withdraw Redress?", isPresented: $showWithdrawConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Withdraw", role: .destructive) {
                 Task { await withdrawSuggestion() }
             }
         } message: {
-            Text("This will remove your pending outfit suggestion. This can't be undone.")
+            Text("This will remove your pending Redress. This can't be undone.")
         }
     }
 
@@ -288,7 +288,7 @@ struct PendingOutfitDetailView: View {
                 if !itemThumbs.isEmpty {
                     Section {
                         if isItemsSectionExpanded {
-                            featuredItemsGrid
+                            featuredItemsContent
                                 .transition(.opacity.combined(with: .slide))
                         }
                     } header: {
@@ -532,9 +532,139 @@ struct PendingOutfitDetailView: View {
         }
     }
 
-    private var featuredItemsGrid: some View {
+    @ViewBuilder
+    private var featuredItemsContent: some View {
+        if shouldSplitPendingItemsByWardrobe {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(pendingNamedWardrobeSections.enumerated()), id: \.element.id) { index, section in
+                    pendingItemsSubsectionHeader(section.name)
+                        .padding(.top, index == 0 ? 4 : 0)
+                    featuredItemsGrid(items: section.items)
+                }
+            }
+        } else {
+            featuredItemsGrid(items: itemThumbs)
+        }
+    }
+
+    private func pendingItemsSubsectionHeader(_ title: String) -> some View {
+        HStack {
+            Text(title.uppercased())
+                .fontWeight(.semibold)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+    }
+
+    private var sourceWardrobeTypeForPending: String {
+        resolveWardrobeMeta(id: wardrobeId)?.type ?? "closet"
+    }
+
+    private var shouldSplitPendingItemsByWardrobe: Bool {
+        pendingNamedWardrobeSections.count >= 2
+    }
+
+    private struct PendingWardrobeThumbSection: Identifiable {
+        let id: UUID
+        let name: String
+        let wardrobeType: String
+        let items: [VisibleOutfitItemThumb]
+    }
+
+    private var pendingNamedWardrobeSections: [PendingWardrobeThumbSection] {
+        struct Acc {
+            var name: String
+            var type: String
+            var items: [VisibleOutfitItemThumb]
+        }
+        var grouped: [UUID: Acc] = [:]
+        var orderKeys: [UUID] = []
+
+        for thumb in itemThumbs {
+            let meta = preferredWardrobeMeta(for: thumb.id)
+            let key = meta?.id ?? wardrobeId
+            let name = meta?.name ?? "Wardrobe"
+            let type = meta?.type ?? sourceWardrobeTypeForPending
+            if grouped[key] == nil {
+                grouped[key] = Acc(name: name, type: type, items: [])
+                orderKeys.append(key)
+            }
+            grouped[key]?.items.append(thumb)
+        }
+
+        let sourceType = sourceWardrobeTypeForPending
+        let sections = orderKeys.compactMap { key -> PendingWardrobeThumbSection? in
+            guard let acc = grouped[key], !acc.items.isEmpty else { return nil }
+            return PendingWardrobeThumbSection(
+                id: key,
+                name: acc.name,
+                wardrobeType: acc.type,
+                items: acc.items
+            )
+        }
+
+        guard sections.count >= 2 else { return sections }
+
+        return sections.sorted { a, b in
+            // Viewing / source wardrobe first.
+            if a.id == wardrobeId && b.id != wardrobeId { return true }
+            if b.id == wardrobeId && a.id != wardrobeId { return false }
+            let ra = a.wardrobeType == sourceType ? 0 : 1
+            let rb = b.wardrobeType == sourceType ? 0 : 1
+            if ra != rb { return ra < rb }
+            return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+        }
+    }
+
+    private func preferredWardrobeMeta(for itemId: UUID) -> (id: UUID, name: String, type: String)? {
+        guard let item = localItem(for: itemId) else {
+            return resolveWardrobeMeta(id: wardrobeId)
+        }
+        let wardrobes = ((item.wardrobes as? Set<Wardrobe>) ?? []).filter {
+            $0.isSoftDeleted != true
+        }
+        if let preferred = wardrobes.first(where: { $0.id == wardrobeId }),
+           let id = preferred.id {
+            let type = (preferred.type ?? "closet").lowercased() == "wishlist" ? "wishlist" : "closet"
+            let trimmed = preferred.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let name = trimmed.isEmpty ? (type == "wishlist" ? "Wishlist" : "Closet") : trimmed
+            return (id, name, type)
+        }
+        // Prefer a wardrobe of the non-source type when item isn't in the viewing wardrobe.
+        let sourceType = sourceWardrobeTypeForPending
+        let otherType = sourceType == "wishlist" ? "closet" : "wishlist"
+        let ordered = wardrobes.sorted { a, b in
+            let aType = (a.type ?? "closet").lowercased()
+            let bType = (b.type ?? "closet").lowercased()
+            let ar = aType == otherType ? 0 : 1
+            let br = bType == otherType ? 0 : 1
+            if ar != br { return ar < br }
+            return (a.name ?? "").localizedCaseInsensitiveCompare(b.name ?? "") == .orderedAscending
+        }
+        guard let pick = ordered.first, let id = pick.id else {
+            return resolveWardrobeMeta(id: wardrobeId)
+        }
+        let type = (pick.type ?? "closet").lowercased() == "wishlist" ? "wishlist" : "closet"
+        let trimmed = pick.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let name = trimmed.isEmpty ? (type == "wishlist" ? "Wishlist" : "Closet") : trimmed
+        return (id, name, type)
+    }
+
+    private func resolveWardrobeMeta(id: UUID) -> (id: UUID, name: String, type: String)? {
+        let request = Wardrobe.fetchRequest()
+        request.fetchLimit = 1
+        request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
+        guard let wardrobe = try? viewContext.fetch(request).first, let wid = wardrobe.id else { return nil }
+        let type = (wardrobe.type ?? "closet").lowercased() == "wishlist" ? "wishlist" : "closet"
+        let trimmed = wardrobe.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let name = trimmed.isEmpty ? (type == "wishlist" ? "Wishlist" : "Closet") : trimmed
+        return (wid, name, type)
+    }
+
+    private func featuredItemsGrid(items: [VisibleOutfitItemThumb]) -> some View {
         LazyVGrid(columns: featuredItemsGridColumns, spacing: 4) {
-            ForEach(itemThumbs) { thumb in
+            ForEach(items) { thumb in
                 Button {
                     openItem(thumb: thumb)
                 } label: {
@@ -713,7 +843,7 @@ struct PendingOutfitDetailView: View {
                 wardrobeId: wardrobeId
             )
             if detail == nil {
-                loadError = "This suggestion is not available."
+                loadError = "This Redress is not available."
             } else {
                 isItemsSectionExpanded = !itemThumbs.isEmpty
                 redressContext = await supabaseService.fetchOutfitRedressSuggestionContext(

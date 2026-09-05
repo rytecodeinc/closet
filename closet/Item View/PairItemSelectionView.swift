@@ -263,38 +263,37 @@ struct PairItemSelectionView: View {
     @ViewBuilder
     private var pairSelectionHeader: some View {
         if isWishlistItem {
-            pairSelectionPanel(showsSegmentPicker: true)
+            pairSelectionPanel(showsItemTypeMenu: true)
         } else {
-            pairSelectionPanel(showsSegmentPicker: false)
+            pairSelectionPanel(showsItemTypeMenu: false)
         }
     }
 
     @ViewBuilder
-    private func pairSelectionPanel(showsSegmentPicker: Bool) -> some View {
-        if onShowPairedItems != nil {
-            if showsSegmentPicker {
-                SelectionPanelHeader(
-                    title: pairSheetWardrobeTitle,
-                    onTitleTap: { showWardrobeSelection = true },
-                    actionPlacement: .barAboveTitle,
-                    leading: { EmptyView() },
-                    trailing: { pairSelectionHeaderTrailing },
-                    picker: { pairSourceSegmentPicker }
-                )
-            } else {
-                SelectionPanelHeader(
-                    title: pairSheetWardrobeTitle,
-                    onTitleTap: { showWardrobeSelection = true },
-                    actionPlacement: .barAboveTitle,
-                    leading: { EmptyView() },
-                    trailing: { pairSelectionHeaderTrailing }
-                )
-            }
-        } else if showsSegmentPicker {
+    private func pairSelectionPanel(showsItemTypeMenu: Bool) -> some View {
+        if onShowPairedItems != nil, showsItemTypeMenu {
             SelectionPanelHeader(
                 title: pairSheetWardrobeTitle,
                 onTitleTap: { showWardrobeSelection = true },
-                picker: { pairSourceSegmentPicker }
+                actionPlacement: .barAboveTitle,
+                leading: { pairSourceMenuPicker },
+                trailing: { pairSelectionHeaderTrailing }
+            )
+        } else if onShowPairedItems != nil {
+            SelectionPanelHeader(
+                title: pairSheetWardrobeTitle,
+                onTitleTap: { showWardrobeSelection = true },
+                actionPlacement: .barAboveTitle,
+                leading: { EmptyView() },
+                trailing: { pairSelectionHeaderTrailing }
+            )
+        } else if showsItemTypeMenu {
+            SelectionPanelHeader(
+                title: pairSheetWardrobeTitle,
+                onTitleTap: { showWardrobeSelection = true },
+                actionPlacement: .barAboveTitle,
+                leading: { pairSourceMenuPicker },
+                trailing: { EmptyView() }
             )
         } else {
             SelectionPanelHeader(
@@ -304,13 +303,26 @@ struct PairItemSelectionView: View {
         }
     }
 
-    private var pairSourceSegmentPicker: some View {
-        Picker("Item Type", selection: $pairSourceSegment) {
-            ForEach(PairSourceSegment.allCases, id: \.self) { segment in
-                Text(segment.rawValue).tag(segment)
+    private var pairSourceMenuPicker: some View {
+        Menu {
+            Picker("Item Type", selection: $pairSourceSegment) {
+                ForEach(PairSourceSegment.allCases, id: \.self) { segment in
+                    Text(segment.rawValue).tag(segment)
+                }
             }
+        } label: {
+            HStack(spacing: 4) {
+                Text(pairSourceSegment.rawValue)
+                    .font(.subheadline.weight(.semibold))
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(.primary)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
         }
-        .pickerStyle(.segmented)
+        .buttonStyle(.plain)
+        .accessibilityLabel("Item type, \(pairSourceSegment.rawValue)")
     }
 
     @ViewBuilder

@@ -279,27 +279,11 @@ private struct ItemLinkTypeSectionBlock: View {
         appCapabilities.enablesCloudSync
     }
 
-    private var sectionVisibility: WardrobeVisibility {
-        let unique = Set(links.map(\.itemLinkVisibility))
-        if unique.count > 1 { return .public }
-        if let only = unique.first { return only }
-        return linkType.defaultVisibility
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: ItemLinkRowMetrics.privacyIconLabelSpacing) {
-                if showsLinkPrivacy {
-                    ItemLinkVisibilityIcon(
-                        visibility: sectionVisibility,
-                        font: .caption,
-                        accessibilityPrefix: linkType.displayName
-                    )
-                }
-                ItemLinkSectionTitle(type: linkType)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, ItemLinkRowMetrics.headerVerticalPadding)
+            ItemLinkSectionTitle(type: linkType)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, ItemLinkRowMetrics.headerVerticalPadding)
 
             ForEach(links, id: \.objectID) { link in
                 VStack(spacing: 0) {

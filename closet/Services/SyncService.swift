@@ -43,6 +43,13 @@ class SyncService: ObservableObject {
         AppEnvironment.capabilities.enablesCloudSync
     }
 
+    /// Cloud sync requires auth, product tier, and a live network path. Local Core Data writes still proceed.
+    private var canPerformCloudSync: Bool {
+        isCloudSyncEnabled
+            && NetworkMonitor.shared.isConnected
+            && supabaseService.isAuthenticated
+    }
+
     private var isTombstonePurgeEnabled: Bool {
         AppEnvironment.capabilities.enablesTombstonePurge
     }
@@ -58,7 +65,7 @@ class SyncService: ObservableObject {
 
     func purgeLocalTombstonesIfPossible() async {
         guard isTombstonePurgeEnabled else { return }
-        guard supabaseService.isAuthenticated, let userId = supabaseService.currentUser?.id else { return }
+        guard canPerformCloudSync, let userId = supabaseService.currentUser?.id else { return }
         await SyncEngine.shared.purgeLocalTombstones(userId: userId)
     }
 
@@ -106,7 +113,7 @@ class SyncService: ObservableObject {
                 }
             }
 
-            guard self.isCloudSyncEnabled else { return }
+            guard self.canPerformCloudSync else { return }
 
             viewContext.refresh(item, mergeChanges: true)
 
@@ -141,9 +148,8 @@ class SyncService: ObservableObject {
     nonisolated func syncWardrobeIfNeeded(_ wardrobe: Wardrobe) {
         let objectID = wardrobe.objectID
         Task { @MainActor in
-            guard self.isCloudSyncEnabled else { return }
-            guard self.supabaseService.isAuthenticated,
-                  let userId = self.supabaseService.currentUser?.id,
+            guard self.canPerformCloudSync else { return }
+            guard let userId = self.supabaseService.currentUser?.id,
                   let wardrobeId = wardrobe.id else {
                 return
             }
@@ -163,9 +169,8 @@ class SyncService: ObservableObject {
     nonisolated func syncOutfitIfNeeded(_ outfit: Outfit) {
         let objectID = outfit.objectID
         Task { @MainActor in
-            guard self.isCloudSyncEnabled else { return }
-            guard self.supabaseService.isAuthenticated,
-                  let userId = self.supabaseService.currentUser?.id,
+            guard self.canPerformCloudSync else { return }
+            guard let userId = self.supabaseService.currentUser?.id,
                   let outfitId = outfit.id else {
                 return
             }
@@ -182,13 +187,43 @@ class SyncService: ObservableObject {
         }
     }
 
+    /// Pushes an event to Supabase immediately (e.g. before sending invites).
+    func syncEventNow(_ event: Event) async throws {
+        guard isCloudSyncEnabled else {
+            throw NSError(domain: "SyncService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Cloud sync is disabled"])
+        }
+        guard supabaseService.isAuthenticated,
+              let userId = supabaseService.currentUser?.id,
+              let eventId = event.id else {
+            throw NSError(domain: "SyncService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Sign in to sync events"])
+        }
+
+        try await SyncEngine.shared.syncEvent(objectID: event.objectID, userId: userId)
+        print("✅ Synced event for invite: \(event.name ?? eventId.uuidString)")
+    }
+
+    /// After invitee Accept — materialize the shared event onto their local calendar.
+    func materializeAcceptedGuestEvent(eventId: UUID) async throws {
+        guard isCloudSyncEnabled else {
+            throw NSError(domain: "SyncService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Cloud sync is disabled"])
+        }
+        guard supabaseService.isAuthenticated,
+              let userId = supabaseService.currentUser?.id else {
+            throw NSError(domain: "SyncService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Sign in to sync events"])
+        }
+        try await SyncEngine.shared.materializeAcceptedGuestEvent(eventId: eventId, userId: userId)
+    }
+
     /// Background event push (create/edit/delete). Safe to call from UI — work hops off MainActor.
     nonisolated func syncEventIfNeeded(_ event: Event) {
         let objectID = event.objectID
         Task { @MainActor in
-            guard self.isCloudSyncEnabled else { return }
-            guard self.supabaseService.isAuthenticated,
-                  let userId = self.supabaseService.currentUser?.id,
+            guard self.canPerformCloudSync else { return }
+            guard let userId = self.supabaseService.currentUser?.id,
                   let eventId = event.id else {
                 return
             }
@@ -209,9 +244,8 @@ class SyncService: ObservableObject {
     nonisolated func syncOutfitWornRemovalIfNeeded(_ outfit: Outfit) {
         let objectID = outfit.objectID
         Task { @MainActor in
-            guard self.isCloudSyncEnabled else { return }
-            guard self.supabaseService.isAuthenticated,
-                  let userId = self.supabaseService.currentUser?.id else {
+            guard self.canPerformCloudSync else { return }
+            guard let userId = self.supabaseService.currentUser?.id else {
                 return
             }
             guard outfit.isDraft != true else { return }
@@ -232,9 +266,8 @@ class SyncService: ObservableObject {
     nonisolated func syncOutfitWornUploadIfNeeded(_ outfit: Outfit) {
         let objectID = outfit.objectID
         Task { @MainActor in
-            guard self.isCloudSyncEnabled else { return }
-            guard self.supabaseService.isAuthenticated,
-                  let userId = self.supabaseService.currentUser?.id else {
+            guard self.canPerformCloudSync else { return }
+            guard let userId = self.supabaseService.currentUser?.id else {
                 return
             }
             guard outfit.isDraft != true else { return }
@@ -251,12 +284,28 @@ class SyncService: ObservableObject {
         }
     }
 
+    nonisolated func syncPackingChecklistDocumentIfNeeded(objectID: NSManagedObjectID) {
+        Task { @MainActor in
+            guard self.canPerformCloudSync else { return }
+            guard let userId = self.supabaseService.currentUser?.id else {
+                return
+            }
+            do {
+                try await SyncEngine.shared.syncPackingChecklistDocumentIfNeeded(
+                    objectID: objectID,
+                    userId: userId
+                )
+            } catch {
+                print("⚠️ Failed to sync packing checklist document: \(error.localizedDescription)")
+            }
+        }
+    }
+
     nonisolated func syncPackingChecklistItemIfNeeded(_ row: PackingChecklistItem) {
         let objectID = row.objectID
         Task { @MainActor in
-            guard self.isCloudSyncEnabled else { return }
-            guard self.supabaseService.isAuthenticated,
-                  let userId = self.supabaseService.currentUser?.id,
+            guard self.canPerformCloudSync else { return }
+            guard let userId = self.supabaseService.currentUser?.id,
                   let rowId = row.id else {
                 return
             }
@@ -276,9 +325,8 @@ class SyncService: ObservableObject {
     nonisolated func syncPackingChecklistSectionIfNeeded(_ section: PackingChecklistSection) {
         let objectID = section.objectID
         Task { @MainActor in
-            guard self.isCloudSyncEnabled else { return }
-            guard self.supabaseService.isAuthenticated,
-                  let userId = self.supabaseService.currentUser?.id,
+            guard self.canPerformCloudSync else { return }
+            guard let userId = self.supabaseService.currentUser?.id,
                   let sectionId = section.id else {
                 return
             }
@@ -299,21 +347,21 @@ class SyncService: ObservableObject {
 
     nonisolated func deleteTagFromSupabase(tagId: UUID) {
         Task { @MainActor in
-            guard self.isCloudSyncEnabled else { return }
+            guard self.canPerformCloudSync else { return }
             await SyncEngine.shared.deleteTagFromSupabase(tagId: tagId)
         }
     }
 
     nonisolated func deleteOutfitCategoryFromSupabase(categoryId: UUID) {
         Task { @MainActor in
-            guard self.isCloudSyncEnabled else { return }
+            guard self.canPerformCloudSync else { return }
             await SyncEngine.shared.deleteOutfitCategoryFromSupabase(categoryId: categoryId)
         }
     }
 
     nonisolated func deletePackingChecklistItemFromSupabase(checklistRowId: UUID) {
         Task { @MainActor in
-            guard self.isCloudSyncEnabled else { return }
+            guard self.canPerformCloudSync else { return }
             await SyncEngine.shared.deletePackingChecklistItemFromSupabase(checklistRowId: checklistRowId)
         }
     }
@@ -386,9 +434,8 @@ class SyncService: ObservableObject {
     nonisolated func syncUserProfileIfNeeded(_ profile: UserProfile) {
         let objectID = profile.objectID
         Task { @MainActor in
-            guard self.isCloudSyncEnabled else { return }
-            guard self.supabaseService.isAuthenticated,
-                  let userId = self.supabaseService.currentUser?.id,
+            guard self.canPerformCloudSync else { return }
+            guard let userId = self.supabaseService.currentUser?.id,
                   let viewContext = self.viewContext else {
                 return
             }

@@ -44,6 +44,7 @@ struct WishlistView: View {
     @State private var wardrobePendingDelete: Wardrobe?
     @State private var showDeleteWardrobeConfirmation = false
     @State private var navigationPath = NavigationPath()
+    @StateObject private var itemAddQueueCoordinator = ImageQueueCoordinator()
 
     private var newWishlistNameValidation: WardrobeNaming.Validation {
         WardrobeNaming.validate(newWishlistName, type: "wishlist", existing: userWishlists)
@@ -78,6 +79,22 @@ struct WishlistView: View {
                             wardrobeType: "wishlist",
                             selectedWardrobe: selectedWishlist
                         )
+                    case .addItem:
+                        itemAddPathDestination(queued: false)
+                    case .addItemQueued:
+                        itemAddPathDestination(queued: true)
+                    case .addOutfit(let sessionID):
+                        outfitAddPathDestination(sessionID: sessionID)
+                    case .itemDetail(let uri):
+                        itemDetailPathDestination(uri: uri)
+                    case .outfitDetail(let uri):
+                        outfitDetailPathDestination(uri: uri)
+                    case .createOutfitFromItem(let itemURI, let sessionID):
+                        createOutfitFromItemPathDestination(itemURI: itemURI, sessionID: sessionID)
+                    case .packing:
+                        EmptyView()
+                    case .packingChecklist:
+                        EmptyView()
                     }
                 }
                 .onAppear {
@@ -128,7 +145,24 @@ private extension WishlistView {
                         tabBarHideState.shouldHideTabBar = true
                         navigationPath.append(ItemGridFilterRoute.outfitFilter)
                     },
-                    tabBarHideState: tabBarHideState
+                    onOpenAddItem: { queued in
+                        tabBarHideState.shouldHideTabBar = true
+                        navigationPath.append(queued ? ItemGridFilterRoute.addItemQueued : .addItem)
+                    },
+                    onOpenAddOutfit: { sessionID in
+                        tabBarHideState.shouldHideTabBar = true
+                        navigationPath.append(ItemGridFilterRoute.addOutfit(sessionID: sessionID))
+                    },
+                    onOpenItemDetail: { uri in
+                        tabBarHideState.shouldHideTabBar = true
+                        navigationPath.append(ItemGridFilterRoute.itemDetail(uri: uri))
+                    },
+                    onOpenOutfitDetail: { uri in
+                        tabBarHideState.shouldHideTabBar = true
+                        navigationPath.append(ItemGridFilterRoute.outfitDetail(uri: uri))
+                    },
+                    tabBarHideState: tabBarHideState,
+                    queueCoordinator: itemAddQueueCoordinator
                 )
                 .id(selected.objectID)
             } else {
@@ -137,6 +171,123 @@ private extension WishlistView {
             }
             BulkImportProgressOverlay()
         }
+    }
+
+    @ViewBuilder
+    func itemAddPathDestination(queued: Bool) -> some View {
+        Group {
+            if queued {
+                ItemAddView(
+                    parentContext: viewContext,
+                    selectedWardrobe: selectedWishlist,
+                    queueCoordinator: itemAddQueueCoordinator,
+                    sessionAccountId: authSession.userId?.uuidString
+                )
+            } else {
+                ItemAddView(
+                    parentContext: viewContext,
+                    selectedWardrobe: selectedWishlist,
+                    sessionAccountId: authSession.userId?.uuidString
+                )
+            }
+        }
+        .toolbar(.hidden, for: .tabBar)
+        .onAppear { tabBarHideState.shouldHideTabBar = true }
+        .onDisappear { itemAddQueueCoordinator.noteAddViewDismissed() }
+    }
+
+    @ViewBuilder
+    func outfitAddPathDestination(sessionID: UUID) -> some View {
+        OutfitAddView(
+            wardrobeType: "wishlist",
+            initialWardrobe: selectedWishlist,
+            lockWardrobeSource: false,
+            wardrobeMembershipOnSave: (selectedWishlist?.isDefault != true) ? selectedWishlist : nil,
+            sessionID: sessionID,
+            navigationPath: $navigationPath
+        )
+        .id(sessionID)
+        .toolbar(.hidden, for: .tabBar)
+        .onAppear { tabBarHideState.shouldHideTabBar = true }
+        .onDisappear { tabBarHideState.noteOutfitAddDismissed() }
+    }
+
+    @ViewBuilder
+    func itemDetailPathDestination(uri: String) -> some View {
+        if let item = managedItem(forURI: uri) {
+            ItemDetailView(item: item, isReadOnly: false, navigationPath: $navigationPath)
+                .id(item.objectID)
+                .toolbar(.hidden, for: .tabBar)
+                .onAppear { tabBarHideState.shouldHideTabBar = true }
+        } else {
+            Text("This item is no longer available.")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    func outfitDetailPathDestination(uri: String) -> some View {
+        if let outfit = managedOutfit(forURI: uri) {
+            OutfitDetailView(
+                outfit: outfit,
+                isReadOnly: false,
+                navigationPath: $navigationPath,
+                initialWardrobe: selectedWishlist,
+                lockWardrobeSource: selectedWishlist?.isDefault != true
+            )
+                .id(outfit.objectID)
+                .toolbar(.hidden, for: .tabBar)
+                .onAppear { tabBarHideState.shouldHideTabBar = true }
+        } else {
+            Text("This outfit is no longer available.")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    func createOutfitFromItemPathDestination(itemURI: String, sessionID: UUID) -> some View {
+        let item = managedItem(forURI: itemURI)
+        let wardrobe = preferredWardrobeForNewOutfit(from: item) ?? selectedWishlist
+        OutfitAddView(
+            outfitToEdit: nil,
+            wardrobeType: wardrobe?.type ?? "wishlist",
+            initialWardrobe: wardrobe,
+            lockWardrobeSource: false,
+            wardrobeMembershipOnSave: (wardrobe?.isDefault != true) ? wardrobe : nil,
+            preselectedItemURI: itemURI,
+            sessionID: sessionID,
+            navigationPath: $navigationPath
+        )
+        .id(sessionID)
+        .toolbar(.hidden, for: .tabBar)
+        .onAppear { tabBarHideState.shouldHideTabBar = true }
+    }
+
+    private func managedItem(forURI uriString: String) -> Item? {
+        guard let url = URL(string: uriString),
+              let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url),
+              let item = try? viewContext.existingObject(with: objectID) as? Item,
+              item.isSoftDeleted != true else {
+            return nil
+        }
+        return item
+    }
+
+    private func managedOutfit(forURI uriString: String) -> Outfit? {
+        guard let url = URL(string: uriString),
+              let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url),
+              let outfit = try? viewContext.existingObject(with: objectID) as? Outfit,
+              outfit.isSoftDeleted != true else {
+            return nil
+        }
+        return outfit
+    }
+
+    private func preferredWardrobeForNewOutfit(from item: Item?) -> Wardrobe? {
+        guard let set = item?.wardrobes as? Set<Wardrobe> else { return nil }
+        let wishlists = set.filter { ($0.type ?? "").lowercased() == "wishlist" }
+        let closets = set.filter { ($0.type ?? "").lowercased() == "closet" }
+        return wishlists.first ?? closets.first ?? set.first
     }
     
     @ToolbarContentBuilder

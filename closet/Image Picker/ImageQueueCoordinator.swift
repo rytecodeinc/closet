@@ -63,5 +63,12 @@ class ImageQueueCoordinator: ObservableObject {
         currentIndex = 0
         currentCroppedImage = nil
     }
+
+    /// Closet/Wishlist path-pop of queued `ItemAddView` — grid resumes the next cropper.
+    @Published var addViewDismissTick: Int = 0
+
+    func noteAddViewDismissed() {
+        addViewDismissTick += 1
+    }
 }
 

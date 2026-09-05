@@ -44,6 +44,9 @@ struct ClosetView: View {
     @State private var wardrobePendingDelete: Wardrobe?
     @State private var showDeleteWardrobeConfirmation = false
     @State private var navigationPath = NavigationPath()
+    /// Path count after `.packing` is pushed. Cleared only when Pack is popped — not when Checklist covers it.
+    @State private var packingPathDepth: Int?
+    @StateObject private var itemAddQueueCoordinator = ImageQueueCoordinator()
 
     private var newClosetNameValidation: WardrobeNaming.Validation {
         WardrobeNaming.validate(newClosetName, type: "closet", existing: userClosets)
@@ -78,6 +81,22 @@ struct ClosetView: View {
                             wardrobeType: "closet",
                             selectedWardrobe: selectedWardrobe
                         )
+                    case .addItem:
+                        itemAddPathDestination(queued: false)
+                    case .addItemQueued:
+                        itemAddPathDestination(queued: true)
+                    case .addOutfit(let sessionID):
+                        outfitAddPathDestination(sessionID: sessionID)
+                    case .itemDetail(let uri):
+                        itemDetailPathDestination(uri: uri)
+                    case .outfitDetail(let uri):
+                        outfitDetailPathDestination(uri: uri)
+                    case .createOutfitFromItem(let itemURI, let sessionID):
+                        createOutfitFromItemPathDestination(itemURI: itemURI, sessionID: sessionID)
+                    case .packing:
+                        packingPathDestination()
+                    case .packingChecklist:
+                        packingChecklistPathDestination()
                     }
                 }
                 .onAppear {
@@ -128,7 +147,29 @@ private extension ClosetView {
                         tabBarHideState.shouldHideTabBar = true
                         navigationPath.append(ItemGridFilterRoute.outfitFilter)
                     },
-                    tabBarHideState: tabBarHideState
+                    onOpenAddItem: { queued in
+                        tabBarHideState.shouldHideTabBar = true
+                        navigationPath.append(queued ? ItemGridFilterRoute.addItemQueued : .addItem)
+                    },
+                    onOpenAddOutfit: { sessionID in
+                        tabBarHideState.shouldHideTabBar = true
+                        navigationPath.append(ItemGridFilterRoute.addOutfit(sessionID: sessionID))
+                    },
+                    onOpenItemDetail: { uri in
+                        tabBarHideState.shouldHideTabBar = true
+                        navigationPath.append(ItemGridFilterRoute.itemDetail(uri: uri))
+                    },
+                    onOpenOutfitDetail: { uri in
+                        tabBarHideState.shouldHideTabBar = true
+                        navigationPath.append(ItemGridFilterRoute.outfitDetail(uri: uri))
+                    },
+                    onOpenPacking: {
+                        tabBarHideState.shouldHideTabBar = true
+                        navigationPath.append(ItemGridFilterRoute.packing)
+                        packingPathDepth = navigationPath.count
+                    },
+                    tabBarHideState: tabBarHideState,
+                    queueCoordinator: itemAddQueueCoordinator
                 )
                 .id(selected.objectID)
             } else {
@@ -137,6 +178,162 @@ private extension ClosetView {
             }
             BulkImportProgressOverlay()
         }
+        .onChange(of: navigationPath.count) { _, count in
+            // Pack `onDisappear` also fires when Checklist is pushed on top — only clear
+            // `isPackingOnPath` when Pack itself leaves the stack.
+            if let depth = packingPathDepth, count < depth {
+                packingPathDepth = nil
+                tabBarHideState.notePackingDismissed()
+            }
+        }
+    }
+
+    @ViewBuilder
+    func itemAddPathDestination(queued: Bool) -> some View {
+        Group {
+            if queued {
+                ItemAddView(
+                    parentContext: viewContext,
+                    selectedWardrobe: selectedWardrobe,
+                    queueCoordinator: itemAddQueueCoordinator,
+                    sessionAccountId: authSession.userId?.uuidString
+                )
+            } else {
+                ItemAddView(
+                    parentContext: viewContext,
+                    selectedWardrobe: selectedWardrobe,
+                    sessionAccountId: authSession.userId?.uuidString
+                )
+            }
+        }
+        .toolbar(.hidden, for: .tabBar)
+        .onAppear { tabBarHideState.shouldHideTabBar = true }
+        .onDisappear { itemAddQueueCoordinator.noteAddViewDismissed() }
+    }
+
+    @ViewBuilder
+    func outfitAddPathDestination(sessionID: UUID) -> some View {
+        OutfitAddView(
+            wardrobeType: "closet",
+            initialWardrobe: selectedWardrobe,
+            lockWardrobeSource: false,
+            wardrobeMembershipOnSave: (selectedWardrobe?.isDefault != true) ? selectedWardrobe : nil,
+            sessionID: sessionID,
+            navigationPath: $navigationPath
+        )
+        .id(sessionID)
+        .toolbar(.hidden, for: .tabBar)
+        .onAppear { tabBarHideState.shouldHideTabBar = true }
+        .onDisappear { tabBarHideState.noteOutfitAddDismissed() }
+    }
+
+    @ViewBuilder
+    func itemDetailPathDestination(uri: String) -> some View {
+        if let item = managedItem(forURI: uri) {
+            ItemDetailView(item: item, isReadOnly: false, navigationPath: $navigationPath)
+                .id(item.objectID)
+                .toolbar(.hidden, for: .tabBar)
+                .onAppear { tabBarHideState.shouldHideTabBar = true }
+        } else {
+            Text("This item is no longer available.")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    func outfitDetailPathDestination(uri: String) -> some View {
+        if let outfit = managedOutfit(forURI: uri) {
+            OutfitDetailView(
+                outfit: outfit,
+                isReadOnly: false,
+                navigationPath: $navigationPath,
+                initialWardrobe: selectedWardrobe,
+                lockWardrobeSource: selectedWardrobe?.isDefault != true
+            )
+                .id(outfit.objectID)
+                .toolbar(.hidden, for: .tabBar)
+                .onAppear { tabBarHideState.shouldHideTabBar = true }
+        } else {
+            Text("This outfit is no longer available.")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    func createOutfitFromItemPathDestination(itemURI: String, sessionID: UUID) -> some View {
+        let item = managedItem(forURI: itemURI)
+        let wardrobe = preferredWardrobeForNewOutfit(from: item) ?? selectedWardrobe
+        OutfitAddView(
+            outfitToEdit: nil,
+            wardrobeType: wardrobe?.type ?? "closet",
+            initialWardrobe: wardrobe,
+            lockWardrobeSource: false,
+            wardrobeMembershipOnSave: (wardrobe?.isDefault != true) ? wardrobe : nil,
+            preselectedItemURI: itemURI,
+            sessionID: sessionID,
+            navigationPath: $navigationPath
+        )
+        .id(sessionID)
+        .toolbar(.hidden, for: .tabBar)
+        .onAppear { tabBarHideState.shouldHideTabBar = true }
+    }
+
+    @ViewBuilder
+    func packingPathDestination() -> some View {
+        if let selected = selectedWardrobe {
+            ItemPackView(
+                selectedWardrobe: selected,
+                wardrobeType: "closet",
+                tabBarHideState: tabBarHideState,
+                navigationPath: $navigationPath
+            )
+            .toolbar(.hidden, for: .tabBar)
+            .onAppear { tabBarHideState.shouldHideTabBar = true }
+        } else {
+            Text("No Closet Selected")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    func packingChecklistPathDestination() -> some View {
+        if let selected = selectedWardrobe {
+            PackingChecklistView(
+                selectedWardrobe: selected,
+                tabBarHideState: tabBarHideState
+            )
+            .toolbar(.hidden, for: .tabBar)
+            .onAppear { tabBarHideState.shouldHideTabBar = true }
+        } else {
+            Text("No Closet Selected")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func managedItem(forURI uriString: String) -> Item? {
+        guard let url = URL(string: uriString),
+              let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url),
+              let item = try? viewContext.existingObject(with: objectID) as? Item,
+              item.isSoftDeleted != true else {
+            return nil
+        }
+        return item
+    }
+
+    private func managedOutfit(forURI uriString: String) -> Outfit? {
+        guard let url = URL(string: uriString),
+              let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url),
+              let outfit = try? viewContext.existingObject(with: objectID) as? Outfit,
+              outfit.isSoftDeleted != true else {
+            return nil
+        }
+        return outfit
+    }
+
+    private func preferredWardrobeForNewOutfit(from item: Item?) -> Wardrobe? {
+        guard let set = item?.wardrobes as? Set<Wardrobe> else { return nil }
+        let closets = set.filter { ($0.type ?? "").lowercased() == "closet" }
+        return closets.first ?? set.first
     }
     
     @ToolbarContentBuilder

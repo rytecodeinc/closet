@@ -81,6 +81,20 @@ struct DeveloperSettingsView: View {
                         Text("How-to onboarding")
                     }
                 }
+
+                Button {
+                    navigationPath.append(ProfileRoute.eventDetailLayoutPrototype)
+                } label: {
+                    HStack {
+                        Image(systemName: "calendar")
+                        Text("Event Detail layout prototype")
+                            .foregroundColor(.primary)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .foregroundColor(.gray)
+                            .font(.caption)
+                    }
+                }
             }
 
             Section {

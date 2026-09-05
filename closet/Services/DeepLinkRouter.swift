@@ -17,17 +17,28 @@ class DeepLinkRouter: ObservableObject {
 
     /// Set when the user taps an APNs notification; ContentView switches to Profile and ProfileView presents the list.
     @Published var shouldOpenNotifications = false
+
+    /// When push payload includes an event invite, open that preview after Notifications appears.
+    @Published private(set) var pendingEventInviteId: UUID?
     
     private init() {}
 
-    func openNotificationsFromPush() {
+    func openNotificationsFromPush(eventInviteId: UUID? = nil) {
         DispatchQueue.main.async { [weak self] in
-            self?.shouldOpenNotifications = true
+            guard let self else { return }
+            self.pendingEventInviteId = eventInviteId
+            self.shouldOpenNotifications = true
         }
     }
 
     func consumeOpenNotifications() {
         shouldOpenNotifications = false
+    }
+
+    func consumePendingEventInviteId() -> UUID? {
+        let id = pendingEventInviteId
+        pendingEventInviteId = nil
+        return id
     }
     
     /// Processes incoming deep link URL and stores navigation intent

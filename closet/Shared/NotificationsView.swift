@@ -1,8 +1,8 @@
 //
-//  UserNotificationsBellButton.swift
+//  NotificationsView.swift
 //  closet
 //
-//  Notifications bell + list (friend requests, Redress, etc.).
+//  Notifications list + toolbar bell (friend requests, Redress, etc.).
 //
 
 import SwiftUI
@@ -68,7 +68,7 @@ private struct RemoteSquareThumbnailView: View {
     }
 }
 
-struct UserNotificationsBellButton: View {
+struct NotificationsBellButton: View {
     var onTap: () -> Void
 
     @EnvironmentObject private var supabaseService: SupabaseService
@@ -121,18 +121,21 @@ struct UserNotificationsBellButton: View {
     }
 }
 
-struct UserNotificationsView: View {
+struct NotificationsView: View {
     var onDismiss: () -> Void = {}
     var tabBarHideState: TabBarHideState? = nil
+    var navigationPath: Binding<NavigationPath>? = nil
 
     @EnvironmentObject private var supabaseService: SupabaseService
     @EnvironmentObject private var authSession: AuthSession
+    @EnvironmentObject private var deepLinkRouter: DeepLinkRouter
     @Environment(\.managedObjectContext) private var viewContext
 
     private enum NotificationFilter: String, CaseIterable, Identifiable {
         case all = "All"
         case items = "Items"
         case outfits = "Outfits"
+        case events = "Events"
         case friends = "Friends"
 
         var id: String { rawValue }
@@ -147,6 +150,9 @@ struct UserNotificationsView: View {
     @State private var selectedLikedOutfitURI: String?
     @State private var selectedLikedItemURI: String?
     @State private var selectedProfile: PublicUserProfile?
+    @State private var selectedEventInviteId: UUID?
+    @State private var selectedHostEventURI: String?
+    @State private var showDeclineEventConfirmFor: UUID?
     @State private var actorProfilesByUserId: [UUID: PublicUserProfile] = [:]
     @State private var openingSuggestionId: UUID?
     @State private var openingLikedOutfitId: UUID?
@@ -176,7 +182,10 @@ struct UserNotificationsView: View {
             .navigationDestination(item: $selectedLikedOutfitURI) { uriString in
                 Group {
                     if let outfit = managedOutfit(forURI: uriString) {
-                        OutfitDetailView(outfit: outfit)
+                        OutfitDetailView(
+                            outfit: outfit,
+                            initialWardrobe: preferredWardrobe(for: outfit)
+                        )
                     } else {
                         Text("This outfit is no longer available.")
                             .foregroundStyle(.secondary)
@@ -198,12 +207,64 @@ struct UserNotificationsView: View {
                 // Clearing onAppear orphans this push and breaks Back.
                 ProfileView(viewedProfile: profile, sharedTabBarHideState: tabBarHideState)
             }
+            .navigationDestination(item: $selectedEventInviteId) { eventId in
+                EventInviteeView(
+                    eventId: eventId,
+                    tabBarHideState: tabBarHideState,
+                    onResolved: {
+                        Task { await loadNotifications() }
+                    }
+                )
+            }
+            .navigationDestination(item: $selectedHostEventURI) { uri in
+                if let event = localEvent(uriString: uri) {
+                    EventDetailView(
+                        event: event,
+                        navigationPath: navigationPath ?? .constant(NavigationPath()),
+                        tabBarHideState: tabBarHideState ?? TabBarHideState()
+                    )
+                } else {
+                    Text("Event is no longer available.")
+                        .foregroundStyle(.secondary)
+                        .padding()
+                }
+            }
             .task {
                 await loadNotifications(markPassiveAsRead: true)
+                presentPendingInviteFromPushIfNeeded()
+            }
+            .onChange(of: deepLinkRouter.pendingEventInviteId) { _, _ in
+                presentPendingInviteFromPushIfNeeded()
             }
             .onDisappear {
                 onDismiss()
             }
+            .confirmationDialog(
+                "Decline this invitation?",
+                isPresented: Binding(
+                    get: { showDeclineEventConfirmFor != nil },
+                    set: { if !$0 { showDeclineEventConfirmFor = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Decline", role: .destructive) {
+                    if let id = showDeclineEventConfirmFor,
+                       let notification = notifications.first(where: { $0.id == id }) {
+                        Task { await respondToEventInvite(notification: notification, accept: false) }
+                    }
+                    showDeclineEventConfirmFor = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    showDeclineEventConfirmFor = nil
+                }
+            } message: {
+                Text("You can be invited again later.")
+            }
+    }
+
+    private func presentPendingInviteFromPushIfNeeded() {
+        guard let eventId = deepLinkRouter.consumePendingEventInviteId() else { return }
+        selectedEventInviteId = eventId
     }
 
     @ViewBuilder
@@ -216,7 +277,9 @@ struct UserNotificationsView: View {
                 .padding()
         } else {
             VStack(spacing: 0) {
-                notificationFilterPicker
+                if availableNotificationFilters.count > 1 {
+                    notificationFilterPicker
+                }
                 if notifications.isEmpty {
                     Text("No new notifications")
                         .foregroundColor(.secondary)
@@ -241,9 +304,20 @@ struct UserNotificationsView: View {
         }
     }
 
+    /// `All` plus any type tab that currently has at least one notification.
+    private var availableNotificationFilters: [NotificationFilter] {
+        var filters: [NotificationFilter] = [.all]
+        for filter in NotificationFilter.allCases where filter != .all {
+            if notifications.contains(where: { matchesFilter($0, filter) }) {
+                filters.append(filter)
+            }
+        }
+        return filters
+    }
+
     private var notificationFilterPicker: some View {
         Picker("Filter", selection: $selectedFilter) {
-            ForEach(NotificationFilter.allCases) { filter in
+            ForEach(availableNotificationFilters) { filter in
                 Text(filter.rawValue).tag(filter)
             }
         }
@@ -251,6 +325,11 @@ struct UserNotificationsView: View {
         .labelsHidden()
         .padding(.horizontal)
         .padding(.vertical, 8)
+        .onChange(of: notifications.map(\.id)) { _, _ in
+            if !availableNotificationFilters.contains(selectedFilter) {
+                selectedFilter = .all
+            }
+        }
     }
 
     private var emptyFilterMessage: String {
@@ -261,6 +340,8 @@ struct UserNotificationsView: View {
             return "No item notifications"
         case .outfits:
             return "No outfit notifications"
+        case .events:
+            return "No event notifications"
         case .friends:
             return "No friend notifications"
         }
@@ -285,6 +366,10 @@ struct UserNotificationsView: View {
             }
             return notification.type == "content_like"
                 && notification.payload?["target_type"] == "outfit"
+        case .events:
+            return notification.type == "event_invite"
+                || notification.type == "event_invite_accepted"
+                || notification.type == "event_invite_declined"
         case .friends:
             return notification.type == "friend_request"
                 || notification.type == "friend_accepted"
@@ -304,6 +389,21 @@ struct UserNotificationsView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(openingLikedOutfitId == likedOutfitId(for: notification))
+            } else if notification.type == "event_invite" {
+                Button {
+                    openEventInvite(from: notification)
+                } label: {
+                    notificationTextAndThumbnail(notification)
+                }
+                .buttonStyle(.plain)
+            } else if notification.type == "event_invite_accepted"
+                        || notification.type == "event_invite_declined" {
+                Button {
+                    openHostEventDetail(from: notification)
+                } label: {
+                    notificationTextAndThumbnail(notification)
+                }
+                .buttonStyle(.plain)
             } else {
                 notificationTextAndThumbnail(notification)
             }
@@ -327,6 +427,10 @@ struct UserNotificationsView: View {
 
                 if notification.type == "friend_request", notification.is_read == false {
                     friendRequestActions(for: notification)
+                }
+
+                if notification.type == "event_invite", isEventInviteStillPending(notification) {
+                    eventInviteActions(for: notification)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -625,6 +729,18 @@ struct UserNotificationsView: View {
 
     private func actorNameParsedFromTitle(_ notification: NotificationRecord) -> String? {
         let title = notification.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let midPhrases = [
+            " has sent you an invitation to",
+            " accepted your invitation to",
+            " declined your invitation to"
+        ]
+        for phrase in midPhrases {
+            if let range = title.range(of: phrase) {
+                let name = String(title[..<range.lowerBound])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !name.isEmpty { return name }
+            }
+        }
         let suffixes = [
             " sent you a friend request",
             " accepted your friend request",
@@ -632,7 +748,8 @@ struct UserNotificationsView: View {
             " liked your item",
             " liked your outfit",
             " shared an item with you",
-            " shared an outfit with you"
+            " shared an outfit with you",
+            " invited you to an event"
         ]
         for suffix in suffixes where title.hasSuffix(suffix) {
             let name = String(title.dropLast(suffix.count))
@@ -672,6 +789,22 @@ struct UserNotificationsView: View {
             return " shared an \(noun) with you"
         case "outfit_suggestion":
             return " redressed you"
+        case "event_invite":
+            let eventName = notification.payload?["event_name"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let dateLabel = notification.payload?["event_date_label"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let namePart = (eventName?.isEmpty == false) ? eventName! : "an event"
+            if let dateLabel, !dateLabel.isEmpty {
+                return " has sent you an invitation to \(namePart) on \(dateLabel)"
+            }
+            return " has sent you an invitation to \(namePart)"
+        case "event_invite_accepted":
+            let eventName = notification.payload?["event_name"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let namePart = (eventName?.isEmpty == false) ? eventName! : "an event"
+            return " accepted your invitation to \(namePart)"
+        case "event_invite_declined":
+            let eventName = notification.payload?["event_name"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let namePart = (eventName?.isEmpty == false) ? eventName! : "an event"
+            return " declined your invitation to \(namePart)"
         default:
             let name = actorDisplayName(for: notification)
             if notification.title.hasPrefix(name) {
@@ -692,10 +825,9 @@ struct UserNotificationsView: View {
 
     private func openOutfitSuggestion(from notification: NotificationRecord) async {
         guard let suggestionId = suggestionId(for: notification),
-              let recipientUserId = authSession.userId,
-              let wardrobeId = defaultClosetWardrobeId() else {
+              let recipientUserId = authSession.userId else {
             await MainActor.run {
-                notificationsError = "Could not open this outfit suggestion."
+                notificationsError = "Could not open this Redress."
             }
             return
         }
@@ -703,6 +835,54 @@ struct UserNotificationsView: View {
         await MainActor.run {
             openingSuggestionId = suggestionId
             notificationsError = nil
+        }
+
+        // Accepted Redress is materialized as a local outfit with the same id.
+        if let existing = localOutfit(id: suggestionId) {
+            await MainActor.run {
+                selectedLikedOutfitURI = existing.objectID.uriRepresentation().absoluteString
+                openingSuggestionId = nil
+            }
+            return
+        }
+
+        // Rematerialize if accepted on another device / after cache miss.
+        do {
+            let record = try await supabaseService.fetchOutfitSuggestionForMaterialization(
+                suggestionId: suggestionId
+            )
+            switch record.status {
+            case "accepted":
+                let outfit = try await OutfitSuggestionMaterializer.materializeOutfitSuggestion(
+                    suggestionId: suggestionId,
+                    recipientUserId: recipientUserId,
+                    in: viewContext,
+                    supabaseService: supabaseService
+                )
+                await MainActor.run {
+                    selectedLikedOutfitURI = outfit.objectID.uriRepresentation().absoluteString
+                    openingSuggestionId = nil
+                }
+                return
+            case "declined", "withdrawn":
+                await MainActor.run {
+                    notificationsError = "This Redress is no longer available."
+                    openingSuggestionId = nil
+                }
+                return
+            default:
+                break
+            }
+        } catch {
+            // Fall through to pending detail when status lookup fails.
+        }
+
+        guard let wardrobeId = defaultClosetWardrobeId() else {
+            await MainActor.run {
+                notificationsError = "Could not open this Redress."
+                openingSuggestionId = nil
+            }
+            return
         }
 
         let imageUrl = suggestionThumbnailURLs[suggestionId]?.absoluteString
@@ -723,6 +903,30 @@ struct UserNotificationsView: View {
             )
             openingSuggestionId = nil
         }
+    }
+
+    /// Prefer a wardrobe that contains the most outfit items (closet before wishlist on ties).
+    private func preferredWardrobe(for outfit: Outfit) -> Wardrobe? {
+        guard let items = outfit.items as? Set<Item> else { return nil }
+        var counts: [NSManagedObjectID: (wardrobe: Wardrobe, count: Int)] = [:]
+        for item in items {
+            let wardrobes = (item.wardrobes as? Set<Wardrobe>) ?? []
+            for wardrobe in wardrobes where wardrobe.isSoftDeleted != true {
+                let key = wardrobe.objectID
+                let prior = counts[key]?.count ?? 0
+                counts[key] = (wardrobe, prior + 1)
+            }
+        }
+        return counts.values
+            .sorted { lhs, rhs in
+                if lhs.count != rhs.count { return lhs.count > rhs.count }
+                let lt = (lhs.wardrobe.type ?? "closet").lowercased()
+                let rt = (rhs.wardrobe.type ?? "closet").lowercased()
+                if lt != rt { return lt == "closet" && rt != "closet" }
+                return (lhs.wardrobe.name ?? "").localizedCaseInsensitiveCompare(rhs.wardrobe.name ?? "") == .orderedAscending
+            }
+            .first?
+            .wardrobe
     }
 
     private func outfitSuggestionImageURL(for notification: NotificationRecord) -> URL? {
@@ -791,6 +995,122 @@ struct UserNotificationsView: View {
                 .buttonStyle(.bordered)
                 .disabled(isBusy)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func eventInviteActions(for notification: NotificationRecord) -> some View {
+        let isBusy = respondingNotificationIds.contains(notification.id)
+        let eventId = eventId(for: notification)
+
+        if eventId == nil {
+            Text("Unable to respond to this invite.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        } else {
+            HStack(spacing: 12) {
+                Button {
+                    Task { await respondToEventInvite(notification: notification, accept: true) }
+                } label: {
+                    if isBusy {
+                        ProgressView().scaleEffect(0.8)
+                    } else {
+                        Text("Accept")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isBusy)
+
+                Button(role: .destructive) {
+                    showDeclineEventConfirmFor = notification.id
+                } label: {
+                    Text("Decline")
+                }
+                .buttonStyle(.bordered)
+                .disabled(isBusy)
+            }
+        }
+    }
+
+    private func eventId(for notification: NotificationRecord) -> UUID? {
+        notification.payload?["event_id"].flatMap(UUID.init(uuidString:))
+    }
+
+    private func isEventInviteStillPending(_ notification: NotificationRecord) -> Bool {
+        // Keep actions until Accept/Decline (read state alone does not resolve).
+        notification.type == "event_invite"
+            && !respondingNotificationIds.contains(notification.id)
+            && notifications.contains(where: { $0.id == notification.id && $0.type == "event_invite" })
+    }
+
+    private func openEventInvite(from notification: NotificationRecord) {
+        guard let eventId = eventId(for: notification) else { return }
+        selectedEventInviteId = eventId
+    }
+
+    private func openHostEventDetail(from notification: NotificationRecord) {
+        guard let eventId = eventId(for: notification),
+              let event = localEvent(id: eventId) else {
+            notificationsError = "Could not open this event."
+            return
+        }
+        selectedHostEventURI = event.objectID.uriRepresentation().absoluteString
+        Task {
+            try? await supabaseService.markNotificationRead(id: notification.id)
+            await loadNotifications()
+        }
+    }
+
+    private func localEvent(id: UUID) -> Event? {
+        let request = NSFetchRequest<Event>(entityName: "Event")
+        request.fetchLimit = 1
+        var predicates: [NSPredicate] = [
+            NSPredicate(format: "id == %@", id as CVarArg),
+            NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
+        ]
+        if let userId = authSession.userId?.uuidString {
+            predicates.append(NSPredicate(format: "userId == %@", userId))
+        }
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
+        return try? viewContext.fetch(request).first
+    }
+
+    private func localEvent(uriString: String) -> Event? {
+        guard let url = URL(string: uriString),
+              let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url),
+              let event = try? viewContext.existingObject(with: objectID) as? Event else {
+            return nil
+        }
+        return event
+    }
+
+    private func respondToEventInvite(notification: NotificationRecord, accept: Bool) async {
+        guard let eventId = eventId(for: notification) else { return }
+
+        await MainActor.run {
+            respondingNotificationIds.insert(notification.id)
+        }
+
+        do {
+            try await supabaseService.respondToEventInvite(eventId: eventId, accept: accept)
+            if accept {
+                try await SyncService.shared.materializeAcceptedGuestEvent(eventId: eventId)
+            }
+            try await supabaseService.markNotificationRead(id: notification.id)
+            await loadNotifications()
+            if accept {
+                await MainActor.run {
+                    selectedEventInviteId = nil
+                }
+            }
+        } catch {
+            await MainActor.run {
+                notificationsError = error.localizedDescription
+            }
+        }
+
+        await MainActor.run {
+            respondingNotificationIds.remove(notification.id)
         }
     }
 
@@ -881,6 +1201,7 @@ struct UserNotificationsView: View {
     private func notificationRequiresAction(_ notification: NotificationRecord) -> Bool {
         notification.type == "friend_request"
             || notification.type == "outfit_suggestion"
+            || notification.type == "event_invite"
     }
 
     private func loadSuggestionThumbnailURLs(for notifications: [NotificationRecord]) async {

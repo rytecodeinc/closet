@@ -10,7 +10,6 @@ import CoreData
 
 struct SingleWardrobeSelectionView: View {
     @Binding var selectedWardrobe: Wardrobe?
-    @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var authSession: AuthSession
     
@@ -72,16 +71,6 @@ struct SingleWardrobeSelectionView: View {
                     }
                 }
             }
-        }
-        .onAppear {
-            // Run deduplication to ensure no duplicates are shown
-            // deduplicateWardrobes(context: viewContext, userId: authSession.userId?.uuidString)
-            if viewContext.hasChanges {
-                try? viewContext.save()
-            }
-            // Refresh to update the fetched results
-            viewContext.refreshAllObjects()
-            viewContext.processPendingChanges()
         }
     }
 }

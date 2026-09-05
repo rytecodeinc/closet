@@ -11,21 +11,12 @@ import UIKit
 import CoreData
 import Combine
 
-private enum ItemAddNavigation: Hashable {
-    case direct
-    case queued
-}
-
 private enum PackingNavigation: Hashable {
     case packing
 }
 
-private struct OutfitAddNavigation: Hashable {
-    let sessionID: UUID
-}
-
 /// Own-profile read-only item tap → same destination as other-user profile grid.
-/// Owned by `ProfileView`'s `NavigationStack` (`navigationDestination(item:)`); keep set until pop.
+/// Owned by `ProfileView`'s `NavigationStack` path; keep set until pop.
 struct ProfileReadOnlyItemDestination: Hashable {
     let ownerUserId: UUID
     let wardrobeId: UUID
@@ -58,6 +49,18 @@ struct ItemGridView: View {
     /// Parent owns `NavigationPath` + Filter destinations — grid only requests a push (avoids AttributeGraph cycle).
     var onOpenItemFilter: () -> Void
     var onOpenOutfitFilter: () -> Void
+    /// Closet/Wishlist append `ItemGridFilterRoute.addItem` / `.addItemQueued` on the tab path.
+    var onOpenAddItem: ((Bool) -> Void)?
+    /// Closet/Wishlist append `ItemGridFilterRoute.addOutfit(sessionID:)` on the tab path.
+    var onOpenAddOutfit: ((UUID) -> Void)?
+    /// Closet/Wishlist append `ItemGridFilterRoute.itemDetail(uri:)` on the tab path.
+    var onOpenItemDetail: ((String) -> Void)?
+    /// Closet/Wishlist append `ItemGridFilterRoute.outfitDetail(uri:)` on the tab path.
+    var onOpenOutfitDetail: ((String) -> Void)?
+    /// Closet append `ItemGridFilterRoute.packing` on the tab path.
+    var onOpenPacking: (() -> Void)?
+    /// Profile append `ProfileRoute.pendingRedress` on the tab path.
+    var onOpenPendingRedress: ((PendingRedressNavigationDestination) -> Void)?
     /// Profile tab owns `ProfileRoute.readOnlyItem` — grid only requests a path append.
     var onOpenProfileReadOnlyItem: ((ProfileReadOnlyItemDestination) -> Void)?
     /// Tab-bar hide flag shared with `ItemFilterView` (destination is on the parent stack).
@@ -76,8 +79,15 @@ struct ItemGridView: View {
         isTabActionsBarVisible: Binding<Bool>? = nil,
         onOpenItemFilter: @escaping () -> Void,
         onOpenOutfitFilter: @escaping () -> Void,
+        onOpenAddItem: ((Bool) -> Void)? = nil,
+        onOpenAddOutfit: ((UUID) -> Void)? = nil,
+        onOpenItemDetail: ((String) -> Void)? = nil,
+        onOpenOutfitDetail: ((String) -> Void)? = nil,
+        onOpenPacking: (() -> Void)? = nil,
+        onOpenPendingRedress: ((PendingRedressNavigationDestination) -> Void)? = nil,
         onOpenProfileReadOnlyItem: ((ProfileReadOnlyItemDestination) -> Void)? = nil,
         tabBarHideState: TabBarHideState,
+        queueCoordinator: ImageQueueCoordinator,
         @ViewBuilder profileCollapsingHeader: () -> some View = { EmptyView() },
         @ViewBuilder profileStickyPrefix: () -> some View = { EmptyView() }
     ) {
@@ -92,7 +102,14 @@ struct ItemGridView: View {
         self._isDetailNavigationActive = isDetailNavigationActive
         self.onOpenItemFilter = onOpenItemFilter
         self.onOpenOutfitFilter = onOpenOutfitFilter
+        self.onOpenAddItem = onOpenAddItem
+        self.onOpenAddOutfit = onOpenAddOutfit
+        self.onOpenItemDetail = onOpenItemDetail
+        self.onOpenOutfitDetail = onOpenOutfitDetail
+        self.onOpenPacking = onOpenPacking
+        self.onOpenPendingRedress = onOpenPendingRedress
         self.onOpenProfileReadOnlyItem = onOpenProfileReadOnlyItem
+        self._queueCoordinator = ObservedObject(wrappedValue: queueCoordinator)
         self._tabBarHideState = ObservedObject(wrappedValue: tabBarHideState)
         self.externalTabActionsBarVisible = isTabActionsBarVisible
         self.profileCollapsingHeader = AnyView(profileCollapsingHeader())
@@ -165,11 +182,12 @@ struct ItemGridView: View {
     @State private var showAddFromClosetSheet = false
     
     // Multi-image picker state
-    @StateObject private var queueCoordinator = ImageQueueCoordinator()
+    @ObservedObject var queueCoordinator: ImageQueueCoordinator
     @State private var showMultiImagePicker = false
     @State private var showCropperForQueue = false
-    @State private var itemAddNavigation: ItemAddNavigation?
-    @State private var outfitAddNavigation: OutfitAddNavigation?
+    @State private var isItemAddOnPath = false
+    @State private var isOutfitAddOnPath = false
+    @State private var isPackingOnPath = false
     @State private var queuedImages: [UIImage] = []
     @State private var showCropperCancelConfirmation = false
 
@@ -284,8 +302,9 @@ struct ItemGridView: View {
     private var shouldHideTabBar: Bool {
         isInSelectionMode
             || isShowingDetailNavigation
-            || itemAddNavigation != nil
-            || outfitAddNavigation != nil
+            || isItemAddOnPath
+            || isOutfitAddOnPath
+            || isPackingOnPath
     }
 
     private var isShowingDetailNavigation: Bool {
@@ -297,12 +316,19 @@ struct ItemGridView: View {
     /// Skip expensive grid refetches while a pushed screen is open (avoids navigation re-render loops).
     private var isPushNavigationActive: Bool {
         isShowingDetailNavigation
-            || itemAddNavigation != nil
-            || outfitAddNavigation != nil
+            || isItemAddOnPath
+            || isOutfitAddOnPath
+            || isPackingOnPath
             || packingNavigation != nil
     }
 
     var body: some View {
+        withGridOwnedDetailDestinations(
+            withGridOwnedPackingAndRedressDestinations(itemGridChrome)
+        )
+    }
+
+    private var itemGridChrome: some View {
         itemGridWithAlerts
             .overlay(alignment: .top) {
                 if showDeletionToast {
@@ -319,88 +345,108 @@ struct ItemGridView: View {
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
-            .navigationDestination(item: $selectedItemURIForNavigation) { uriString in
-                Group {
-                    if let item = managedItem(forURI: uriString) {
-                        ItemDetailView(item: item, isReadOnly: false)
-                            .id(item.objectID)
-                            .onAppear { selectedItemURIForNavigation = nil }
-                    } else {
-                        EmptyView()
-                            .onAppear { selectedItemURIForNavigation = nil }
-                    }
-                }
-            }
-            .navigationDestination(item: $selectedOutfitURIForNavigation) { uriString in
-                Group {
-                    if let outfit = managedOutfit(forURI: uriString) {
-                        // Closet: editable. Own Profile (`isReadOnly`): Core Data read-only detail.
-                        OutfitDetailView(outfit: outfit, isReadOnly: isReadOnly)
-                            .id(outfit.objectID)
-                            .onAppear { selectedOutfitURIForNavigation = nil }
-                    } else {
-                        EmptyView()
-                            .onAppear { selectedOutfitURIForNavigation = nil }
-                    }
-                }
-            }
-            .navigationDestination(item: $selectedPendingRedress) { destination in
-                PendingOutfitDetailView(
-                    recipientUserId: destination.recipientUserId,
-                    wardrobeId: destination.wardrobeId,
-                    suggestionSummary: destination.suggestionSummary,
-                    viewerRole: destination.viewerRole,
-                    onSuggestionResolved: {
-                        scheduleOutfitsRefresh(forceRedressRefresh: true)
-                    },
-                    backButtonTitle: showsProfilePendingRedressSuggestions
-                        ? (supabaseService.cachedUsername ?? "Profile")
-                        : nil
-                )
-            }
             .onChange(of: isShowingDetailNavigation) { _, isActive in
                 isDetailNavigationActive = isActive
             }
-            .navigationDestination(item: $itemAddNavigation) { mode in
-                switch mode {
-                case .direct:
-                    ItemAddView(
-                        parentContext: viewContext,
-                        selectedWardrobe: selectedWardrobe,
-                        sessionAccountId: authSession.userId?.uuidString
-                    )
-                    .onAppear { itemAddNavigation = nil }
-                case .queued:
-                    ItemAddView(
-                        parentContext: viewContext,
-                        selectedWardrobe: selectedWardrobe,
-                        queueCoordinator: queueCoordinator,
-                        sessionAccountId: authSession.userId?.uuidString
-                    )
-                    .onAppear { itemAddNavigation = nil }
-                    .onDisappear {
-                        handleItemAddViewDismiss()
+            .onChange(of: queueCoordinator.addViewDismissTick) { _, _ in
+                isItemAddOnPath = false
+                handleItemAddViewDismiss()
+            }
+            .onChange(of: tabBarHideState.outfitAddDismissTick) { _, _ in
+                isOutfitAddOnPath = false
+            }
+            .onChange(of: tabBarHideState.packingDismissTick) { _, _ in
+                isPackingOnPath = false
+            }
+    }
+
+    /// Closet owns packing on `NavigationPath`; Profile owns pending Redress on `ProfileRoute`.
+    @ViewBuilder
+    private func withGridOwnedPackingAndRedressDestinations<Content: View>(_ content: Content) -> some View {
+        if onOpenPacking != nil, onOpenPendingRedress != nil {
+            content
+        } else if onOpenPacking != nil {
+            content
+                .navigationDestination(item: $selectedPendingRedress) { destination in
+                    pendingRedressDestination(destination)
+                }
+        } else if onOpenPendingRedress != nil {
+            content
+                .navigationDestination(item: $packingNavigation) { _ in
+                    localPackingDestination
+                }
+        } else {
+            content
+                .navigationDestination(item: $selectedPendingRedress) { destination in
+                    pendingRedressDestination(destination)
+                }
+                .navigationDestination(item: $packingNavigation) { _ in
+                    localPackingDestination
+                }
+        }
+    }
+
+    private var localPackingDestination: some View {
+        ItemPackView(
+            selectedWardrobe: selectedWardrobe,
+            wardrobeType: wardrobeType,
+            tabBarHideState: tabBarHideState
+        )
+        .onAppear { packingNavigation = nil }
+    }
+
+    private func pendingRedressDestination(_ destination: PendingRedressNavigationDestination) -> some View {
+        PendingOutfitDetailView(
+            recipientUserId: destination.recipientUserId,
+            wardrobeId: destination.wardrobeId,
+            suggestionSummary: destination.suggestionSummary,
+            viewerRole: destination.viewerRole,
+            onSuggestionResolved: {
+                scheduleOutfitsRefresh(forceRedressRefresh: true)
+            },
+            backButtonTitle: showsProfilePendingRedressSuggestions
+                ? (supabaseService.cachedUsername ?? "Profile")
+                : nil
+        )
+    }
+
+    /// Closet/Wishlist own item/outfit detail on `NavigationPath`. Profile still uses local `item:` + clear-on-appear.
+    @ViewBuilder
+    private func withGridOwnedDetailDestinations<Content: View>(_ content: Content) -> some View {
+        if onOpenItemDetail != nil, onOpenOutfitDetail != nil {
+            content
+        } else {
+            content
+                .navigationDestination(item: $selectedItemURIForNavigation) { uriString in
+                    Group {
+                        if let item = managedItem(forURI: uriString) {
+                            ItemDetailView(item: item, isReadOnly: false)
+                                .id(item.objectID)
+                                .onAppear { selectedItemURIForNavigation = nil }
+                        } else {
+                            EmptyView()
+                                .onAppear { selectedItemURIForNavigation = nil }
+                        }
                     }
                 }
-            }
-            .navigationDestination(item: $outfitAddNavigation) { navigation in
-                OutfitAddView(
-                    wardrobeType: wardrobeType,
-                    initialWardrobe: selectedWardrobe,
-                    lockWardrobeSource: selectedWardrobe.isDefault != true,
-                    sessionID: navigation.sessionID
-                )
-                .id(navigation.sessionID)
-                .onAppear { outfitAddNavigation = nil }
-            }
-            .navigationDestination(item: $packingNavigation) { _ in
-                TravelPackingView(
-                    selectedWardrobe: selectedWardrobe,
-                    wardrobeType: wardrobeType,
-                    tabBarHideState: tabBarHideState
-                )
-                .onAppear { packingNavigation = nil }
-            }
+                .navigationDestination(item: $selectedOutfitURIForNavigation) { uriString in
+                    Group {
+                        if let outfit = managedOutfit(forURI: uriString) {
+                            OutfitDetailView(
+                                outfit: outfit,
+                                isReadOnly: isReadOnly,
+                                initialWardrobe: selectedWardrobe,
+                                lockWardrobeSource: selectedWardrobe.isDefault != true
+                            )
+                                .id(outfit.objectID)
+                                .onAppear { selectedOutfitURIForNavigation = nil }
+                        } else {
+                            EmptyView()
+                                .onAppear { selectedOutfitURIForNavigation = nil }
+                        }
+                    }
+                }
+        }
     }
 
     private var usesProfileUnifiedScroll: Bool {
@@ -677,6 +723,9 @@ struct ItemGridView: View {
                 if let message = notification.userInfo?["message"] as? String {
                     showToast(message)
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("Closet.PendingRedressResolved"))) { _ in
+                scheduleOutfitsRefresh(forceRedressRefresh: true)
             }
     }
 
@@ -1017,7 +1066,7 @@ struct ItemGridView: View {
                                 queueCoordinator.storeCroppedImage(croppedImage)
                                 showCropperForQueue = false
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                    itemAddNavigation = .queued
+                                    openAddItem(queued: true)
                                 }
                             },
                             isEditing: false,
@@ -1142,6 +1191,32 @@ struct ItemGridView: View {
                 Text(pendingOutfitCategoryWillRemove
                      ? "Remove category “\(name)” from \(selectedOutfits.count) selected outfit(s)?"
                      : "Set category “\(name)” on \(selectedOutfits.count) selected outfit(s)?")
+            }
+            .alert(pendingWardrobeSelectionWillRemove ? "Remove from Wardrobe?" : "Add to Wardrobe?", isPresented: $showWardrobeSelectionConfirmAlert) {
+                Button(pendingWardrobeSelectionWillRemove ? "Remove" : "Add", role: pendingWardrobeSelectionWillRemove ? .destructive : nil) {
+                    guard let wardrobe = pendingWardrobeSelectionTarget else { return }
+                    let message: String?
+                    if pendingWardrobeSelectionWillRemove {
+                        message = removeSelectedItemsFromWardrobe(wardrobe)
+                    } else {
+                        message = addSelectedItemsToWardrobe(wardrobe)
+                    }
+                    showWardrobeSelectionSheet = false
+                    pendingWardrobeSelectionTarget = nil
+                    pendingWardrobeSelectionWillRemove = false
+                    if let message {
+                        showToast(message)
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingWardrobeSelectionTarget = nil
+                    pendingWardrobeSelectionWillRemove = false
+                }
+            } message: {
+                let name = pendingWardrobeSelectionTarget?.name ?? "this wardrobe"
+                Text(pendingWardrobeSelectionWillRemove
+                     ? "Remove \(selectedItems.count) selected item\(selectedItems.count == 1 ? "" : "s") from “\(name)”?"
+                     : "Add \(selectedItems.count) selected item\(selectedItems.count == 1 ? "" : "s") to “\(name)”?")
             }
     }
 
@@ -1595,7 +1670,12 @@ struct ItemGridView: View {
                 openProfileReadOnlyItemDetail(item)
             } else {
                 print("📱 Navigating to ItemDetailView for item: \(item.id?.uuidString ?? "no-id")")
-                selectedItemURIForNavigation = item.objectID.uriRepresentation().absoluteString
+                let uri = item.objectID.uriRepresentation().absoluteString
+                if let onOpenItemDetail {
+                    onOpenItemDetail(uri)
+                } else {
+                    selectedItemURIForNavigation = uri
+                }
             }
         }
     }
@@ -1679,7 +1759,12 @@ struct ItemGridView: View {
             if isReadOnly {
                 tabBarHideState.shouldHideTabBar = true
             }
-            selectedOutfitURIForNavigation = outfit.objectID.uriRepresentation().absoluteString
+            let uri = outfit.objectID.uriRepresentation().absoluteString
+            if let onOpenOutfitDetail {
+                onOpenOutfitDetail(uri)
+            } else {
+                selectedOutfitURIForNavigation = uri
+            }
         }
     }
     
@@ -1708,8 +1793,7 @@ struct ItemGridView: View {
                 onFilter: { onOpenItemFilter() },
                 onDismissSearch: { dismissActionBarSearch(clearQueries: true) },
                 onPack: showsPackAction ? {
-                    tabBarHideState.shouldHideTabBar = true
-                    packingNavigation = .packing
+                    openPacking()
                 } : nil,
                 activeFilterCount: filterModel.activeFilterCount,
                 barHeight: Self.tabActionsBarHeight
@@ -1884,7 +1968,7 @@ struct ItemGridView: View {
         if selectedTab == "Items" {
                 if selectedWardrobe.isDefault == true {
                     Button {
-                        itemAddNavigation = .direct
+                        openAddItem(queued: false)
                     } label: {
                         Image(systemName: "plus")
                     }
@@ -1900,7 +1984,7 @@ struct ItemGridView: View {
                             )
                         }
                         Button {
-                            itemAddNavigation = .direct
+                            openAddItem(queued: false)
                         } label: {
                             Label("Add Item", systemImage: "plus")
                         }
@@ -1910,7 +1994,7 @@ struct ItemGridView: View {
                 }
             } else {
                 Button {
-                    outfitAddNavigation = OutfitAddNavigation(sessionID: UUID())
+                    openAddOutfit()
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -1951,6 +2035,18 @@ struct ItemGridView: View {
         }
     }
     
+    private func openAddItem(queued: Bool) {
+        tabBarHideState.shouldHideTabBar = true
+        isItemAddOnPath = true
+        onOpenAddItem?(queued)
+    }
+
+    private func openAddOutfit() {
+        tabBarHideState.shouldHideTabBar = true
+        isOutfitAddOnPath = true
+        onOpenAddOutfit?(UUID())
+    }
+
     // MARK: - ItemAddView Dismiss Handler
     
     private func handleItemAddViewDismiss() {
@@ -2003,15 +2099,9 @@ struct ItemGridView: View {
                     let isDefaultRow = wardrobe.isDefault == true
                     
                     Button {
-                        let isNonDefaultCurrentWardrobe = selectedWardrobe.isDefault != true
-                        if isNonDefaultCurrentWardrobe {
-                            pendingWardrobeSelectionTarget = wardrobe
-                            pendingWardrobeSelectionWillRemove = allItemsInWardrobe
-                            showWardrobeSelectionConfirmAlert = true
-                        } else {
-                            addSelectedItemsToWardrobe(wardrobe)
-                            showWardrobeSelectionSheet = false
-                        }
+                        pendingWardrobeSelectionTarget = wardrobe
+                        pendingWardrobeSelectionWillRemove = allItemsInWardrobe && !isDefaultRow
+                        showWardrobeSelectionConfirmAlert = true
                     } label: {
                         HStack {
                             Text(wardrobe.name ?? "Untitled")
@@ -2037,6 +2127,7 @@ struct ItemGridView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .buttonStyle(.plain)
+                    .disabled(isDefaultRow && allItemsInWardrobe)
                 }
             }
             .listStyle(.plain)
@@ -2044,28 +2135,6 @@ struct ItemGridView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(Color(UIColor.secondarySystemBackground), for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
-        }
-        .alert(pendingWardrobeSelectionWillRemove ? "Remove from Wardrobe?" : "Add to Wardrobe?", isPresented: $showWardrobeSelectionConfirmAlert) {
-            Button(pendingWardrobeSelectionWillRemove ? "Remove" : "Add", role: pendingWardrobeSelectionWillRemove ? .destructive : nil) {
-                guard let wardrobe = pendingWardrobeSelectionTarget else { return }
-                if pendingWardrobeSelectionWillRemove {
-                    removeSelectedItemsFromWardrobe(wardrobe)
-                } else {
-                    addSelectedItemsToWardrobe(wardrobe)
-                }
-                pendingWardrobeSelectionTarget = nil
-                pendingWardrobeSelectionWillRemove = false
-                showWardrobeSelectionSheet = false
-            }
-            Button("Cancel", role: .cancel) {
-                pendingWardrobeSelectionTarget = nil
-                pendingWardrobeSelectionWillRemove = false
-            }
-        } message: {
-            let name = pendingWardrobeSelectionTarget?.name ?? "this wardrobe"
-            Text(pendingWardrobeSelectionWillRemove
-                 ? "Remove \(selectedItems.count) selected item(s) from “\(name)”?"
-                 : "Add \(selectedItems.count) selected item(s) to “\(name)”?")
         }
         .presentationDetents([.medium, .large])
     }
@@ -2108,48 +2177,62 @@ struct ItemGridView: View {
         }
     }
     
-    private func addSelectedItemsToWardrobe(_ wardrobe: Wardrobe) {
-        guard !selectedItems.isEmpty else { return }
-        
-        // Get items already in this wardrobe
+    @discardableResult
+    private func addSelectedItemsToWardrobe(_ wardrobe: Wardrobe) -> String? {
+        guard !selectedItems.isEmpty else { return nil }
+
+        let wardrobeName = wardrobe.name ?? "this wardrobe"
         let itemsInWardrobe = (wardrobe.items as? Set<Item>) ?? []
-        
-        // Add selected items to the wardrobe (Core Data will handle duplicates)
-        for item in selectedItems {
-            if !itemsInWardrobe.contains(item) {
-                wardrobe.addToItems(item)
-            }
+        var addedCount = 0
+        for item in selectedItems where !itemsInWardrobe.contains(item) {
+            wardrobe.addToItems(item)
+            addedCount += 1
         }
-        
+
+        guard addedCount > 0 else {
+            return "Selected items are already in “\(wardrobeName)”."
+        }
+
         do {
             try viewContext.save()
-            print("✅ Added \(selectedItems.count) items to wardrobe '\(wardrobe.name ?? "unknown")'")
-            
-            // Exit selection mode after successful addition
+            print("✅ Added \(addedCount) items to wardrobe '\(wardrobeName)'")
             isInSelectionMode = false
             clearItemSelection()
+            scheduleItemsFetch()
+            return "Added \(addedCount) item\(addedCount == 1 ? "" : "s") to “\(wardrobeName)”."
         } catch {
             print("❌ Failed to add items to wardrobe: \(error.localizedDescription)")
+            return nil
         }
     }
 
-    private func removeSelectedItemsFromWardrobe(_ wardrobe: Wardrobe) {
-        guard !selectedItems.isEmpty else { return }
+    @discardableResult
+    private func removeSelectedItemsFromWardrobe(_ wardrobe: Wardrobe) -> String? {
+        guard !selectedItems.isEmpty else { return nil }
+        guard wardrobe.isDefault != true else { return nil }
 
+        let wardrobeName = wardrobe.name ?? "this wardrobe"
         let itemsInWardrobe = (wardrobe.items as? Set<Item>) ?? []
+        var removedCount = 0
         for item in selectedItems where itemsInWardrobe.contains(item) {
             wardrobe.removeFromItems(item)
+            removedCount += 1
+        }
+
+        guard removedCount > 0 else {
+            return "Selected items aren’t in “\(wardrobeName)”."
         }
 
         do {
             try viewContext.save()
-            print("✅ Removed \(selectedItems.count) items from wardrobe '\(wardrobe.name ?? "unknown")'")
-
-            // Exit selection mode after successful removal
+            print("✅ Removed \(removedCount) items from wardrobe '\(wardrobeName)'")
             isInSelectionMode = false
             clearItemSelection()
+            scheduleItemsFetch()
+            return "Removed \(removedCount) item\(removedCount == 1 ? "" : "s") from “\(wardrobeName)”."
         } catch {
             print("❌ Failed to remove items from wardrobe: \(error.localizedDescription)")
+            return nil
         }
     }
     
@@ -3277,16 +3360,32 @@ struct ItemGridView: View {
         .id(suggestions.map(\.id))
     }
 
+    private func openPacking() {
+        tabBarHideState.shouldHideTabBar = true
+        if let onOpenPacking {
+            isPackingOnPath = true
+            onOpenPacking()
+        } else {
+            packingNavigation = .packing
+        }
+    }
+
     private func openProfilePendingSuggestion(_ suggestion: VisibleOutfitSuggestion) {
         guard let recipientUserId = authSession.userId,
               let wardrobeId = selectedWardrobe.id else { return }
 
-        selectedPendingRedress = PendingRedressNavigationDestination(
+        let destination = PendingRedressNavigationDestination(
             recipientUserId: recipientUserId,
             wardrobeId: wardrobeId,
             suggestionSummary: suggestion.asGridOutfit(),
             viewerRole: .recipient
         )
+        if let onOpenPendingRedress {
+            isDetailNavigationActive = true
+            onOpenPendingRedress(destination)
+        } else {
+            selectedPendingRedress = destination
+        }
     }
 
     private var outfitsLazyGrid: some View {

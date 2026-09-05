@@ -31,6 +31,22 @@ struct VisibleWardrobe: Decodable, Identifiable, Hashable {
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt)
     }
 
+    init(
+        id: UUID,
+        name: String,
+        type: String?,
+        visibility: String,
+        isDefault: Bool = false,
+        createdAt: Date? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.type = type
+        self.visibility = visibility
+        self.isDefault = isDefault
+        self.createdAt = createdAt
+    }
+
     var wardrobeType: String {
         (type ?? "closet").lowercased()
     }

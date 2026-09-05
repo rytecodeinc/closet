@@ -69,6 +69,135 @@ struct FollowCounts: Equatable {
     static let zero = FollowCounts(following: 0, followers: 0)
 }
 
+/// Row from `get_event_participants` (`SUPABASE_EVENT_PARTICIPANTS.sql`).
+struct EventParticipantRecord: Decodable, Identifiable {
+    let participantId: UUID
+    let userId: UUID
+    let username: String
+    let displayName: String?
+    let avatarUrl: String?
+    let status: String
+    let role: String
+    let invitedBy: UUID?
+    let createdAt: Date?
+    let updatedAt: Date?
+
+    var id: UUID { participantId }
+
+    enum CodingKeys: String, CodingKey {
+        case participantId = "participant_id"
+        case userId = "user_id"
+        case username
+        case displayName = "display_name"
+        case avatarUrl = "avatar_url"
+        case status
+        case role
+        case invitedBy = "invited_by"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+
+    var publicProfile: PublicUserProfile {
+        PublicUserProfile(
+            userId: userId,
+            username: username,
+            displayName: displayName,
+            avatarUrl: avatarUrl
+        )
+    }
+
+    var statusLabel: String? {
+        switch status {
+        case "pending":
+            return "Invited"
+        case "accepted":
+            return role == "host" ? nil : "Going"
+        default:
+            return nil
+        }
+    }
+}
+
+/// Pending invite preview from `get_event_invite_preview`.
+struct EventInvitePreview: Decodable {
+    let eventId: UUID
+    let name: String?
+    let theme: String?
+    let occasion: String?
+    let notes: String?
+    let location: String?
+    let fullAddress: String?
+    let latitude: Double?
+    let longitude: Double?
+    let startDate: Date?
+    let endDate: Date?
+    let visibility: String?
+    let hostUserId: UUID
+    let hostUsername: String?
+    let hostDisplayName: String?
+    let hostAvatarUrl: String?
+    let participantStatus: String
+    let invitedBy: UUID?
+
+    enum CodingKeys: String, CodingKey {
+        case eventId = "event_id"
+        case name
+        case theme
+        case occasion
+        case notes
+        case location
+        case fullAddress = "full_address"
+        case latitude
+        case longitude
+        case startDate = "start_date"
+        case endDate = "end_date"
+        case visibility
+        case hostUserId = "host_user_id"
+        case hostUsername = "host_username"
+        case hostDisplayName = "host_display_name"
+        case hostAvatarUrl = "host_avatar_url"
+        case participantStatus = "participant_status"
+        case invitedBy = "invited_by"
+    }
+
+    var hostProfile: PublicUserProfile {
+        PublicUserProfile(
+            userId: hostUserId,
+            username: hostUsername ?? "",
+            displayName: hostDisplayName,
+            avatarUrl: hostAvatarUrl
+        )
+    }
+
+    var eventVisibility: WardrobeVisibility {
+        WardrobeVisibility(rawValue: visibility ?? "") ?? .friends
+    }
+}
+
+/// Wardrobe thumb from `get_event_invite_wardrobe`.
+struct EventInviteWardrobeEntry: Decodable, Identifiable {
+    let entryKind: String
+    let entryId: UUID
+    let imageUrl: String?
+    let ownerUserId: UUID
+    let sortOrder: Int?
+
+    var id: String { "\(entryKind)-\(entryId.uuidString)" }
+
+    enum CodingKeys: String, CodingKey {
+        case entryKind = "entry_kind"
+        case entryId = "entry_id"
+        case imageUrl = "image_url"
+        case ownerUserId = "owner_user_id"
+        case sortOrder = "sort_order"
+    }
+
+    var imageURL: URL? {
+        guard let imageUrl, let url = URL(string: imageUrl) else { return nil }
+        return url
+    }
+}
+
 /// Model for decoding rows from the `notifications` table.
 /// Keys match the Supabase column names (id, user_id, type, title, body, payload, is_read, created_at).
 struct NotificationRecord: Decodable, Identifiable {
@@ -135,6 +264,8 @@ class SupabaseService: ObservableObject {
     
     @Published var currentSession: Session?
     @Published var currentUser: User?
+    /// Becomes `true` after the cold-start session restore attempt finishes (signed in or not).
+    @Published private(set) var didFinishSessionRestoration = false
     @Published var cachedUsername: String?
     @Published var cachedFriendCount: Int?
     /// Accepted rows where the signed-in user is the requester (`user_id`).
@@ -183,9 +314,14 @@ class SupabaseService: ObservableObject {
             fatalError("Invalid Supabase URL")
         }
         
+        // Emit the Keychain session immediately so cold start works offline;
+        // token refresh happens in the background when the network is available.
         client = SupabaseClient(
             supabaseURL: url,
-            supabaseKey: SupabaseConfig.supabaseAnonKey
+            supabaseKey: SupabaseConfig.supabaseAnonKey,
+            options: SupabaseClientOptions(
+                auth: .init(emitLocalSessionAsInitialSession: true)
+            )
         )
     }
     
@@ -442,37 +578,56 @@ class SupabaseService: ObservableObject {
     /// Fetches accepted friends for the current user (public profile fields only).
     /// Requires the `get_friends()` RPC to be installed in Supabase.
     func fetchFriends(forceRefresh: Bool = false) async throws -> [PublicUserProfile] {
+        guard let currentId = currentUser?.id else {
+            throw NSError(domain: "SupabaseService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+        return try await fetchFriends(forUserId: currentId, forceRefresh: forceRefresh)
+    }
+
+    /// Mutual accepted friends for `userId`. Own list uses `get_friends` cache; others use `get_user_friends_profiles`.
+    func fetchFriends(forUserId userId: UUID, forceRefresh: Bool = false) async throws -> [PublicUserProfile] {
         guard currentUser != nil else {
             throw NSError(domain: "SupabaseService", code: -1,
                           userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
         }
 
-        if !forceRefresh, let friendsListCache {
+        let isOwn = userId == currentUser?.id
+        if isOwn, !forceRefresh, let friendsListCache {
             return friendsListCache
         }
-        
+
+        if isOwn {
+            let response = try await client
+                .rpc("get_friends")
+                .execute()
+
+            struct FriendRow: Decodable {
+                let user_id: UUID
+                let username: String
+                let display_name: String?
+                let avatar_url: String?
+            }
+
+            let decoder = JSONDecoder()
+            let rows = try decoder.decode([FriendRow].self, from: response.data)
+            let profiles = rows.map { row in
+                PublicUserProfile(
+                    userId: row.user_id,
+                    username: row.username,
+                    displayName: row.display_name,
+                    avatarUrl: row.avatar_url
+                )
+            }
+            friendsListCache = profiles
+            rememberPublicProfiles(profiles)
+            return profiles
+        }
+
         let response = try await client
-            .rpc("get_friends")
+            .rpc("get_user_friends_profiles", params: ["p_user_id": userId.uuidString])
             .execute()
-        
-        struct FriendRow: Decodable {
-            let user_id: UUID
-            let username: String
-            let display_name: String?
-            let avatar_url: String?
-        }
-        
-        let decoder = JSONDecoder()
-        let rows = try decoder.decode([FriendRow].self, from: response.data)
-        let profiles = rows.map { row in
-            PublicUserProfile(
-                userId: row.user_id,
-                username: row.username,
-                displayName: row.display_name,
-                avatarUrl: row.avatar_url
-            )
-        }
-        friendsListCache = profiles
+        let profiles = try JSONDecoder().decode([PublicUserProfile].self, from: response.data)
         rememberPublicProfiles(profiles)
         return profiles
     }
@@ -1497,6 +1652,171 @@ class SupabaseService: ObservableObject {
             await refreshCachedFriendCountFromServer()
         }
     }
+
+    // MARK: - Event participants
+
+    /// Lists host + pending/accepted participants for an event the caller owns or attends.
+    func fetchEventParticipants(eventId: UUID) async throws -> [EventParticipantRecord] {
+        guard currentUser != nil else {
+            throw NSError(domain: "SupabaseService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+
+        let response = try await client.rpc(
+            "get_event_participants",
+            params: ["p_event_id": eventId.uuidString]
+        ).execute()
+
+        return try supabaseRPCDecoder().decode([EventParticipantRecord].self, from: response.data)
+    }
+
+    /// Invites a mutual friend to an event (owner only; event must exist on server).
+    @discardableResult
+    func inviteToEvent(eventId: UUID, userId: UUID) async throws -> UUID {
+        try requireCloudSyncEnabled()
+        guard currentUser != nil else {
+            throw NSError(domain: "SupabaseService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+
+        let response = try await client.rpc(
+            "invite_to_event",
+            params: [
+                "p_event_id": eventId.uuidString,
+                "p_user_id": userId.uuidString
+            ]
+        ).execute()
+
+        if let id = try? supabaseRPCDecoder().decode(UUID.self, from: response.data) {
+            return id
+        }
+        if let raw = String(data: response.data, encoding: .utf8)?
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\" \n")),
+           let id = UUID(uuidString: raw) {
+            return id
+        }
+        throw NSError(
+            domain: "SupabaseService",
+            code: -1,
+            userInfo: [NSLocalizedDescriptionKey: "Could not send event invite"]
+        )
+    }
+
+    /// Invitee accepts or declines a pending event invite.
+    func respondToEventInvite(eventId: UUID, accept: Bool) async throws {
+        guard currentUser != nil else {
+            throw NSError(domain: "SupabaseService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+        _ = try await client.rpc(
+            "respond_to_event_invite",
+            params: [
+                "p_event_id": eventId.uuidString,
+                "p_accept": accept ? "true" : "false"
+            ]
+        ).execute()
+    }
+
+    /// Preview fields for a pending event invite (Option B — no full event row access).
+    func fetchEventInvitePreview(eventId: UUID) async throws -> EventInvitePreview {
+        guard currentUser != nil else {
+            throw NSError(domain: "SupabaseService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+
+        let response = try await client.rpc(
+            "get_event_invite_preview",
+            params: ["p_event_id": eventId.uuidString]
+        ).execute()
+
+        let rows = try supabaseRPCDecoder().decode([EventInvitePreview].self, from: response.data)
+        guard let preview = rows.first else {
+            throw NSError(
+                domain: "SupabaseService",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Invite preview not available"]
+            )
+        }
+        return preview
+    }
+
+    /// Host wardrobe thumbs for invite preview / participants browse.
+    func fetchEventInviteWardrobe(eventId: UUID) async throws -> [EventInviteWardrobeEntry] {
+        guard currentUser != nil else {
+            throw NSError(domain: "SupabaseService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+        let response = try await client.rpc(
+            "get_event_invite_wardrobe",
+            params: ["p_event_id": eventId.uuidString]
+        ).execute()
+        return try supabaseRPCDecoder().decode([EventInviteWardrobeEntry].self, from: response.data)
+    }
+
+    /// Accepted guest events (for calendar materialize).
+    func fetchMyAcceptedEvents() async throws -> [RemoteEventRow] {
+        guard currentUser != nil else {
+            throw NSError(domain: "SupabaseService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+        let response = try await client.rpc("get_my_accepted_events").execute()
+        return try JSONDecoder().decode([RemoteEventRow].self, from: response.data)
+    }
+
+    /// Single event row by id (works for accepted guests via RLS).
+    func fetchRemoteEvent(eventId: UUID) async throws -> RemoteEventRow {
+        guard currentUser != nil else {
+            throw NSError(domain: "SupabaseService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+        let response = try await client
+            .from("events")
+            .select()
+            .eq("id", value: eventId.uuidString)
+            .eq("is_soft_deleted", value: false)
+            .single()
+            .execute()
+        return try JSONDecoder().decode(RemoteEventRow.self, from: response.data)
+    }
+
+    /// Owner removes a guest (and invite notifications on server).
+    func removeEventParticipant(eventId: UUID, userId: UUID) async throws {
+        try requireCloudSyncEnabled()
+        guard currentUser != nil else {
+            throw NSError(domain: "SupabaseService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
+        }
+        _ = try await client.rpc(
+            "remove_event_participant",
+            params: [
+                "p_event_id": eventId.uuidString,
+                "p_user_id": userId.uuidString
+            ]
+        ).execute()
+    }
+
+    private func supabaseRPCDecoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let string = try container.decode(String.self)
+
+            let isoFormatterWithFraction = ISO8601DateFormatter()
+            isoFormatterWithFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = isoFormatterWithFraction.date(from: string) {
+                return date
+            }
+
+            let isoFormatter = ISO8601DateFormatter()
+            isoFormatter.formatOptions = [.withInternetDateTime]
+            if let date = isoFormatter.date(from: string) {
+                return date
+            }
+
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid date: \(string)")
+        }
+        return decoder
+    }
     
     /// Cancels (un-sends) a pending friend request from the current user to the target user.
     /// Deletes the pending friendships row. RLS enforces the current user is the requester.
@@ -1624,36 +1944,59 @@ class SupabaseService: ObservableObject {
         return max(counts.following, counts.followers)
     }
 
-    /// Loads the existing session if available
+    /// Loads the existing session if available.
+    /// Offline / refresh failures keep the locally stored session so the app stays usable
+    /// with Core Data until the network returns for sync.
     func loadSession() async {
-        guard !hasLoadedSession else { return }
+        guard !hasLoadedSession else {
+            if !didFinishSessionRestoration { didFinishSessionRestoration = true }
+            return
+        }
         hasLoadedSession = true
-        
+        defer { didFinishSessionRestoration = true }
+
+        // Adopt Keychain session immediately (may be expired) — do not require network.
+        if let localSession = client.auth.currentSession {
+            currentSession = localSession
+            currentUser = localSession.user
+            print("✅ Restored local Supabase session for user: \(localSession.user.email ?? "unknown")")
+        }
+
+        let isOnline = NetworkMonitor.shared.isConnected
+
         do {
+            // Refreshes when expired; succeeds immediately when still valid.
             let session = try await client.auth.session
-            self.currentSession = session
-            self.currentUser = session.user
-            
-            // Ensure profile exists when restoring session
-            await ensureUserProfileExists(userId: session.user.id)
-            
-            // Load cached friend count from Core Data (and seed from server if missing)
-            await loadFriendCountCacheForCurrentUserIfNeeded(seedFromServerIfMissing: true)
-            
-            // Force a username refresh when restoring session (don't rely on cache)
-            _ = try? await getUsername(forceRefresh: true)
-            
+            currentSession = session
+            currentUser = session.user
+            await finishRestoredSessionBootstrap(seedFromServer: isOnline)
             print("✅ Supabase session loaded for user: \(session.user.email ?? "unknown")")
         } catch {
-            print("⚠️ No existing Supabase session: \(error.localizedDescription)")
-            self.currentSession = nil
-            self.currentUser = nil
-            self.cachedUsername = nil
-            self.cachedFriendCount = nil
-            self.cachedFollowingCount = nil
-            self.cachedFollowersCount = nil
-            self.hasLoadedFriendCountCache = false
+            if currentUser != nil {
+                // Keep local identity; queue network profile work for when connectivity returns.
+                print("⚠️ Session refresh deferred (offline or network error): \(error.localizedDescription)")
+                await finishRestoredSessionBootstrap(seedFromServer: false)
+            } else {
+                print("⚠️ No existing Supabase session: \(error.localizedDescription)")
+                currentSession = nil
+                currentUser = nil
+                cachedUsername = nil
+                cachedFriendCount = nil
+                cachedFollowingCount = nil
+                cachedFollowersCount = nil
+                hasLoadedFriendCountCache = false
+            }
         }
+    }
+
+    /// Local Core Data cache first; optional server seed only when online.
+    private func finishRestoredSessionBootstrap(seedFromServer: Bool) async {
+        guard let userId = currentUser?.id else { return }
+        if seedFromServer {
+            await ensureUserProfileExists(userId: userId)
+        }
+        await loadFriendCountCacheForCurrentUserIfNeeded(seedFromServerIfMissing: seedFromServer)
+        _ = try? await getUsername(forceRefresh: seedFromServer)
     }
 
     // MARK: - Friend Count Cache
@@ -1934,12 +2277,25 @@ class SupabaseService: ObservableObject {
     /// - Returns: The username if it exists, nil otherwise
     func getUsername(forceRefresh: Bool = false) async throws -> String? {
         guard let userId = currentUser?.id else { return nil }
-        
-        // Return cached username if available and not forcing refresh
+
         if !forceRefresh, let cached = cachedUsername {
             return cached
         }
-        
+
+        // Prefer Core Data when not forcing a refresh, or when offline.
+        if !forceRefresh || !NetworkMonitor.shared.isConnected {
+            let context = PersistenceController.shared.container.viewContext
+            let repo = UserProfileRepository(context: context)
+            if let local = repo.getUsername()?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !local.isEmpty {
+                cachedUsername = local
+                return local
+            }
+            if !NetworkMonitor.shared.isConnected {
+                return cachedUsername
+            }
+        }
+
         // Fetch from server (display_name + avatar_url + style_tags + username_changed_at)
         let response = try await client.from("user_profiles")
             .select("user_id, username, display_name, avatar_url, style_tags, username_changed_at")
@@ -2284,9 +2640,9 @@ class SupabaseService: ObservableObject {
     
     // MARK: - Computed Properties
     
-    /// Checks if a user is currently authenticated
+    /// Checks if a user is currently authenticated (includes expired local sessions for offline use).
     var isAuthenticated: Bool {
-        return currentSession != nil && currentUser != nil
+        return currentUser != nil
     }
     
     /// Exposes the Supabase client for sync operations

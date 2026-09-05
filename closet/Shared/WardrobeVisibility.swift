@@ -44,6 +44,21 @@ enum WardrobeVisibility: String, CaseIterable, Identifiable {
             return false
         }
     }
+
+    /// Profile calendar strip visibility for **hosted** events.
+    /// - public: anyone viewing the host profile
+    /// - friends: host's friends, and friends of accepted guests (when that audience is wired)
+    /// - private: host only — does **not** appear on guest profiles
+    func isVisibleOnProfileCalendar(viewerIsOwner: Bool, viewerIsFriend: Bool) -> Bool {
+        switch self {
+        case .public:
+            return true
+        case .friends:
+            return viewerIsOwner || viewerIsFriend
+        case .private:
+            return viewerIsOwner
+        }
+    }
 }
 
 extension Wardrobe {

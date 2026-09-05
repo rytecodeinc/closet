@@ -341,6 +341,7 @@ struct ReadOnlyItemDetailView: View {
                         redressRecipient: destination.recipient,
                         preselectedItem: destination.item,
                         preselectedWardrobeType: destination.wardrobeType,
+                        preselectedWardrobeId: destination.wardrobeId,
                         sessionID: destination.id
                     )
                     .id(destination.id)
@@ -555,7 +556,8 @@ struct ReadOnlyItemDetailView: View {
             id: UUID(),
             recipient: resolvedOwnerProfile,
             item: itemForRedress,
-            wardrobeType: normalizedWardrobeType
+            wardrobeType: normalizedWardrobeType,
+            wardrobeId: wardrobeId
         )
         if let navigationPath {
             navigationPath.wrappedValue.append(ProfileRoute.itemRedress(destination))

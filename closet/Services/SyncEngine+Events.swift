@@ -11,10 +11,11 @@ import Supabase
 
 extension SyncEngine {
 
-    /// Push dirty events, pull remote (last-write-wins), then orphan cleanup.
+    /// Push dirty events, pull remote (last-write-wins), pull accepted guest events, then orphan cleanup.
     func syncAllEvents(userId: UUID) async throws {
         try await pushDirtyEvents(userId: userId)
         try await pullRemoteEvents(userId: userId)
+        try await pullAcceptedGuestEvents(userId: userId)
         try await cleanupOrphanedEvents(userId: userId)
     }
 
@@ -70,6 +71,8 @@ extension SyncEngine {
             let eventId: UUID
             let isSoftDeleted: Bool
             let name: String?
+            let theme: String?
+            let occasion: String?
             let notes: String?
             let location: String?
             let fullAddress: String?
@@ -130,7 +133,7 @@ extension SyncEngine {
                     if let id = outfit.id?.uuidString {
                         outfitIds.insert(id.lowercased())
                     }
-                    if outfit.syncedAt == nil, outfit.isDraft != true {
+                    if outfit.syncedAt == nil {
                         if outfit.userId == nil || outfit.userId?.isEmpty == true {
                             outfit.userId = userId.uuidString
                         }
@@ -145,6 +148,8 @@ extension SyncEngine {
                 eventId: eventId,
                 isSoftDeleted: event.isSoftDeleted,
                 name: event.name,
+                theme: event.theme,
+                occasion: event.occasion,
                 notes: event.notes,
                 location: event.location,
                 fullAddress: event.fullAddress,
@@ -155,7 +160,7 @@ extension SyncEngine {
                 date: event.date,
                 time: event.time,
                 timestamp: event.timestamp,
-                visibility: event.eventVisibility.rawValue,
+                visibility: event.visibility ?? WardrobeVisibility.private.rawValue,
                 createdAt: event.createdAt,
                 updatedAt: event.updatedAt,
                 orderedItemObjectIDs: orderedItemObjectIDs,
@@ -168,11 +173,24 @@ extension SyncEngine {
         }
 
         guard let snapshot else { return }
-        let eventId = snapshot.eventId
 
         if snapshot.isSoftDeleted {
-            print("🗑️ Deleting event from Supabase: \(snapshot.name ?? eventId.uuidString)")
-            try await deleteRemoteEvent(eventId: eventId)
+            let isRemoteOwner: Bool
+            if let remote = try? await (await getSupabase()).fetchRemoteEvent(eventId: snapshot.eventId),
+               let remoteOwner = UUID(uuidString: remote.userId) {
+                isRemoteOwner = remoteOwner == userId
+            } else {
+                // Event missing remotely or inaccessible — treat as owner-side cleanup.
+                isRemoteOwner = true
+            }
+
+            if isRemoteOwner {
+                print("🗑️ Deleting event from Supabase: \(snapshot.name ?? snapshot.eventId.uuidString)")
+                try await deleteRemoteEvent(eventId: snapshot.eventId)
+            } else {
+                print("ℹ️ Removing local guest copy only: \(snapshot.eventId.uuidString)")
+            }
+
             try await performOnSyncContext { ctx in
                 guard let event = try ctx.existingObject(with: objectID) as? Event else { return }
                 event.syncedAt = Date()
@@ -182,7 +200,21 @@ extension SyncEngine {
             return
         }
 
+        // Guest calendar copies must not upsert the shared events row (owner-only).
+        if let remote = try? await (await getSupabase()).fetchRemoteEvent(eventId: snapshot.eventId),
+           let remoteOwner = UUID(uuidString: remote.userId),
+           remoteOwner != userId {
+            print("ℹ️ Skipping event metadata push for guest copy \(snapshot.eventId.uuidString)")
+            try await performOnSyncContext { ctx in
+                guard let event = try ctx.existingObject(with: objectID) as? Event else { return }
+                event.syncedAt = Date()
+                if ctx.hasChanges { try ctx.save() }
+            }
+            return
+        }
+
         // Queue retry: push linked rows first so junction FKs succeed.
+        let eventId = snapshot.eventId
         for itemObjectID in snapshot.unsyncedItemObjectIDs {
             do {
                 try await ensureReferencedEntitiesSynced(forItemObjectID: itemObjectID, userId: userId)
@@ -203,6 +235,8 @@ extension SyncEngine {
             id: eventId.uuidString,
             userId: userId.uuidString,
             name: snapshot.name,
+            theme: snapshot.theme,
+            occasion: snapshot.occasion,
             notes: snapshot.notes,
             location: snapshot.location,
             fullAddress: snapshot.fullAddress,
@@ -435,6 +469,8 @@ extension SyncEngine {
             if event.id == nil { event.id = eventUUID }
             event.userId = userId.uuidString
             event.name = row.name
+            event.theme = row.theme
+            event.occasion = row.occasion
             event.notes = row.notes
             event.location = row.location
             event.fullAddress = row.fullAddress
@@ -510,6 +546,70 @@ extension SyncEngine {
                 print("⏳ Pulled event \(eventUUID.uuidString) with missing local items/outfits — join retry queued")
             }
 
+            try ctx.save()
+        }
+    }
+
+    // MARK: - Accepted guest materialize
+
+    /// Pulls events the user accepted as guest and materializes calendar copies locally.
+    private func pullAcceptedGuestEvents(userId: UUID) async throws {
+        let supabase = await getSupabase()
+        let rows: [RemoteEventRow]
+        do {
+            rows = try await supabase.fetchMyAcceptedEvents()
+        } catch {
+            print("⚠️ Failed to fetch accepted guest events: \(error.localizedDescription)")
+            return
+        }
+        guard !rows.isEmpty else { return }
+
+        print("⬇️ Materializing \(rows.count) accepted guest event(s)")
+        for row in rows {
+            guard let eventUUID = UUID(uuidString: row.id) else { continue }
+            try await materializeGuestEventMetadata(row: row, eventUUID: eventUUID, userId: userId)
+        }
+    }
+
+    /// After Accept — create/update local calendar Event for the invitee (metadata only).
+    func materializeAcceptedGuestEvent(eventId: UUID, userId: UUID) async throws {
+        let row = try await (await getSupabase()).fetchRemoteEvent(eventId: eventId)
+        try await materializeGuestEventMetadata(row: row, eventUUID: eventId, userId: userId)
+    }
+
+    private func materializeGuestEventMetadata(
+        row: RemoteEventRow,
+        eventUUID: UUID,
+        userId: UUID
+    ) async throws {
+        try await performOnSyncContext { ctx in
+            let request: NSFetchRequest<Event> = Event.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", eventUUID as CVarArg)
+            request.fetchLimit = 1
+            let event = try ctx.fetch(request).first ?? Event(context: ctx)
+            if event.id == nil { event.id = eventUUID }
+            // Calendar membership for invitee; remote owner remains events.user_id on server.
+            event.userId = userId.uuidString
+            event.name = row.name
+            event.theme = row.theme
+            event.occasion = row.occasion
+            event.notes = row.notes
+            event.location = row.location
+            event.fullAddress = row.fullAddress
+            event.latitude = row.latitude ?? 0
+            event.longitude = row.longitude ?? 0
+            event.startDate = Date.fromISO8601(row.startDate)
+            event.endDate = Date.fromISO8601(row.endDate)
+            event.date = Date.fromISO8601(row.date)
+            event.time = Date.fromISO8601(row.time)
+            event.timestamp = Date.fromISO8601(row.timestamp) ?? event.timestamp ?? Date()
+            event.visibility = WardrobeVisibility(rawValue: row.visibility ?? "")?.rawValue
+                ?? WardrobeVisibility.friends.rawValue
+            event.createdAt = Date.fromISO8601(row.createdAt) ?? event.createdAt ?? Date()
+            event.updatedAt = Date.fromISO8601(row.updatedAt) ?? Date()
+            event.isSoftDeleted = false
+            // Prevent owner upsert of guest copy; wardrobe joins added later by guest edits.
+            event.syncedAt = Date()
             try ctx.save()
         }
     }

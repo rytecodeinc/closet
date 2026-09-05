@@ -40,7 +40,9 @@ struct ProfileView: View {
     @State private var isProfileFilterActionsVisible = true
     @StateObject private var profileFilterModel = ItemFilterModel()
     @StateObject private var profileOutfitFilterModel = OutfitFilterModel()
+    @StateObject private var profileEventItemsDraft = EventItemsSelectionDraft()
     @StateObject private var ownedTabBarHideState = TabBarHideState()
+    @StateObject private var itemAddQueueCoordinator = ImageQueueCoordinator()
     @State private var profileHowToPage = 0
     @State private var navigationPath = NavigationPath()
 
@@ -74,7 +76,10 @@ struct ProfileView: View {
     private static let profileHeaderTopPadding: CGFloat = 8
     /// Matches the default vertical padding formerly on the wardrobe bar’s top edge.
     private static let wardrobeBarEdgePadding: CGFloat = 16
-    private static let profileHeaderBottomPadding: CGFloat = 4 + wardrobeBarEdgePadding
+    /// Bottom padding under avatar/actions only; outfit-of-the-day row owns the gap above the wardrobe bar.
+    private static let profileHeaderBottomPadding: CGFloat = 16
+    /// Days shown in the outfit-of-the-day strip (today … today+n-1).
+    private static let outfitOfTheDayDayCount = 3
     /// Gap between avatar row and display name.
     private static let profileHeaderNameTopPadding: CGFloat = 8
     private static let profileHeaderActionIconSize: CGFloat = 20
@@ -578,8 +583,14 @@ struct ProfileView: View {
             .onAppear {
                 tabBarHideState.shouldHideTabBar = shouldHideTabBar
             }
-            .onChange(of: navigationPath.count) { _, _ in
+            .onChange(of: navigationPath.count) { _, count in
+                if count == 0 {
+                    isProfileGridDetailNavigationActive = false
+                }
                 tabBarHideState.shouldHideTabBar = shouldHideTabBar
+                if !isViewingOtherUser {
+                    refreshToken = UUID()
+                }
             }
             .confirmationDialog(
                 "Profile",
@@ -662,15 +673,33 @@ struct ProfileView: View {
             SignInView()
         case .developerRegister:
             RegisterView()
+        case .eventDetailLayoutPrototype:
+            EventDetailLayoutPrototypeView()
         case .notifications:
-            UserNotificationsView(tabBarHideState: tabBarHideState)
+            NotificationsView(
+                tabBarHideState: tabBarHideState,
+                navigationPath: $navigationPath
+            )
+        case .eventInvite(let eventId):
+            EventInviteeView(
+                eventId: eventId,
+                tabBarHideState: tabBarHideState
+            )
         case .users:
             UsersView(tabBarHideState: tabBarHideState, navigationPath: $navigationPath)
-        case .friends(let userId, let followersCount, let followingCount):
+        case .friends(let userId, let followersCount, let followingCount, let initialSegment):
             FriendsView(
                 userId: userId,
                 followersCount: followersCount,
                 followingCount: followingCount,
+                initialSegment: initialSegment,
+                tabBarHideState: tabBarHideState,
+                navigationPath: $navigationPath
+            )
+        case .friendsList(let userId):
+            FriendsListView(
+                userId: userId,
+                emptyMessage: "You don’t have any friends yet. Add friends from Users.",
                 tabBarHideState: tabBarHideState,
                 navigationPath: $navigationPath
             )
@@ -726,6 +755,7 @@ struct ProfileView: View {
                 redressRecipient: destination.recipient,
                 preselectedItem: destination.item,
                 preselectedWardrobeType: destination.wardrobeType,
+                preselectedWardrobeId: destination.wardrobeId,
                 sessionID: destination.id
             )
             .id(destination.id)
@@ -744,7 +774,90 @@ struct ProfileView: View {
                 attributesReadOnly: true,
                 selectedWardrobe: selectedProfileWardrobe
             )
+        case .pendingRedress(let destination):
+            PendingOutfitDetailView(
+                recipientUserId: destination.recipientUserId,
+                wardrobeId: destination.wardrobeId,
+                suggestionSummary: destination.suggestionSummary,
+                viewerRole: destination.viewerRole,
+                onSuggestionResolved: {
+                    NotificationCenter.default.post(
+                        name: Notification.Name("Closet.PendingRedressResolved"),
+                        object: nil
+                    )
+                },
+                backButtonTitle: supabaseService.cachedUsername ?? "Profile"
+            )
+            .toolbar(.hidden, for: .tabBar)
+            .onAppear { tabBarHideState.shouldHideTabBar = true }
+        case .profileOotdItems(let uriString):
+            if let event = managedProfileEvent(forURI: uriString) {
+                EventIndividualItemSelection(
+                    event: event,
+                    navigationPath: $navigationPath,
+                    initialWardrobe: nil,
+                    deleteEmptyOotdDraftOnDismiss: true,
+                    onItemsFilter: {
+                        navigationPath.append(ProfileRoute.profileOotdItemsFilter)
+                    },
+                    onOutfitsFilter: {
+                        navigationPath.append(ProfileRoute.profileOotdOutfitsFilter)
+                    }
+                )
+                .environment(\.managedObjectContext, viewContext)
+                .environmentObject(profileEventItemsDraft)
+                .id(event.objectID)
+            } else {
+                Text("Event unavailable")
+            }
+        case .profileOotdItemsFilter:
+            ItemFilterView(
+                filterModel: profileEventItemsDraft.itemFilterModel,
+                tabBarHideState: profileEventItemsDraft.tabBarHideState,
+                wardrobeType: "closet",
+                selectedWardrobe: profileEventItemsDraft.selectedWardrobe
+            )
+        case .profileOotdOutfitsFilter:
+            OutfitFilterView(
+                filterModel: profileEventItemsDraft.outfitFilterModel,
+                wardrobeType: "closet",
+                selectedWardrobe: profileEventItemsDraft.selectedWardrobe
+            )
         }
+    }
+
+    private func managedProfileEvent(forURI uriString: String) -> Event? {
+        guard let url = URL(string: uriString),
+              let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url) else {
+            return nil
+        }
+        return try? viewContext.existingObject(with: objectID) as? Event
+    }
+
+    private func quickAddProfileOotd(for date: Date) {
+        let day = Calendar.current.startOfDay(for: date)
+        let event = Event(context: viewContext)
+        event.id = UUID()
+        event.userId = authSession.userId?.uuidString
+        event.eventVisibility = .private
+        event.startDate = day
+        event.endDate = day
+        event.date = day
+        event.name = Event.ootdDisplayName
+        event.theme = Event.ootdThemeMarker
+        event.timestamp = Date()
+        setCreatedAndUpdatedAt(event)
+
+        do {
+            try viewContext.obtainPermanentIDs(for: [event])
+            try viewContext.save()
+        } catch {
+            print("⚠️ Failed to create OOTD draft: \(error.localizedDescription)")
+            return
+        }
+
+        appendProfileRoute(.profileOotdItems(eventURI: event.objectID.uriRepresentation().absoluteString))
+        refreshToken = UUID()
     }
 
     private var profileWithDestinations: some View {
@@ -784,7 +897,11 @@ struct ProfileView: View {
     @ViewBuilder
     private var redressOutfitDestination: some View {
         if let profile = viewedProfile {
-            OutfitAddView(redressRecipient: profile) {
+            OutfitAddView(
+                redressRecipient: profile,
+                preselectedWardrobeType: selectedRemoteWardrobe?.wardrobeType ?? "closet",
+                preselectedWardrobeId: selectedRemoteWardrobe?.id
+            ) {
                 if let ownerId = viewedProfile?.userId {
                     supabaseService.invalidateWardrobeGridOutfitsCache(forUserId: ownerId)
                 }
@@ -861,10 +978,14 @@ struct ProfileView: View {
                 onOpenOutfitFilter: {
                     appendProfileRoute(.outfitFilter)
                 },
+                onOpenPendingRedress: { destination in
+                    appendProfileRoute(.pendingRedress(destination))
+                },
                 onOpenProfileReadOnlyItem: { destination in
                     appendProfileRoute(.readOnlyItem(destination))
                 },
                 tabBarHideState: tabBarHideState,
+                queueCoordinator: itemAddQueueCoordinator,
                 profileCollapsingHeader: {
                     profileHeaderSection
                 },
@@ -910,14 +1031,67 @@ struct ProfileView: View {
 
     @ViewBuilder
     private var profileHeaderSection: some View {
-        if isViewingOtherUser {
-            otherUserProfileHeaderSection
-        } else {
-            ownProfileHeaderSection
+        VStack(spacing: 0) {
+            if isViewingOtherUser {
+                otherUserProfileHeaderSection
+                profileOutfitOfTheDayRow
+            } else {
+                ownProfileHeaderSection
+                profileCalendarSection
+                profileWardrobeSectionHeader
+            }
         }
     }
 
-    /// Own-profile header: avatar left, display name + Friends / Sizes / Edit Profile right.
+    private var profileCalendarSection: some View {
+        ProfileCalendarStripView(
+            onQuickAddOotd: quickAddProfileOotd,
+            viewerIsOwner: !isViewingOtherUser,
+            viewerIsFriend: isFriendWithViewedUser || isMutualFriendWithViewedUser || isFollowingViewedUser
+        )
+        .id(refreshToken)
+    }
+
+    private var profileWardrobeSectionHeader: some View {
+        profileStaticSectionHeader("WARDROBE", bottomPadding: 0)
+    }
+
+    private func profileStaticSectionHeader(_ title: String, bottomPadding: CGFloat = 4) -> some View {
+        HStack {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.gray)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, bottomPadding)
+    }
+
+    /// Other-user placeholder day cards (today … today+2).
+    private var profileOutfitOfTheDayRow: some View {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let days: [Date] = (0..<Self.outfitOfTheDayDayCount).compactMap {
+            calendar.date(byAdding: .day, value: $0, to: today)
+        }
+
+        return HStack(alignment: .top, spacing: 8) {
+            ForEach(days, id: \.self) { date in
+                ProfileOutfitOfTheDayCard(
+                    date: date,
+                    allowsAddingPhoto: !isViewingOtherUser
+                )
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.bottom, Self.wardrobeBarEdgePadding)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Outfit of the day")
+    }
+
+    /// Own-profile header: avatar left; display name + edit; share + URL; Followers / Following.
     /// Full template (bio/tags/location/socials/etc.) — `.cursor/rules/profile-header-full-template-deferred.mdc`.
     @ViewBuilder
     private var ownProfileHeaderSection: some View {
@@ -925,19 +1099,44 @@ struct ProfileView: View {
             ownProfileAvatarWithPhotoTap
 
             VStack(alignment: .leading, spacing: 0) {
-                Text(displayNameForHeader)
-                    .font(.headline.weight(.semibold))
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 2)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(displayNameForHeader)
+                        .font(.headline.weight(.semibold))
+                        .multilineTextAlignment(.leading)
 
-                Text("redress.me/\(profileUsernameText)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 2)
+                    Spacer(minLength: 0)
+
+                    Button {
+                        appendProfileRoute(.editProfile)
+                    } label: {
+                        Image(systemName: "pencil")
+                            .foregroundStyle(.blue)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Edit profile")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 2)
+
+                HStack(spacing: 6) {
+                    Button {
+                        // Share sheet for own profile — wire later.
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Share profile")
+
+                    Text("redress.me/\(profileUsernameText)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 2)
 
                 ownProfileHeaderActionsRow
                     .padding(.top, 10)
@@ -951,57 +1150,84 @@ struct ProfileView: View {
         .id(refreshToken)
     }
 
-    /// Friends, Edit, Share — equal-width, equal-height icon-over-label buttons.
+    /// Friends (own profile), Followers, and Following — leading-aligned.
     private var ownProfileHeaderActionsRow: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        HStack(alignment: .bottom, spacing: 16) {
             if appCapabilities.enablesFriendsAndSharing {
                 Button {
-                    if let userId = displayedProfileUserId {
-                        appendProfileRoute(
-                            .friends(
-                                userId: userId,
-                                followersCount: displayedFollowersCount,
-                                followingCount: displayedFollowingCount
-                            )
-                        )
-                    }
+                    openOwnFriendsList()
                 } label: {
-                    ownProfileHeaderIconLabelStack(
-                        title: "Friends",
-                        systemImage: "person.2"
-                    )
+                    ownProfileHeaderCountLabelStack(title: "Friends", count: displayedFriendsCount)
                 }
                 .buttonStyle(.plain)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                .accessibilityLabel("Friends")
-            }
+                .accessibilityLabel("Friends, \(displayedFriendsCount)")
 
-            Button {
-                appendProfileRoute(.editProfile)
-            } label: {
-                ownProfileHeaderIconLabelStack(
-                    title: "Edit",
-                    systemImage: "pencil"
+                profileFollowCountButton(
+                    title: "Followers",
+                    count: displayedFollowersCount,
+                    initialSegment: .followers
+                )
+
+                profileFollowCountButton(
+                    title: "Following",
+                    count: displayedFollowingCount,
+                    initialSegment: .following
                 )
             }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            .accessibilityLabel("Edit profile")
-
-            Button {
-                // Share sheet for own profile — wire later.
-            } label: {
-                ownProfileHeaderIconLabelStack(
-                    title: "Share",
-                    systemImage: "square.and.arrow.up"
-                )
-            }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            .accessibilityLabel("Share profile")
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var displayedFriendsCount: Int {
+        supabaseService.cachedFriendCount ?? 0
+    }
+
+    private func openOwnFriendsList() {
+        guard let userId = authSession.userId else { return }
+        appendProfileRoute(.friendsList(userId: userId))
+    }
+
+    private func profileFollowCountButton(
+        title: String,
+        count: Int,
+        initialSegment: FriendsSegment
+    ) -> some View {
+        Button {
+            openFriendsList(initialSegment: initialSegment)
+        } label: {
+            ownProfileHeaderCountLabelStack(title: title, count: count)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title), \(count)")
+    }
+
+    private func openFriendsList(initialSegment: FriendsSegment) {
+        guard let userId = displayedProfileUserId else { return }
+        appendProfileRoute(
+            .friends(
+                userId: userId,
+                followersCount: displayedFollowersCount,
+                followingCount: displayedFollowingCount,
+                initialSegment: initialSegment
+            )
+        )
+    }
+
+    private func ownProfileHeaderCountLabelStack(title: String, count: Int) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("\(count)")
+                .font(.system(size: Self.profileHeaderActionIconSize, weight: .semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .frame(height: Self.profileHeaderActionIconSize, alignment: .leading)
+            Text(title)
+                .font(.caption2)
+                .lineLimit(1)
+        }
+        .foregroundStyle(.primary)
+        .padding(.vertical, 8)
     }
 
     private func ownProfileHeaderIconLabelStack(
@@ -1011,15 +1237,17 @@ struct ProfileView: View {
     ) -> some View {
         VStack(spacing: 6) {
             Image(systemName: systemImage)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: Self.profileHeaderActionIconSize, weight: .semibold))
                 .rotationEffect(.degrees(iconRotation))
-                .frame(width: 16, height: 16)
+                .frame(
+                    width: Self.profileHeaderActionIconSize,
+                    height: Self.profileHeaderActionIconSize
+                )
             Text(title)
                 .font(.caption2)
                 .lineLimit(1)
         }
         .foregroundStyle(.primary)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .padding(.vertical, 8)
     }
 
@@ -1100,45 +1328,24 @@ struct ProfileView: View {
         .id(refreshToken)
     }
 
-    /// Friends (list) + Add Friend / Remove + Share — equal-width icon-over-label buttons.
+    /// Followers, Following, Add Friend / Remove — leading-aligned.
     private var otherUserHeaderActionsRow: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            Button {
-                if let userId = displayedProfileUserId {
-                    appendProfileRoute(
-                        .friends(
-                            userId: userId,
-                            followersCount: displayedFollowersCount,
-                            followingCount: displayedFollowingCount
-                        )
-                    )
-                }
-            } label: {
-                ownProfileHeaderIconLabelStack(
-                    title: "Friends",
-                    systemImage: "person.2"
-                )
-            }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            .accessibilityLabel("Friends")
+        HStack(alignment: .bottom, spacing: 16) {
+            profileFollowCountButton(
+                title: "Followers",
+                count: displayedFollowersCount,
+                initialSegment: .followers
+            )
+
+            profileFollowCountButton(
+                title: "Following",
+                count: displayedFollowingCount,
+                initialSegment: .following
+            )
 
             otherUserFriendshipButton
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-
-            Button {
-                // Share sheet for this user's profile — wire later.
-            } label: {
-                ownProfileHeaderIconLabelStack(
-                    title: "Share",
-                    systemImage: "square.and.arrow.up"
-                )
-            }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            .accessibilityLabel("Share profile")
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -1308,16 +1515,24 @@ struct ProfileView: View {
 
     @ToolbarContentBuilder
     private func profileNavigationToolbar() -> some ToolbarContent {
-        ToolbarItem(placement: .navigationBarLeading) {
+        ToolbarItemGroup(placement: .navigationBarLeading) {
             Button {
                 appendProfileRoute(.settings)
             } label: {
                 Image(systemName: "gearshape")
             }
+            .accessibilityLabel("Settings")
+
+            Button {
+                // Wardrobe stats — wire later.
+            } label: {
+                Image(systemName: "chart.bar.xaxis")
+            }
+            .accessibilityLabel("Stats")
         }
         ToolbarItemGroup(placement: .navigationBarTrailing) {
             if appCapabilities.enablesFriendsAndSharing {
-                UserNotificationsBellButton {
+                NotificationsBellButton {
                     appendProfileRoute(.notifications)
                 }
             }
@@ -1941,6 +2156,744 @@ extension ProfileView {
         }
     }
 
+}
+
+// MARK: - Profile calendar strip (own profile header)
+
+private struct ProfileCalendarDayEventBars {
+    let titles: [String]
+    let overflowCount: Int
+}
+
+private enum ProfileCalendarResolver {
+    static let maxEventBarsPerDay = 2
+    static let eventBarHeight: CGFloat = 13
+    static let eventBarSpacing: CGFloat = 2
+
+    static func outfitThumbnail(
+        for date: Date,
+        events: [Event],
+        context: NSManagedObjectContext,
+        viewerIsOwner: Bool,
+        viewerIsFriend: Bool
+    ) -> UIImage? {
+        wardrobeThumbnail(
+            for: date,
+            events: events,
+            context: context,
+            viewerIsOwner: viewerIsOwner,
+            viewerIsFriend: viewerIsFriend
+        )
+    }
+
+    /// OOTD with wardrobe first, else a visible non-OOTD event with items/outfits for this day.
+    static func wardrobeEvent(
+        for date: Date,
+        events: [Event],
+        context: NSManagedObjectContext,
+        viewerIsOwner: Bool,
+        viewerIsFriend: Bool
+    ) -> Event? {
+        if let ootd = outfitOfTheDayEvent(
+            for: date,
+            events: events,
+            viewerIsOwner: viewerIsOwner,
+            viewerIsFriend: viewerIsFriend
+        ), EventTripDayWardrobe.hasWardrobeContent(ootd) {
+            return ootd
+        }
+        return nonOotdWardrobeEvent(
+            for: date,
+            events: events,
+            context: context,
+            viewerIsOwner: viewerIsOwner,
+            viewerIsFriend: viewerIsFriend
+        )
+    }
+
+    /// Matches `CalendarView.gridWardrobeThumbnail` with profile visibility rules.
+    static func wardrobeThumbnail(
+        for date: Date,
+        events: [Event],
+        context: NSManagedObjectContext,
+        viewerIsOwner: Bool,
+        viewerIsFriend: Bool
+    ) -> UIImage? {
+        guard let event = wardrobeEvent(
+            for: date,
+            events: events,
+            context: context,
+            viewerIsOwner: viewerIsOwner,
+            viewerIsFriend: viewerIsFriend
+        ) else { return nil }
+        if event.spansMultipleCalendarDays {
+            return event.wardrobeThumbnailImage(for: date, in: context)
+        }
+        if event.isTripLinkedDayOOTD,
+           let parentId = event.tripParentEventId,
+           let parent = events.first(where: { $0.id == parentId }) {
+            return parent.wardrobeThumbnailImage(for: date, in: context) ?? event.calendarThumbnailImage
+        }
+        return event.calendarThumbnailImage
+    }
+
+    private static func nonOotdWardrobeEvent(
+        for date: Date,
+        events: [Event],
+        context: NSManagedObjectContext,
+        viewerIsOwner: Bool,
+        viewerIsFriend: Bool
+    ) -> Event? {
+        let calendar = Calendar.current
+        let wardrobeEvents = events.filter { event in
+            guard !event.isOutfitOfTheDay else { return false }
+            guard !event.isTripLinkedDayOOTD else { return false }
+            guard event.eventVisibility.isVisibleOnProfileCalendar(
+                viewerIsOwner: viewerIsOwner,
+                viewerIsFriend: viewerIsFriend
+            ) else { return false }
+            guard eventOccupies(date, event: event, calendar: calendar) else { return false }
+            if event.spansMultipleCalendarDays {
+                return event.wardrobeThumbnailImage(for: date, in: context) != nil
+            }
+            return EventTripDayWardrobe.hasWardrobeContent(event)
+        }
+        return wardrobeEvents.min { ($0.createdAt ?? .distantFuture) < ($1.createdAt ?? .distantFuture) }
+    }
+
+    /// Matches `CalendarView.outfitOfTheDayEvent`: standalone OOTD first, else trip-linked day OOTD.
+    static func outfitOfTheDayEvent(
+        for date: Date,
+        events: [Event],
+        viewerIsOwner: Bool,
+        viewerIsFriend: Bool
+    ) -> Event? {
+        let calendar = Calendar.current
+        let ootds = events.filter {
+            $0.isOutfitOfTheDay
+                && eventOccupies(date, event: $0, calendar: calendar)
+                && $0.eventVisibility.isVisibleOnProfileCalendar(
+                    viewerIsOwner: viewerIsOwner,
+                    viewerIsFriend: viewerIsFriend
+                )
+        }
+        let standalone = ootds.filter { !$0.isTripLinkedDayOOTD }
+        let preferred = standalone.isEmpty ? ootds : standalone
+        return preferred.min { ($0.createdAt ?? .distantFuture) < ($1.createdAt ?? .distantFuture) }
+    }
+
+    /// Up to two titled event rows per day (non-OOTD), matching calendar grid event bars.
+    static func eventBars(
+        for date: Date,
+        events: [Event],
+        viewerIsOwner: Bool,
+        viewerIsFriend: Bool
+    ) -> ProfileCalendarDayEventBars {
+        let calendar = Calendar.current
+        let qualifying = events.filter { event in
+            guard !event.isOutfitOfTheDay else { return false }
+            guard !event.isTripLinkedDayOOTD else { return false }
+            let title = (event.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty else { return false }
+            guard event.eventVisibility.isVisibleOnProfileCalendar(
+                viewerIsOwner: viewerIsOwner,
+                viewerIsFriend: viewerIsFriend
+            ) else { return false }
+            return eventOccupies(date, event: event, calendar: calendar)
+        }
+        .sorted { eventLayoutSort($0, $1, calendar: calendar) }
+
+        let visible = qualifying.prefix(maxEventBarsPerDay).map {
+            ($0.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let overflow = max(0, qualifying.count - maxEventBarsPerDay)
+        return ProfileCalendarDayEventBars(titles: visible, overflowCount: overflow)
+    }
+
+    private static func eventLayoutSort(_ lhs: Event, _ rhs: Event, calendar: Calendar) -> Bool {
+        let leftStart = calendar.startOfDay(for: lhs.startDate ?? .distantFuture)
+        let rightStart = calendar.startOfDay(for: rhs.startDate ?? .distantFuture)
+        if leftStart != rightStart { return leftStart < rightStart }
+        let leftSpan = occupiedDayCount(lhs, calendar: calendar)
+        let rightSpan = occupiedDayCount(rhs, calendar: calendar)
+        if leftSpan != rightSpan { return leftSpan > rightSpan }
+        return (lhs.name ?? "") < (rhs.name ?? "")
+    }
+
+    private static func occupiedDayCount(_ event: Event, calendar: Calendar) -> Int {
+        guard let start = event.startDate else { return 0 }
+        let end = event.endDate ?? start
+        let startDay = calendar.startOfDay(for: start)
+        let endDay = calendar.startOfDay(for: end)
+        let days = calendar.dateComponents([.day], from: startDay, to: endDay).day ?? 0
+        return max(1, days + 1)
+    }
+
+    private static func eventOccupies(_ date: Date, event: Event, calendar: Calendar) -> Bool {
+        guard let start = event.startDate else { return false }
+        let end = event.endDate ?? start
+        let dayStart = calendar.startOfDay(for: date)
+        guard let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) else { return false }
+
+        if isAllDayEvent(start: start, end: end, calendar: calendar) {
+            let startDay = calendar.startOfDay(for: start)
+            let endDay = calendar.startOfDay(for: end)
+            return dayStart >= startDay && dayStart <= endDay
+        }
+        return start < dayEnd && end > dayStart
+    }
+
+    private static func isAllDayEvent(start: Date, end: Date, calendar: Calendar) -> Bool {
+        let startParts = calendar.dateComponents([.hour, .minute], from: start)
+        let endParts = calendar.dateComponents([.hour, .minute], from: end)
+        return (startParts.hour == 0 && startParts.minute == 0)
+            && (endParts.hour == 0 && endParts.minute == 0)
+    }
+}
+
+/// Seven-day window (today−2 … today+4), three visible at a time starting on today; arrows shift by two days.
+private struct ProfileCalendarStripView: View {
+    @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.appCapabilities) private var appCapabilities
+    @EnvironmentObject private var authSession: AuthSession
+
+    var onQuickAddOotd: (Date) -> Void
+    var viewerIsOwner: Bool
+    var viewerIsFriend: Bool
+
+    @State private var events: [Event] = []
+    @State private var visibleStartIndex = Self.defaultVisibleStartIndex
+    @State private var showCalendarToast = false
+    @State private var calendarToastMessage = ""
+    @State private var isOotdFullScreenPresented = false
+    @State private var ootdFullScreenCollage: UIImage?
+    @State private var ootdFullScreenWorn: UIImage?
+    @State private var ootdFullScreenPageIndex = 0
+
+    private static let totalDayCount = 7
+    private static let visibleDayCount = 3
+    private static let scrollStep = 2
+    private static let leadingDayOffset = -2
+    /// Index of today within `calendarDays` (today−2 … today+4).
+    private static let defaultVisibleStartIndex = 2
+
+    private let calendar = Calendar.current
+
+    private var calendarDays: [Date] {
+        let today = calendar.startOfDay(for: Date())
+        return (0..<Self.totalDayCount).compactMap {
+            calendar.date(byAdding: .day, value: Self.leadingDayOffset + $0, to: today)
+        }
+    }
+
+    private var visibleDays: [Date] {
+        let end = min(visibleStartIndex + Self.visibleDayCount, calendarDays.count)
+        guard visibleStartIndex < end else { return [] }
+        return Array(calendarDays[visibleStartIndex..<end])
+    }
+
+    private var canScrollLeft: Bool {
+        visibleStartIndex > 0
+    }
+
+    private var canScrollRight: Bool {
+        visibleStartIndex + Self.visibleDayCount < calendarDays.count
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                Text("CALENDAR")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.gray)
+
+                Spacer(minLength: 0)
+
+                HStack(spacing: 4) {
+                    stripChevron(systemName: "chevron.left", enabled: canScrollLeft) {
+                        visibleStartIndex = max(0, visibleStartIndex - Self.scrollStep)
+                    }
+                    stripChevron(systemName: "chevron.right", enabled: canScrollRight) {
+                        let maxStart = max(0, calendarDays.count - Self.visibleDayCount)
+                        visibleStartIndex = min(maxStart, visibleStartIndex + Self.scrollStep)
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
+
+            HStack(alignment: .top, spacing: 8) {
+                ForEach(visibleDays, id: \.self) { date in
+                    let ootdEvent = ProfileCalendarResolver.outfitOfTheDayEvent(
+                        for: date,
+                        events: events,
+                        viewerIsOwner: viewerIsOwner,
+                        viewerIsFriend: viewerIsFriend
+                    )
+                    let wardrobeEvent = ProfileCalendarResolver.wardrobeEvent(
+                        for: date,
+                        events: events,
+                        context: viewContext,
+                        viewerIsOwner: viewerIsOwner,
+                        viewerIsFriend: viewerIsFriend
+                    )
+                    let dayEventBars = ProfileCalendarResolver.eventBars(
+                        for: date,
+                        events: events,
+                        viewerIsOwner: viewerIsOwner,
+                        viewerIsFriend: viewerIsFriend
+                    )
+                    ProfileCalendarDayCell(
+                        date: date,
+                        thumbnail: ProfileCalendarResolver.wardrobeThumbnail(
+                            for: date,
+                            events: events,
+                            context: viewContext,
+                            viewerIsOwner: viewerIsOwner,
+                            viewerIsFriend: viewerIsFriend
+                        ),
+                        wardrobeEvent: wardrobeEvent,
+                        ootdEvent: ootdEvent,
+                        eventBarTitles: dayEventBars.titles,
+                        overflowEventCount: dayEventBars.overflowCount,
+                        showsPrivacyMenu: appCapabilities.enablesCloudSync && viewerIsOwner,
+                        onQuickAdd: { onQuickAddOotd(date) },
+                        onPrivacyChange: { visibility in
+                            setOotdPrivacy(visibility, for: date, existingEvent: ootdEvent)
+                        },
+                        onViewOutfit: {
+                            guard let wardrobeEvent else { return }
+                            presentOotdFullScreen(for: wardrobeEvent)
+                        }
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 8)
+        }
+        .overlay(alignment: .top) {
+            if showCalendarToast {
+                Text(calendarToastMessage)
+                    .font(.subheadline)
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(.black.opacity(0.8))
+                    .clipShape(Capsule())
+                    .padding(.top, 4)
+                    .padding(.horizontal, 16)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Calendar outfits")
+        .task(id: authSession.userId) {
+            fetchEvents()
+        }
+        .fullScreenCover(isPresented: $isOotdFullScreenPresented) {
+            OutfitFullScreenView(
+                collageImage: ootdFullScreenCollage,
+                wornImage: ootdFullScreenWorn,
+                selectedPageIndex: $ootdFullScreenPageIndex,
+                isPresented: $isOotdFullScreenPresented
+            )
+        }
+    }
+
+    private func presentOotdFullScreen(for event: Event) {
+        ootdFullScreenCollage = event.ootdFullScreenCollageImage
+        ootdFullScreenWorn = event.ootdFullScreenWornImage
+        ootdFullScreenPageIndex = 0
+        isOotdFullScreenPresented = true
+    }
+
+    private func stripChevron(
+        systemName: String,
+        enabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.caption2)
+                .foregroundColor(.primary)
+                .frame(width: 22, height: 22)
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.35)
+        .accessibilityHidden(!enabled)
+    }
+
+    private func fetchEvents() {
+        let request = NSFetchRequest<Event>(entityName: "Event")
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Event.createdAt, ascending: false)]
+        let notDeleted = NSPredicate(format: "isSoftDeleted != YES OR isSoftDeleted == nil")
+        if let uid = authSession.userId?.uuidString {
+            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+                NSPredicate(format: "userId == %@", uid),
+                notDeleted,
+            ])
+        } else {
+            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+                NSPredicate(value: false),
+                notDeleted,
+            ])
+        }
+        do {
+            events = try viewContext.fetch(request)
+        } catch {
+            events = []
+        }
+    }
+
+    private func setOotdPrivacy(
+        _ visibility: WardrobeVisibility,
+        for date: Date,
+        existingEvent: Event?
+    ) {
+        guard let event = existingEvent else { return }
+        let previous = event.eventVisibility
+        guard previous != visibility else { return }
+        event.eventVisibility = visibility
+        setUpdatedAt(event)
+        do {
+            try viewContext.save()
+            SyncService.shared.syncEventIfNeeded(event)
+            fetchEvents()
+            showCalendarPrivacyToast(visibility)
+        } catch {
+            print("⚠️ Failed to update OOTD privacy: \(error.localizedDescription)")
+        }
+    }
+
+    private func showCalendarPrivacyToast(_ visibility: WardrobeVisibility) {
+        calendarToastMessage = "Privacy set to \(visibility.menuLabel)"
+        withAnimation(.easeInOut(duration: 0.18)) {
+            showCalendarToast = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+            withAnimation(.easeInOut(duration: 0.22)) {
+                showCalendarToast = false
+            }
+        }
+    }
+}
+
+private struct ProfileCalendarDayCell: View {
+    let date: Date
+    let thumbnail: UIImage?
+    let wardrobeEvent: Event?
+    let ootdEvent: Event?
+    var eventBarTitles: [String] = []
+    var overflowEventCount: Int = 0
+    var showsPrivacyMenu: Bool = true
+    var onQuickAdd: () -> Void
+    var onPrivacyChange: (WardrobeVisibility) -> Void
+    var onViewOutfit: () -> Void
+
+    private let calendar = Calendar.current
+
+    private var dayLabel: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE d"
+        return formatter.string(from: date)
+    }
+
+    private var isToday: Bool {
+        calendar.isDateInToday(date)
+    }
+
+    private var hasWardrobeContent: Bool {
+        thumbnail != nil
+    }
+
+    private var isOotdWardrobe: Bool {
+        wardrobeEvent?.isOutfitOfTheDay == true
+    }
+
+    private var accessibilityDateText: String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale.current
+        formatter.dateStyle = .full
+        return formatter.string(from: date)
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            dateLabelRow
+            if !eventBarTitles.isEmpty || overflowEventCount > 0 {
+                eventBarsSection
+            }
+            outfitSquare
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(
+            hasWardrobeContent
+                ? "\(accessibilityDateText), \(isOotdWardrobe ? "outfit of the day" : "event outfit")"
+                : "\(accessibilityDateText), add outfit"
+        )
+    }
+
+    @ViewBuilder
+    private var eventBarsSection: some View {
+        VStack(alignment: .leading, spacing: ProfileCalendarResolver.eventBarSpacing) {
+            ForEach(Array(eventBarTitles.enumerated()), id: \.offset) { _, title in
+                Text(title)
+                    .font(.system(size: 8, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 4)
+                    .frame(maxWidth: .infinity, minHeight: ProfileCalendarResolver.eventBarHeight, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(.blue)
+                    )
+            }
+            if overflowEventCount > 0 {
+                Text("+\(overflowEventCount) more")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: ProfileCalendarResolver.eventBarHeight, alignment: .leading)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var outfitSquare: some View {
+        if hasWardrobeContent {
+            Menu {
+                Button(action: onViewOutfit) {
+                    Label("View Outfit", systemImage: "eye")
+                }
+                if isOotdWardrobe {
+                    Button {
+                        // Replace OOTD — wire later
+                    } label: {
+                        Label("Replace OOTD", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    Button(role: .destructive) {
+                        // Remove OOTD — wire later
+                    } label: {
+                        Label("Remove OOTD", systemImage: "trash")
+                    }
+                }
+            } label: {
+                outfitThumbnailSquare
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(accessibilityDateText), outfit actions")
+        } else {
+            Button(action: onQuickAdd) {
+                Color(.systemBackground)
+                    .aspectRatio(1, contentMode: .fit)
+                    .overlay {
+                        Image(systemName: "plus")
+                            .font(.title2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .clipped()
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(accessibilityDateText), add outfit")
+        }
+    }
+
+    @ViewBuilder
+    private var outfitThumbnailSquare: some View {
+        if let thumbnail {
+            Color(.systemBackground)
+                .aspectRatio(1, contentMode: .fit)
+                .overlay {
+                    Image(uiImage: thumbnail)
+                        .resizable()
+                        .scaledToFill()
+                }
+                .clipped()
+        } else {
+            Color(.systemBackground)
+                .aspectRatio(1, contentMode: .fit)
+                .clipped()
+        }
+    }
+
+    @ViewBuilder
+    private var dateLabelRow: some View {
+        if isOotdWardrobe, showsPrivacyMenu, ootdEvent != nil {
+            Menu {
+                ForEach(WardrobeVisibility.allCases) { visibility in
+                    Button {
+                        onPrivacyChange(visibility)
+                    } label: {
+                        Label {
+                            HStack {
+                                Text(visibility.menuLabel)
+                                if ootdEvent?.eventVisibility == visibility {
+                                    Spacer()
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        } icon: {
+                            Image(systemName: visibility.iconName)
+                        }
+                    }
+                }
+            } label: {
+                dateHeaderLabel
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(accessibilityDateText), outfit privacy")
+        } else {
+            dateHeaderLabel
+        }
+    }
+
+    private var dateHeaderLabel: some View {
+        HStack(spacing: 4) {
+            if isOotdWardrobe, let ootdEvent {
+                Image(systemName: ootdEvent.eventVisibility.iconName)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+            dateLabelText
+        }
+    }
+
+    private var dateLabelText: some View {
+        Text(dayLabel)
+            .font(.caption.weight(isToday ? .semibold : .regular))
+            .foregroundStyle(isToday ? Color.primary : Color.secondary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+    }
+}
+
+// MARK: - Outfit of the day (other-user profile header)
+
+/// Calendar event-style day card: date number + weekday band, then outfit/placeholder square.
+struct ProfileOutfitOfTheDayCard: View {
+    let date: Date
+    var allowsAddingPhoto: Bool = true
+
+    @State private var showPhotoSourceDialog = false
+    @State private var showImagePicker = false
+    @State private var imagePickerSource: UIImagePickerController.SourceType = .photoLibrary
+    @State private var pickerImage: UIImage?
+    @State private var outfitImage: UIImage?
+
+    private let cornerRadius: CGFloat = 10
+    private let calendar = Calendar.current
+
+    private var dayNumberText: String {
+        String(calendar.component(.day, from: date))
+    }
+
+    private var weekdayText: String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale.current
+        formatter.setLocalizedDateFormatFromTemplate("EEE")
+        return formatter.string(from: date).uppercased()
+    }
+
+    private var accessibilityDateText: String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale.current
+        formatter.dateStyle = .full
+        return formatter.string(from: date)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 2) {
+                Text(dayNumberText)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.white)
+
+                Text(weekdayText)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .padding(.horizontal, 4)
+            .background(Color(UIColor.systemGray))
+
+            outfitPhotoSquare
+        }
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .strokeBorder(Color(UIColor.separator), lineWidth: 1)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(accessibilityDateText)
+        .confirmationDialog(
+            "Add Outfit Photo",
+            isPresented: $showPhotoSourceDialog,
+            titleVisibility: .visible
+        ) {
+            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                Button("Take Photo") {
+                    imagePickerSource = .camera
+                    showImagePicker = true
+                }
+            }
+            Button("Choose from Library") {
+                imagePickerSource = .photoLibrary
+                showImagePicker = true
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: $showImagePicker) {
+            ImagePicker(
+                image: $pickerImage,
+                sourceType: $imagePickerSource,
+                allowsEditing: true,
+                skipEmbeddedCrop: true
+            ) { image in
+                showImagePicker = false
+                guard let image else { return }
+                outfitImage = image
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var outfitPhotoSquare: some View {
+        let square = Color(UIColor.tertiarySystemFill)
+            .aspectRatio(1, contentMode: .fit)
+            .overlay {
+                if let outfitImage {
+                    Image(uiImage: outfitImage)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Image(systemName: "hanger")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .clipped()
+
+        if allowsAddingPhoto {
+            Button {
+                showPhotoSourceDialog = true
+            } label: {
+                square
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(outfitImage == nil ? "Add outfit photo" : "Replace outfit photo")
+        } else {
+            square
+                .accessibilityLabel(outfitImage == nil ? "Outfit placeholder" : "Outfit photo")
+        }
+    }
 }
 
 // MARK: - Other-user calendar placeholders (deferred — other-user-profile-calendar-deferred.mdc)

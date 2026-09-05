@@ -380,6 +380,26 @@ struct SyncOutfitCategoryData: Codable {
     }
 }
 
+struct SyncPackingChecklistDocumentData: Codable {
+    let id: String
+    let userId: String
+    let wardrobeId: String
+    let kind: Int
+    let body: PackingChecklistDocumentBody
+    let createdAt: String?
+    let updatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userId = "user_id"
+        case wardrobeId = "wardrobe_id"
+        case kind
+        case body
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
 struct SyncPackingChecklistSectionData: Codable {
     let id: String
     let userId: String
@@ -540,6 +560,8 @@ struct SyncEventData: Codable {
     let id: String
     let userId: String
     let name: String?
+    let theme: String?
+    let occasion: String?
     let notes: String?
     let location: String?
     let fullAddress: String?
@@ -559,6 +581,8 @@ struct SyncEventData: Codable {
         case id
         case userId = "user_id"
         case name
+        case theme
+        case occasion
         case notes
         case location
         case fullAddress = "full_address"
@@ -620,6 +644,8 @@ struct RemoteEventRow: Codable {
     let id: String
     let userId: String
     let name: String?
+    let theme: String?
+    let occasion: String?
     let notes: String?
     let location: String?
     let fullAddress: String?
@@ -639,6 +665,8 @@ struct RemoteEventRow: Codable {
         case id
         case userId = "user_id"
         case name
+        case theme
+        case occasion
         case notes
         case location
         case fullAddress = "full_address"

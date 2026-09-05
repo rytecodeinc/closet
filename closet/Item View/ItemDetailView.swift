@@ -13,6 +13,8 @@ import CoreData
 struct ItemDetailView: View {
     @ObservedObject var item: Item
     var isReadOnly: Bool = false
+    /// Closet/Wishlist tab path — nested Create Outfit / pair / outfit append routes (no nested `item:`).
+    var navigationPath: Binding<NavigationPath>? = nil
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appCapabilities) private var appCapabilities
@@ -37,10 +39,9 @@ struct ItemDetailView: View {
     @State private var selectedUIImage: UIImage?
     @State private var pendingImageType: ImageType? // Track which image type is being added/edited
     
-    @State private var cropperDestination: CropperDestination? = nil
-    /// Stays true for the whole crop push (even after the nav trigger is cleared onAppear).
+    /// Sheet (not nested `item:` push) — Item Detail is already mid-stack on Closet/Wishlist path.
     @State private var isCropEditorPresented = false
-    @State private var imageToEdit: UIImage? // Store the image to edit directly
+    @State private var imageToEdit: UIImage?
     @State private var cropEditorSessionID = UUID()
     @State private var showShareSheet = false
     @State private var isPreparingShareSheet = false
@@ -74,6 +75,7 @@ struct ItemDetailView: View {
     @State private var selectedPairedItemForNavigation: Item?
     @State private var pendingPairedItemForNavigation: Item?
     @State private var selectedOutfitURIForNavigation: String?
+    @State private var pendingOutfitForNavigation: Outfit?
     @State private var showAddToClosetToast = false
     @State private var addToClosetToastMessage = "Added to closet."
     
@@ -129,10 +131,6 @@ struct ItemDetailView: View {
         case worn
     }
 
-    private enum CropperDestination: Hashable {
-        case cropper(ImageType)
-    }
-
     private var pairsSectionHeaderIconName: String {
         isSetsExpanded ? "minus" : "plus"
     }
@@ -161,7 +159,7 @@ struct ItemDetailView: View {
     private func handleViewAllPairsSheetDismissed() {
         guard let pending = pendingPairedItemForNavigation else { return }
         pendingPairedItemForNavigation = nil
-        selectedPairedItemForNavigation = pending
+        openPairedItem(pending)
     }
 
     @ViewBuilder
@@ -173,7 +171,7 @@ struct ItemDetailView: View {
                 closetItems: closetPairedItems,
                 showsWardrobeLabels: shouldShowPairsWardrobeLabels,
                 isReadOnly: isReadOnly,
-                onSelectPairedItem: { selectedPairedItemForNavigation = $0 },
+                onSelectPairedItem: { openPairedItem($0) },
                 onViewAll: { presentViewAllPairsSheet(segment: .closet) }
             )
         }
@@ -227,9 +225,14 @@ struct ItemDetailView: View {
     }
 
     private func handleViewAllOutfitsSheetDismissed() {
-        guard pendingCreateOutfitAfterSheetDismiss else { return }
-        pendingCreateOutfitAfterSheetDismiss = false
-        openCreateOutfit()
+        if pendingCreateOutfitAfterSheetDismiss {
+            pendingCreateOutfitAfterSheetDismiss = false
+            openCreateOutfit()
+            return
+        }
+        guard let pending = pendingOutfitForNavigation else { return }
+        pendingOutfitForNavigation = nil
+        openOutfit(pending)
     }
 
     private func openCreateOutfit() {
@@ -238,7 +241,32 @@ struct ItemDetailView: View {
         print("🧭 [ItemDetailView] Create Outfit tapped. itemURI=\(uri) sessionID=\(createOutfitSessionID.uuidString)")
         // Defer push so the List header tap is not held by the system gesture gate.
         DispatchQueue.main.async {
-            createOutfitNavigation = .create
+            if let navigationPath {
+                navigationPath.wrappedValue.append(
+                    ItemGridFilterRoute.createOutfitFromItem(itemURI: uri, sessionID: createOutfitSessionID)
+                )
+            } else {
+                createOutfitNavigation = .create
+            }
+        }
+    }
+
+    private func openPairedItem(_ pairedItem: Item) {
+        if let navigationPath {
+            navigationPath.wrappedValue.append(
+                ItemGridFilterRoute.itemDetail(uri: pairedItem.objectID.uriRepresentation().absoluteString)
+            )
+        } else {
+            selectedPairedItemForNavigation = pairedItem
+        }
+    }
+
+    private func openOutfit(_ outfit: Outfit) {
+        let uri = outfit.objectID.uriRepresentation().absoluteString
+        if let navigationPath {
+            navigationPath.wrappedValue.append(ItemGridFilterRoute.outfitDetail(uri: uri))
+        } else {
+            selectedOutfitURIForNavigation = uri
         }
     }
 
@@ -306,7 +334,7 @@ struct ItemDetailView: View {
                 outfits: outfits,
                 isReadOnly: isReadOnly,
                 onSelectOutfit: { outfit in
-                    selectedOutfitURIForNavigation = outfit.objectID.uriRepresentation().absoluteString
+                    openOutfit(outfit)
                 },
                 onViewAll: { showViewAllOutfitsSheet = true }
             )
@@ -347,8 +375,70 @@ struct ItemDetailView: View {
     }
 
     var body: some View {
-        itemDetailWithAlerts
+        withNestedItemPathDestinations(itemDetailWithAlerts)
             .toolbar(.hidden, for: .tabBar)
+    }
+
+    /// Closet/Wishlist pass `navigationPath` and register detail/create on the tab path.
+    /// Other hosts keep nested `item:` destinations (Profile, Travel, etc.).
+    @ViewBuilder
+    private func withNestedItemPathDestinations<Content: View>(_ content: Content) -> some View {
+        if navigationPath != nil {
+            content
+        } else {
+            content
+                .navigationDestination(item: $createOutfitNavigation) { _ in
+                    let uri = item.objectID.uriRepresentation().absoluteString
+                    let wardrobe = preferredWardrobeForNewOutfit
+                    return OutfitAddView(
+                        outfitToEdit: nil,
+                        wardrobeType: wardrobe?.type ?? "closet",
+                        initialWardrobe: wardrobe,
+                        lockWardrobeSource: false,
+                        wardrobeMembershipOnSave: (wardrobe?.isDefault != true) ? wardrobe : nil,
+                        preselectedItemURI: uri,
+                        sessionID: createOutfitSessionID
+                    )
+                    .id(createOutfitSessionID)
+                    .onAppear {
+                        print("🧭 [ItemDetailView] OutfitAddView appeared; resetting createOutfitNavigation to nil.")
+                        createOutfitNavigation = nil
+                    }
+                }
+                .navigationDestination(item: $selectedPairedItemForNavigation) { pairedItem in
+                    ItemDetailView(item: pairedItem, isReadOnly: isReadOnly)
+                        .onAppear {
+                            let uri = pairedItem.objectID.uriRepresentation().absoluteString
+                            print("🧭 [ItemDetailView] Paired ItemDetailView appeared; resetting selectedPairedItemForNavigation to nil. pairedItemURI=\(uri)")
+                            selectedPairedItemForNavigation = nil
+                        }
+                }
+                .navigationDestination(item: $selectedOutfitURIForNavigation) { uriString in
+                    Group {
+                        if let url = URL(string: uriString),
+                           let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url),
+                           let outfit = try? viewContext.existingObject(with: objectID) as? Outfit {
+                            OutfitDetailView(
+                                outfit: outfit,
+                                isReadOnly: isReadOnly,
+                                initialWardrobe: preferredWardrobeForNewOutfit,
+                                lockWardrobeSource: preferredWardrobeForNewOutfit?.isDefault != true
+                            )
+                                .id(outfit.objectID)
+                                .onAppear {
+                                    print("🧭 [ItemDetailView] OutfitDetailView appeared; resetting selectedOutfitURIForNavigation to nil. outfitURI=\(uriString)")
+                                    selectedOutfitURIForNavigation = nil
+                                }
+                        } else {
+                            EmptyView()
+                                .onAppear {
+                                    print("❌ [ItemDetailView] Failed to resolve outfit for navigation. uri=\(uriString)")
+                                    selectedOutfitURIForNavigation = nil
+                                }
+                        }
+                    }
+                }
+        }
     }
 
     private var itemDetailMainContent: some View {
@@ -647,97 +737,6 @@ struct ItemDetailView: View {
                 }
             }
         }
-        .navigationDestination(item: $createOutfitNavigation) { _ in
-            let uri = item.objectID.uriRepresentation().absoluteString
-            let wardrobe = preferredWardrobeForNewOutfit
-            return OutfitAddView(
-                outfitToEdit: nil,
-                wardrobeType: wardrobe?.type ?? "closet",
-                initialWardrobe: wardrobe,
-                lockWardrobeSource: wardrobe?.isDefault != true,
-                preselectedItemURI: uri,
-                sessionID: createOutfitSessionID
-            )
-            .id(createOutfitSessionID)
-            .onAppear {
-                // Critical: prevent destination from being re-evaluated in a loop.
-                print("🧭 [ItemDetailView] OutfitAddView appeared; resetting createOutfitNavigation to nil.")
-                createOutfitNavigation = nil
-            }
-        }
-        .navigationDestination(item: $selectedPairedItemForNavigation) { pairedItem in
-            ItemDetailView(item: pairedItem, isReadOnly: isReadOnly)
-                .onAppear {
-                    // Prevent SwiftUI from repeatedly re-triggering this navigation.
-                    let uri = pairedItem.objectID.uriRepresentation().absoluteString
-                    print("🧭 [ItemDetailView] Paired ItemDetailView appeared; resetting selectedPairedItemForNavigation to nil. pairedItemURI=\(uri)")
-                    selectedPairedItemForNavigation = nil
-                }
-        }
-        .navigationDestination(item: $selectedOutfitURIForNavigation) { uriString in
-            Group {
-                if let url = URL(string: uriString),
-                   let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url),
-                   let outfit = try? viewContext.existingObject(with: objectID) as? Outfit {
-                    OutfitDetailView(outfit: outfit)
-                        .id(outfit.objectID)
-                        .onAppear {
-                            print("🧭 [ItemDetailView] OutfitDetailView appeared; resetting selectedOutfitURIForNavigation to nil. outfitURI=\(uriString)")
-                            selectedOutfitURIForNavigation = nil
-                        }
-                } else {
-                    EmptyView()
-                        .onAppear {
-                            print("❌ [ItemDetailView] Failed to resolve outfit for navigation. uri=\(uriString)")
-                            selectedOutfitURIForNavigation = nil
-                        }
-                }
-            }
-        }
-        .navigationDestination(item: $cropperDestination) { destination in
-            // Capture type + image immediately; do not put UIImage in the nav item.
-            // Clear the item onAppear (same as createOutfit / paired item) to avoid
-            // SwiftUI re-evaluating this destination in a loop and freezing.
-            let imageType: ImageType = {
-                if case .cropper(let type) = destination { return type }
-                return .front
-            }()
-            let capturedImage = imageToEdit
-            Group {
-                if let capturedImage {
-                    ImageCropperView(
-                        originalImage: capturedImage,
-                        onCrop: { croppedImage in
-                            switch imageType {
-                            case .front:
-                                replaceFrontImage(with: croppedImage)
-                            case .worn:
-                                replaceWornImage(with: croppedImage)
-                            }
-                            pendingImageType = nil
-                            imageToEdit = nil
-                        },
-                        isEditing: true,
-                        showsCancelButton: false,
-                        title: "Edit",
-                        confirmsDiscardBeforeDismiss: true,
-                        backButtonTitle: "Item Details"
-                    )
-                    .id(cropEditorSessionID)
-                } else {
-                    Color.clear
-                }
-            }
-            .onAppear {
-                cropperDestination = nil
-            }
-            .onDisappear {
-                isCropEditorPresented = false
-                applyPendingWornHeroSelectionIfNeeded(clearAfterApplying: false)
-                pendingImageType = nil
-                imageToEdit = nil
-            }
-        }
     }
 
     private var itemDetailWithSheets: some View {
@@ -762,11 +761,48 @@ struct ItemDetailView: View {
                 isImagePickerPresented = false
             }
         }
+        .sheet(isPresented: $isCropEditorPresented, onDismiss: {
+            applyPendingWornHeroSelectionIfNeeded(clearAfterApplying: false)
+            pendingImageType = nil
+            imageToEdit = nil
+        }) {
+            itemImageCropperSheetContent
+        }
         .sheet(isPresented: $showShareSelectionSheet, onDismiss: handleShareSelectionSheetDismissed) {
             shareSelectionSheetContent
         }
         .sheet(isPresented: $showWornStatsSheet) {
             ItemWearDetailsSheet(item: item)
+        }
+    }
+
+    @ViewBuilder
+    private var itemImageCropperSheetContent: some View {
+        if let image = imageToEdit {
+            NavigationView {
+                ImageCropperView(
+                    originalImage: image,
+                    onCrop: { croppedImage in
+                        switch pendingImageType {
+                        case .front:
+                            replaceFrontImage(with: croppedImage)
+                        case .worn:
+                            replaceWornImage(with: croppedImage)
+                        case nil:
+                            break
+                        }
+                        pendingImageType = nil
+                        imageToEdit = nil
+                        isCropEditorPresented = false
+                    },
+                    isEditing: true,
+                    title: "Edit"
+                )
+                .id(cropEditorSessionID)
+            }
+        } else {
+            Text("No image found to edit.")
+                .padding()
         }
     }
 
@@ -904,7 +940,7 @@ struct ItemDetailView: View {
                         showViewAllOutfitsSheet = false
                     },
                     onSelect: { outfit in
-                        selectedOutfitURIForNavigation = outfit.objectID.uriRepresentation().absoluteString
+                        pendingOutfitForNavigation = outfit
                         showViewAllOutfitsSheet = false
                     }
                 )
@@ -1559,16 +1595,15 @@ struct ItemDetailView: View {
     }
     
     private func presentCropperForImage(type: ImageType) {
-        // Refresh the item to ensure photos relationship is up to date
         viewContext.refresh(item, mergeChanges: true)
-        
-        if let image = getImage(for: type) {
-            // Image stays in state; destination is a lightweight Hashable trigger only.
-            pendingImageType = type
-            imageToEdit = image
-            cropEditorSessionID = UUID()
+
+        guard let image = getImage(for: type) else { return }
+        pendingImageType = type
+        imageToEdit = image
+        cropEditorSessionID = UUID()
+        // Let the photo confirmation dialog finish dismissing before presenting the sheet.
+        DispatchQueue.main.async {
             isCropEditorPresented = true
-            cropperDestination = .cropper(type)
         }
     }
 

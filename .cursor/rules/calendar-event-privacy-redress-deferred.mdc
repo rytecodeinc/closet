@@ -1,26 +1,27 @@
 ---
-description: Deferred — calendar event privacy (private / public / friends) for Redress permissions
-globs: closet/Outfit Views/Calendar Views/**/*.swift,closet/**/Event*.swift,closet/Services/**/*OutfitSuggestion*,closet/Services/**/*Redress*
+description: Deferred — calendar event privacy (private / public / friends) for profile + Redress
+globs: closet/Outfit Views/Calendar Views/**/*.swift,closet/**/Event*.swift,closet/Profile View/ProfileView.swift,closet/Services/**/*OutfitSuggestion*,closet/Services/**/*Redress*
 alwaysApply: false
 ---
 
-# Deferred: calendar event privacy → Redress permission
+# Deferred: calendar event privacy → profile calendar + Redress
 
-**Status:** Idea / parked. Do not implement unless the user asks.
+**Status:** Partial. Visibility is stored and editable; invite no longer forces Private → Friends.
 
-## Intent
+## Locked meanings (event `visibility`)
 
-Add privacy controls on **calendar events** so the owner can set an event to one of:
+- **Private** — Host-only on profile. Host’s event does **not** appear on any guest’s profile. Inviting guests is allowed without changing this.
+- **Friends** — Host’s event shows on the **host** profile to the host’s friends **and** friends of accepted guests.
+- **Public** — Broader profile visibility (anyone viewing the host profile).
 
-- **Private**
-- **Public**
-- **Friends**
+## Still needed
 
-That setting will later determine **who may Redress the user for that event** (permission level tied to visibility).
+1. **Friends-of-guests audience** on host profile calendar (today `viewerIsFriend` is only friendship with the profile owner).
+2. **Guest calendar copies** must not surface private (or non-hosted) events on the guest’s profile strip — materialize is for the invitee Calendar tab; profile should only show events the user hosts (or apply private/guest rules explicitly).
+3. Map each level to **Redress eligibility** when event Redress ships.
+4. Related: other-user profile calendar (`other-user-profile-calendar-deferred.mdc`).
 
-## Notes for later design
+## Notes
 
-- **Visibility is stored** on Event (`visibility` / `eventVisibility`, default private) and synced to Supabase `events.visibility`. Create Event has a Privacy picker.
-- Still needed: map each level to **Redress eligibility** (private = owner only; friends = accepted friends; public = broader), plus any friends/public **SELECT** RLS if other users should read events.
-- Keep Redress / outfit-suggestion flows consistent with the chosen permission when this ships.
-- Related: other-user profile calendar tab (`other-user-profile-calendar-deferred.mdc`).
+- Create Event / Event Detail keep a Privacy picker; sync via `events.visibility`.
+- `invite_to_event` must **not** rewrite `private` → `friends`.

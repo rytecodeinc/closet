@@ -18,6 +18,12 @@ private enum OutfitHeroImageSlot {
 struct OutfitDetailView: View {
     @ObservedObject var outfit: Outfit
     var isReadOnly: Bool = false
+    /// Closet/Wishlist tab path — item taps append `ItemGridFilterRoute.itemDetail` (no nested `item:`).
+    var navigationPath: Binding<NavigationPath>? = nil
+    /// Wardrobe the user was browsing when they opened this outfit (drives Edit → item sheet).
+    var initialWardrobe: Wardrobe? = nil
+    /// When true (non-default wardrobe context), Edit locks item source like Outfit Add.
+    var lockWardrobeSource: Bool = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.appCapabilities) private var appCapabilities
@@ -64,6 +70,10 @@ struct OutfitDetailView: View {
     @State private var redressSuggestionContext: OutfitRedressSuggestionContext?
 
     private var screenWidth: CGFloat { UIScreen.main.bounds.width }
+
+    private var editWardrobeType: String {
+        (initialWardrobe?.type ?? "closet").lowercased() == "wishlist" ? "wishlist" : "closet"
+    }
     
     // Computed property to get ordered items array (preserves insertion order from canvas)
     private var orderedItems: [Item] {
@@ -263,23 +273,12 @@ struct OutfitDetailView: View {
         }
         .navigationTitle("Outfit Details")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(item: $selectedItemURIForNavigation) { uriString in
-            Group {
-                if let url = URL(string: uriString),
-                   let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url),
-                   let item = try? viewContext.existingObject(with: objectID) as? Item {
-                    ItemDetailView(item: item, isReadOnly: isReadOnly)
-                        .onAppear {
-                            selectedItemURIForNavigation = nil
-                        }
-                } else {
-                    EmptyView()
-                        .onAppear {
-                            selectedItemURIForNavigation = nil
-                        }
-                }
-            }
-        }
+        .modifier(OutfitDetailNestedItemDestinationModifier(
+            navigationPath: navigationPath,
+            selectedItemURIForNavigation: $selectedItemURIForNavigation,
+            isReadOnly: isReadOnly,
+            viewContext: viewContext
+        ))
         .onAppear {
             // Always land on collage first; a pending worn selection re-applies after (and async).
             heroCarouselPage = 0
@@ -335,7 +334,13 @@ struct OutfitDetailView: View {
             set: { isEditingOutfit = $0 }
         ), onDismiss: refreshOutfitHeroImageCache) {
             NavigationView {
-                OutfitAddView(outfitToEdit: outfit)
+                OutfitAddView(
+                    outfitToEdit: outfit,
+                    wardrobeType: editWardrobeType,
+                    initialWardrobe: initialWardrobe,
+                    lockWardrobeSource: false,
+                    wardrobeMembershipOnSave: (initialWardrobe?.isDefault != true) ? initialWardrobe : nil
+                )
             }
         }
         .fullScreenCover(isPresented: $isOutfitImageFullScreen) {
@@ -862,11 +867,20 @@ struct OutfitDetailView: View {
         }
     }
 
+    private func openItem(_ item: Item) {
+        let uri = item.objectID.uriRepresentation().absoluteString
+        if let navigationPath {
+            navigationPath.wrappedValue.append(ItemGridFilterRoute.itemDetail(uri: uri))
+        } else {
+            selectedItemURIForNavigation = uri
+        }
+    }
+
     private func featuredItemsGrid(items: [Item]) -> some View {
         LazyVGrid(columns: featuredItemsGridColumns, spacing: 4) {
             ForEach(items, id: \.objectID) { item in
                 Button {
-                    selectedItemURIForNavigation = item.objectID.uriRepresentation().absoluteString
+                    openItem(item)
                 } label: {
                     ItemView(item: item, showsFavoriteOverlay: !isReadOnly)
                 }
@@ -1363,5 +1377,39 @@ struct OutfitShareSelectionView: View {
         }
 
         return lines.joined(separator: "\n")
+    }
+}
+
+/// Nested item push only when not on Closet/Wishlist `NavigationPath` (those append `itemDetail`).
+private struct OutfitDetailNestedItemDestinationModifier: ViewModifier {
+    var navigationPath: Binding<NavigationPath>?
+    @Binding var selectedItemURIForNavigation: String?
+    var isReadOnly: Bool
+    var viewContext: NSManagedObjectContext
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if navigationPath != nil {
+            content
+        } else {
+            content
+                .navigationDestination(item: $selectedItemURIForNavigation) { uriString in
+                    Group {
+                        if let url = URL(string: uriString),
+                           let objectID = viewContext.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: url),
+                           let item = try? viewContext.existingObject(with: objectID) as? Item {
+                            ItemDetailView(item: item, isReadOnly: isReadOnly)
+                                .onAppear {
+                                    selectedItemURIForNavigation = nil
+                                }
+                        } else {
+                            EmptyView()
+                                .onAppear {
+                                    selectedItemURIForNavigation = nil
+                                }
+                        }
+                    }
+                }
+        }
     }
 }

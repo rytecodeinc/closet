@@ -181,15 +181,32 @@ private struct OutfitAddedItemsReviewView: View {
     }
 
     private var segmentPicker: some View {
-        Picker("Item Type", selection: $segment) {
-            Text(PairItemSelectionView.PairSourceSegment.closet.rawValue)
-                .tag(PairItemSelectionView.PairSourceSegment.closet)
-            Text(PairItemSelectionView.PairSourceSegment.wishlist.rawValue)
-                .tag(PairItemSelectionView.PairSourceSegment.wishlist)
+        HStack {
+            Menu {
+                Picker("Item Type", selection: $segment) {
+                    Text(PairItemSelectionView.PairSourceSegment.closet.rawValue)
+                        .tag(PairItemSelectionView.PairSourceSegment.closet)
+                    Text(PairItemSelectionView.PairSourceSegment.wishlist.rawValue)
+                        .tag(PairItemSelectionView.PairSourceSegment.wishlist)
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(segment.rawValue)
+                        .font(.subheadline.weight(.semibold))
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption.weight(.semibold))
+                }
+                .foregroundStyle(.primary)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Item type, \(segment.rawValue)")
+            Spacer()
         }
-        .pickerStyle(.segmented)
-        .padding(.horizontal)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+        .padding(.bottom, 2)
         .background(panelBackground)
     }
 
